@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "L1 \u2014 Book risk summary",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-13T20:25:09Z",
+  "updated": "2026-06-14T00:44:35Z",
+  "state": {
+    "rows": [
+      "Book"
+    ],
+    "cols": [],
+    "measures": [
+      "Total VaR 99",
+      "Scenario VaR 99",
+      "Specific vol"
+    ],
+    "slice_dims": [
+      "Book",
+      "Date",
+      "ScenarioSet"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": false,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3
+  }
+}

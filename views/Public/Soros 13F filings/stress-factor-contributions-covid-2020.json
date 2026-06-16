@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "Stress \u2014 Factor contributions (COVID 2020)",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-14T02:05:05Z",
+  "updated": "2026-06-14T02:05:05Z",
+  "state": {
+    "cols": [],
+    "row_tot": false,
+    "col_tot": true,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "rows": [
+      "Factor"
+    ],
+    "measures": [
+      "Marginal Scenario VaR 99",
+      "% of Scenario VaR 99"
+    ],
+    "slice_dims": [
+      "Book",
+      "Date",
+      "ScenarioSet"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ],
+      "ScenarioSet": [
+        "Evt:COVID2020"
+      ]
+    },
+    "sort": [
+      {
+        "colId": "Marginal Scenario VaR 99",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ]
+  }
+}

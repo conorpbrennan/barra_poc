@@ -1,0 +1,16 @@
+# Frame builders (barra_build_frames.py, barra_build_frames_v1.py)
+numpy==2.4.6
+pandas==2.3.3
+requests==2.34.2
+pyarrow==24.0.0      # parquet read/write backend for pandas
+
+# Cube only (barra_factor_risk_cube.py)
+atoti==0.9.15
+
+# Excel validation workbook (barra_excel_check.py)
+openpyxl==3.1.5
+
+# Direct-Atoti demo notebook (notebooks/soros_13f_risk.ipynb) — altair/matplotlib already pulled
+# in by atoti; these add the JupyterLab server + kernel.
+jupyterlab==4.5.8
+ipykernel==7.3.0

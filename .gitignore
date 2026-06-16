@@ -1,0 +1,21 @@
+# virtualenv
+barra/
+
+# repo-local HTTP cache
+tmp/
+
+# secrets
+.env
+*.lic
+
+# python bytecode
+__pycache__/
+*.pyc
+
+# stray run artifacts
+nohup.out
+*.log
+ActivePivot.lic*
+
+# generated parquet frames
+data/

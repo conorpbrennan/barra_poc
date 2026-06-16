@@ -1,0 +1,13 @@
+# Tufte / Stephen Few light theme — applies to BOTH Streamlit apps (8501, 8502),
+# which run from python_src. Pinned light so a browser/OS dark mode can't invert the
+# muted, high-data-ink design (dark serif ink on cream, single muted-slate accent).
+[theme]
+base = "light"
+primaryColor = "#3b5e8c"            # muted slate accent
+backgroundColor = "#fdfdfb"         # near-white cream
+secondaryBackgroundColor = "#f1efe9" # warm light gray (sidebar / widgets)
+textColor = "#1a1a1a"               # near-black ink
+font = "serif"
+
+[browser]
+gatherUsageStats = false

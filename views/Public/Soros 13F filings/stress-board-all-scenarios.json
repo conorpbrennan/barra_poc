@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "name": "Stress board \u2014 all scenarios",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-14T02:05:05Z",
+  "updated": "2026-06-16T16:48:52Z",
+  "state": {
+    "cols": [],
+    "row_tot": false,
+    "col_tot": false,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "rows": [
+      "ScenarioSet"
+    ],
+    "measures": [
+      "Scenario VaR 99",
+      "Scenario worst loss",
+      "Total VaR 99"
+    ],
+    "slice_dims": [
+      "Book",
+      "Date"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ]
+    },
+    "sort": [
+      {
+        "colId": "Scenario worst loss",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ],
+    "render": "chart",
+    "chart": {
+      "source": "Stress board",
+      "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+      "transform": [
+        {
+          "fold": [
+            "Scenario VaR 99",
+            "Scenario worst loss",
+            "Total VaR 99"
+          ],
+          "as": [
+            "Measure",
+            "Value"
+          ]
+        }
+      ],
+      "mark": "bar",
+      "encoding": {
+        "y": {
+          "field": "ScenarioSet",
+          "type": "nominal",
+          "title": null,
+          "sort": "-x"
+        },
+        "x": {
+          "field": "Value",
+          "type": "quantitative",
+          "axis": {
+            "format": "%"
+          },
+          "title": "% of NAV"
+        },
+        "yOffset": {
+          "field": "Measure",
+          "type": "nominal"
+        },
+        "color": {
+          "field": "Measure",
+          "type": "nominal",
+          "scale": {
+            "domain": [
+              "Scenario VaR 99",
+              "Scenario worst loss",
+              "Total VaR 99"
+            ],
+            "range": [
+              "#2a4d69",
+              "#c46d4e",
+              "#6b8f71"
+            ]
+          },
+          "legend": {
+            "orient": "top",
+            "title": null
+          }
+        },
+        "tooltip": [
+          {
+            "field": "ScenarioSet",
+            "type": "nominal"
+          },
+          {
+            "field": "Measure",
+            "type": "nominal"
+          },
+          {
+            "field": "Value",
+            "type": "quantitative",
+            "format": ".4f"
+          }
+        ]
+      },
+      "height": 420,
+      "autosize": {
+        "type": "fit",
+        "contains": "padding"
+      },
+      "padding": {
+        "left": 22,
+        "top": 5,
+        "right": 14,
+        "bottom": 5
+      },
+      "config": {
+        "background": "#fdfdfb",
+        "view": {
+          "stroke": null
+        },
+        "axis": {
+          "grid": false,
+          "domainColor": "#d8d5cd",
+          "tickColor": "#d8d5cd",
+          "labelColor": "#44423d",
+          "titleColor": "#1a1a1a",
+          "labelFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFontWeight": "normal"
+        },
+        "legend": {
+          "labelColor": "#1a1a1a",
+          "titleColor": "#1a1a1a",
+          "labelFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFont": "Georgia, 'Iowan Old Style', serif"
+        },
+        "title": {
+          "color": "#1a1a1a",
+          "font": "Georgia, 'Iowan Old Style', serif",
+          "fontWeight": "normal"
+        }
+      }
+    },
+    "queries": [
+      {
+        "name": "Stress board",
+        "rows": [
+          "ScenarioSet"
+        ],
+        "cols": [],
+        "measures": [
+          "Scenario VaR 99",
+          "Scenario worst loss",
+          "Total VaR 99"
+        ],
+        "filters": {
+          "Book": [
+            "Soros"
+          ],
+          "Date": [
+            "2024-12-31"
+          ]
+        }
+      }
+    ]
+  }
+}

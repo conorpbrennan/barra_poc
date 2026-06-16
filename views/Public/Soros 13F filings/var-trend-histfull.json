@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "name": "VaR trend (HistFull)",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-14T02:05:05Z",
+  "updated": "2026-06-16T16:48:52Z",
+  "state": {
+    "cols": [],
+    "row_tot": false,
+    "col_tot": false,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "rows": [
+      "Date"
+    ],
+    "measures": [
+      "Scenario VaR 99",
+      "Total VaR 99",
+      "Specific vol"
+    ],
+    "slice_dims": [
+      "Book",
+      "ScenarioSet"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ]
+    },
+    "sort": [
+      {
+        "colId": "Date",
+        "sort": "asc",
+        "sortIndex": 0
+      }
+    ],
+    "render": "chart",
+    "chart": {
+      "source": "VaR trend",
+      "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+      "transform": [
+        {
+          "fold": [
+            "Scenario VaR 99",
+            "Total VaR 99",
+            "Specific vol"
+          ],
+          "as": [
+            "Measure",
+            "Value"
+          ]
+        }
+      ],
+      "mark": {
+        "type": "line",
+        "point": {
+          "size": 22
+        }
+      },
+      "encoding": {
+        "x": {
+          "field": "Date",
+          "type": "temporal",
+          "title": null
+        },
+        "y": {
+          "field": "Value",
+          "type": "quantitative",
+          "axis": {
+            "format": "%"
+          },
+          "title": "% of NAV"
+        },
+        "color": {
+          "field": "Measure",
+          "type": "nominal",
+          "scale": {
+            "domain": [
+              "Scenario VaR 99",
+              "Total VaR 99",
+              "Specific vol"
+            ],
+            "range": [
+              "#2a4d69",
+              "#c46d4e",
+              "#6b8f71"
+            ]
+          },
+          "legend": {
+            "orient": "top",
+            "title": null
+          }
+        },
+        "tooltip": [
+          {
+            "field": "Date",
+            "type": "temporal"
+          },
+          {
+            "field": "Measure",
+            "type": "nominal"
+          },
+          {
+            "field": "Value",
+            "type": "quantitative",
+            "format": ".4f"
+          }
+        ]
+      },
+      "height": 380,
+      "autosize": {
+        "type": "fit",
+        "contains": "padding"
+      },
+      "padding": {
+        "left": 22,
+        "top": 5,
+        "right": 14,
+        "bottom": 5
+      },
+      "config": {
+        "background": "#fdfdfb",
+        "view": {
+          "stroke": null
+        },
+        "axis": {
+          "grid": false,
+          "domainColor": "#d8d5cd",
+          "tickColor": "#d8d5cd",
+          "labelColor": "#44423d",
+          "titleColor": "#1a1a1a",
+          "labelFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFontWeight": "normal"
+        },
+        "legend": {
+          "labelColor": "#1a1a1a",
+          "titleColor": "#1a1a1a",
+          "labelFont": "Georgia, 'Iowan Old Style', serif",
+          "titleFont": "Georgia, 'Iowan Old Style', serif"
+        },
+        "title": {
+          "color": "#1a1a1a",
+          "font": "Georgia, 'Iowan Old Style', serif",
+          "fontWeight": "normal"
+        }
+      }
+    },
+    "queries": [
+      {
+        "name": "VaR trend",
+        "rows": [
+          "Date"
+        ],
+        "cols": [],
+        "measures": [
+          "Scenario VaR 99",
+          "Total VaR 99",
+          "Specific vol"
+        ],
+        "filters": {
+          "Book": [
+            "Soros"
+          ],
+          "ScenarioSet": [
+            "HistFull"
+          ]
+        }
+      }
+    ]
+  }
+}

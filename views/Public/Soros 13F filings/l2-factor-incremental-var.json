@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "L2 \u2014 Factor incremental VaR",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-14T01:50:44Z",
+  "updated": "2026-06-14T01:50:44Z",
+  "state": {
+    "cols": [],
+    "slice_dims": [
+      "Book",
+      "Date",
+      "ScenarioSet"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": true,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "rows": [
+      "Factor"
+    ],
+    "measures": [
+      "Marginal Scenario VaR 99",
+      "Incremental Scenario VaR 99"
+    ],
+    "sort": [
+      {
+        "colId": "Incremental Scenario VaR 99",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ]
+  }
+}

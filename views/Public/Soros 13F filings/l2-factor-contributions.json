@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "L2 \u2014 Factor contributions",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-13T20:25:09Z",
+  "updated": "2026-06-14T01:35:36Z",
+  "state": {
+    "rows": [
+      "Factor"
+    ],
+    "cols": [],
+    "measures": [
+      "Marginal Scenario VaR 99",
+      "% of Scenario VaR 99"
+    ],
+    "slice_dims": [
+      "Book",
+      "Date",
+      "ScenarioSet"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": true,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "sort": [
+      {
+        "colId": "Marginal Scenario VaR 99",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ]
+  }
+}
