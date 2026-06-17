@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # run_all_tailscale.sh — serve BOTH front doors to tailnet users over HTTPS, and launch the stack.
 #
-#   Risk UI (Streamlit) : https://ajb1ubuntu.tail062fc3.ts.net          (-> 127.0.0.1:8502)
-#   Notebook (JupyterLab): https://ajb1ubuntu.tail062fc3.ts.net:8443    (-> 127.0.0.1:8888)
+#   Risk UI (Streamlit) : https://ajb1ubuntu.tail062fc3.ts.net:8443    (-> 127.0.0.1:8502)
+#   Notebook (JupyterLab): https://ajb1ubuntu.tail062fc3.ts.net:9443    (-> 127.0.0.1:8888)
+#
+# NB ports 8443/9443 (not :443): another app (cleardrive) already owns :443 on this host, so the
+# tailnet front doors live on 8443/9443 to avoid being shadowed by it.
 #
 # Only these two front doors are exposed. The FastAPI risk API (:8010) and every Atoti cube port
 # (:9095 API cube, :9096 notebook cube) stay bound to localhost — never served on the tailnet.
@@ -23,15 +26,15 @@ PY=barra/bin
 
 # ── step 2 — expose the two front doors over Tailscale (HTTPS, each at root on its own port) ──
 echo "[serve] mapping tailnet HTTPS -> localhost"
-tailscale serve --bg --https=443  "http://127.0.0.1:${UI_PORT}"     # Risk UI  -> :443  (root)
-tailscale serve --bg --https=8443 "http://127.0.0.1:${NB_PORT}"     # Notebook -> :8443
+tailscale serve --bg --https=8443 "http://127.0.0.1:${UI_PORT}"    # Risk UI  -> :8443
+tailscale serve --bg --https=9443 "http://127.0.0.1:${NB_PORT}"    # Notebook -> :9443
 tailscale serve status || true
 
 # ── step 3 — launch the stack, all bound to 127.0.0.1 (only Tailscale can reach them) ────────
 pids=()
 cleanup(){ echo; echo "[stop] shutting down…"; kill "${pids[@]}" 2>/dev/null || true;
-           tailscale serve --https=443 off 2>/dev/null || true
-           tailscale serve --https=8443 off 2>/dev/null || true; }
+           tailscale serve --https=8443 off 2>/dev/null || true
+           tailscale serve --https=9443 off 2>/dev/null || true; }
 trap cleanup INT TERM EXIT
 
 echo "[api] building cube + FastAPI on :${API_PORT} (cube :${CUBE_PORT}) — ~1–2 min…"
@@ -60,8 +63,8 @@ pids+=($!)
 cat <<EOF
 
   ───────────────────────────────────────────────────────────────
-   Risk UI   : https://ajb1ubuntu.tail062fc3.ts.net
-   Notebook  : https://ajb1ubuntu.tail062fc3.ts.net:8443   (use the Jupyter token printed above)
+   Risk UI   : https://ajb1ubuntu.tail062fc3.ts.net:8443
+   Notebook  : https://ajb1ubuntu.tail062fc3.ts.net:9443   (use the Jupyter token printed above)
   ───────────────────────────────────────────────────────────────
    Send tailnet users docs/tailscale-connect.html + the notebook token.
    Ctrl-C to stop everything (also turns the tailscale serve mappings off).
