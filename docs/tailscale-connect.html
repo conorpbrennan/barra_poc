@@ -53,93 +53,85 @@
 <div class="wrap">
   <header>
     <h1>Barra Factor-Risk — Private Access</h1>
-    <p class="sub">Connecting to the risk dashboard &amp; analysis notebook over a private Tailscale network</p>
+    <p class="sub">Connecting to the risk dashboard &amp; analysis notebook</p>
   </header>
 
-  <p class="lead">These services run on a private machine and are <b>not on the public internet</b>.
-  You reach them through <a href="https://tailscale.com" target="_blank" rel="noopener">Tailscale</a> —
-  a zero-config private network (WireGuard-based). It takes about three minutes to set up: install the
-  app, sign in with the invite, and open the links. No VPN config, no firewall changes.</p>
-
-  <h2>Before you start</h2>
-  <p>You'll receive an <b>email invitation</b> to the network from Tailscale (sender
-  <code>noreply@tailscale.com</code>). Keep it open — you'll click <i>Accept</i> in Step&nbsp;2.
-  If you don't see it, check spam, or ask your contact (below) to re-send.</p>
+  <p class="lead">There is <b>nothing to install</b>. These services are published over <b>HTTPS</b> at a
+  private hostname and protected by a login, so you can open them in any modern browser — work laptop, home,
+  or phone — including on restricted corporate networks. Just open the link and sign in with the credentials
+  sent to you <b>separately</b> (they are not in this page).</p>
 
   <div class="step">
     <div class="num">1</div>
     <div class="step-body">
-      <h3>Install Tailscale</h3>
-      <p>Install the client for whichever device you'll use to view the dashboard.</p>
-      <div class="grid">
-        <div class="os"><b>Windows</b><span><a href="https://tailscale.com/download/windows" target="_blank" rel="noopener">tailscale.com/download/windows</a></span></div>
-        <div class="os"><b>macOS</b><span><a href="https://tailscale.com/download/mac" target="_blank" rel="noopener">App Store / tailscale.com/download/mac</a></span></div>
-        <div class="os"><b>iPhone / iPad</b><span>App Store — search “Tailscale”</span></div>
-        <div class="os"><b>Android</b><span>Google Play — search “Tailscale”</span></div>
-        <div class="os"><b>Linux</b><span><code>curl -fsSL https://tailscale.com/install.sh | sh</code></span></div>
-      </div>
+      <h3>Open the link</h3>
+      <p>Click the <b>Risk dashboard</b> link below (or paste it into your browser's address bar). It loads
+      over HTTPS with a valid certificate — no warnings, no VPN, no client app.</p>
     </div>
   </div>
 
   <div class="step">
     <div class="num">2</div>
     <div class="step-body">
-      <h3>Accept the invite &amp; sign in</h3>
-      <p>Open the invitation email and click <b>Accept invitation</b>. It opens Tailscale and asks you to
-      sign in (Google, Microsoft, GitHub, or email — whichever the invite offers). Use the same identity the
-      invite was sent to.</p>
-      <p>Then open the Tailscale app and make sure it shows <b>Connected</b> (the icon is solid, not greyed).</p>
+      <h3>Sign in</h3>
+      <p>The dashboard prompts for a <b>username &amp; password</b>; the analysis notebook prompts for a
+      <b>token</b>. Your contact sends these to you separately — enter them when asked. The credentials are
+      case-sensitive.</p>
     </div>
   </div>
 
   <div class="step">
     <div class="num">3</div>
     <div class="step-body">
-      <h3>Open the apps</h3>
-      <p>With Tailscale connected, open these links in your browser. They are served over <b>HTTPS</b>
-      with a valid certificate — no security warnings, no passwords for the dashboard.</p>
+      <h3>The apps</h3>
 
       <div class="card">
         <div class="label">Risk dashboard (start here)</div>
-        <div class="url"><a href="https://ajb1ubuntu.tail062fc3.ts.net:8443" target="_blank" rel="noopener">https://ajb1ubuntu.tail062fc3.ts.net:8443</a></div>
-        <p class="muted">The interactive factor-risk pivot &amp; scenario views (the Soros 13F book).</p>
+        <div class="url"><a href="https://risk.barra-poc.com/flexagg++/" target="_blank" rel="noopener">https://risk.barra-poc.com/flexagg++/</a></div>
+        <p class="muted">The interactive factor-risk pivot &amp; scenario views (the Soros 13F book).
+        Prompts for a <b>username &amp; password</b>.</p>
       </div>
 
       <div class="card">
         <div class="label">Analysis notebook (optional)</div>
-        <div class="url"><a href="https://ajb1ubuntu.tail062fc3.ts.net:9443" target="_blank" rel="noopener">https://ajb1ubuntu.tail062fc3.ts.net:9443</a></div>
+        <div class="url"><a href="https://risk.barra-poc.com/jupyter/" target="_blank" rel="noopener">https://risk.barra-poc.com/jupyter/</a></div>
         <p class="muted">JupyterLab — the Python notebook that queries the risk cube directly.
-        It will ask for a <b>token</b>; your contact will send it with this page.</p>
+        Prompts for a <b>token</b>, which your contact sends with this page.</p>
       </div>
 
-      <div class="note ok"><b>Tip:</b> bookmark the dashboard link. As long as Tailscale is connected
-      (it stays on in the background), the link works from anywhere.</div>
+      <div class="note ok"><b>Tip:</b> bookmark the dashboard link. It works from any device and any
+      network, with no client to keep running.</div>
     </div>
   </div>
 
   <h2>Troubleshooting</h2>
   <details>
-    <summary>The link won't load / “can't reach this site”</summary>
-    <p>Open the Tailscale app and confirm it says <b>Connected</b>. If it's off, toggle it on and try again.
-    On a phone, make sure the Tailscale VPN profile is active (a small key/VPN icon in the status bar).</p>
+    <summary>The link won't load / “can't reach this site” / times out</summary>
+    <p>If you're on a locked-down corporate network, its web filter may be blocking the address. First confirm
+    the link works from a different network (e.g. your phone on cellular). If it loads there but not on the
+    corporate network, your IT may need to allow <code>risk.barra-poc.com</code> — contact us (below) and we'll
+    help with the request.</p>
   </details>
   <details>
-    <summary>It asks me to sign in to Tailscale again</summary>
-    <p>That's normal after a restart — just sign in with the same account you used to accept the invite.</p>
-  </details>
-  <details>
-    <summary>The dashboard machine seems offline</summary>
-    <p>The host machine may be asleep. Ping your contact to wake it; once it's up the link responds immediately.</p>
+    <summary>My username / password / token isn't accepted</summary>
+    <p>They're case-sensitive and easy to mistype — copy and paste rather than typing if you can. If it still
+    fails, ask your contact to re-send them.</p>
   </details>
   <details>
     <summary>I get a certificate warning</summary>
-    <p>You shouldn't — these use real Tailscale-issued HTTPS certs. If you see one, you've likely typed
-    <code>http://</code> or an IP address; use the exact <code>https://…ts.net</code> links above.</p>
+    <p>You shouldn't — these use a valid public HTTPS certificate. If you see one, you've likely typed
+    <code>http://</code> or a slightly wrong address; use the exact <code>https://risk.barra-poc.com/…</code>
+    links above. The <code>++</code> in the dashboard address is intentional.</p>
+  </details>
+  <details>
+    <summary>The page loads but shows “404”</summary>
+    <p>The base address <code>https://risk.barra-poc.com/</code> intentionally shows nothing — go straight to
+    the full links above (ending in <code>/flexagg++/</code> or <code>/jupyter/</code>).</p>
   </details>
 
   <footer>
-    Private network access for authorised users only. Do not share the links or notebook token.<br>
-    Questions / didn't get an invite? Contact <a href="mailto:conorpbrennan@gmail.com">conorpbrennan@gmail.com</a>.
+    Private access for authorised users only. Do not share the links, password, or notebook token.<br>
+    Questions? Contact <a href="mailto:conorpbrennan@gmail.com">conorpbrennan@gmail.com</a>.
   </footer>
 </div>
 </body>
