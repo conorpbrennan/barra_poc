@@ -12,6 +12,9 @@ tmp/
 __pycache__/
 *.pyc
 
+# jupyter scratch
+.ipynb_checkpoints/
+
 # stray run artifacts
 nohup.out
 *.log
