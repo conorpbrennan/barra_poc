@@ -55,19 +55,21 @@ BARRA_API="http://127.0.0.1:${API_PORT}" ${PY}/streamlit run python_src/risk_piv
     --server.enableCORS false --server.enableXsrfProtection false &
 pids+=($!)
 
-echo "[nb] JupyterLab on :${NB_PORT} (token in the log below)"
-${PY}/jupyter lab notebooks/soros_13f_risk.ipynb \
-    --no-browser --ip=127.0.0.1 --port=${NB_PORT} --ServerApp.allow_remote_access=True &
-pids+=($!)
+# Notebook is a hardened rootless container (systemd service flexagg-jupyter under flexnb),
+# already published on 127.0.0.1:${NB_PORT}. Just make sure it is up — it is NOT a child of this
+# script, so Ctrl-C below leaves it running (it is boot-enabled via linger).
+echo "[nb] ensuring flexagg-jupyter container is up on :${NB_PORT}"
+sudo -u flexnb env "XDG_RUNTIME_DIR=/run/user/$(id -u flexnb)" systemctl --user start flexagg-jupyter.service
 
 cat <<EOF
 
   ───────────────────────────────────────────────────────────────
    Risk UI   : https://ajb1ubuntu.tail062fc3.ts.net:8443
-   Notebook  : https://ajb1ubuntu.tail062fc3.ts.net:9443   (use the Jupyter token printed above)
+   Notebook  : https://ajb1ubuntu.tail062fc3.ts.net:9443   (nginx basic-auth + Jupyter token)
   ───────────────────────────────────────────────────────────────
+   Notebook token: /home/flexnb/.config/flexagg-jupyter.env (flexnb-only) — share out of band.
    Send tailnet users docs/tailscale-connect.html + the notebook token.
-   Ctrl-C to stop everything (also turns the tailscale serve mappings off).
+   Ctrl-C stops the API/UI + tailscale mappings. The notebook container keeps running.
 
 EOF
 wait

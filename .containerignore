@@ -1,0 +1,16 @@
+# Keep the build context tiny and secret-free. Only requirements.txt + docker/ are needed;
+# code and data are bind-mounted read-only at runtime, never baked into the image.
+barra/
+tmp/
+data/
+views/
+notebooks/
+python_src/
+__pycache__/
+.git/
+.env
+*.lic
+ActivePivot.lic*
+*.log
+nohup.out
+.ipynb_checkpoints/

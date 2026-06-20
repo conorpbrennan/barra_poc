@@ -1,35 +1,40 @@
 #!/usr/bin/env bash
-# run_notebook.sh — serve the direct-Atoti demo notebook to CRO / Risk over Tailscale (HTTPS).
+# run_notebook.sh — expose the hardened notebook container to CRO / Risk over Tailscale (HTTPS).
 #
-# Surface is the NOTEBOOK ONLY. JupyterLab binds to localhost; Tailscale terminates TLS and
-# reverse-proxies it onto the tailnet at the node's MagicDNS name. The notebook's cube session
-# binds :9096 but is deliberately NOT exposed (the Atoti web app is not part of this demo).
+# The notebook no longer runs as host Python. It runs as a locked-down rootless Podman container
+# (systemd service `flexagg-jupyter` under the `flexnb` service user), published on 127.0.0.1:8888.
+# This script does NOT launch JupyterLab — it makes sure that container is up, then points
+# `tailscale serve` at the same :8888. Access control is nginx basic-auth + the Jupyter token.
+# The container is air-gapped (internal network + nft jail) and mounts only read-only code/data.
 #
-#   ./run_notebook.sh            # launches JupyterLab + sets up `tailscale serve`
+#   ./run_notebook.sh
+#
+# The container is boot-enabled (linger), so it is normally already running. The image, Quadlet
+# unit, and firewall live in docker/.
 #
 # Prereqs (one-time):
-#   * deps:        barra/bin/pip install jupyterlab ipykernel   (already in requirements.txt)
-#   * HTTPS certs: enable MagicDNS + HTTPS in the Tailscale admin console (Settings -> Keys/DNS),
-#                  so `tailscale serve --https` can provision a real cert for *.ts.net.
-#   * operator:    `sudo tailscale set --operator="$USER"`      (lets `tailscale serve` run sans sudo)
+#   * HTTPS certs: enable MagicDNS + HTTPS in the Tailscale admin console.
+#   * operator:    sudo tailscale set --operator="$USER"   (lets `tailscale serve` run sans sudo)
 set -euo pipefail
 cd "$(dirname "$0")"                                          # repo root
 
 PORT=8888
-NB="notebooks/soros_13f_risk.ipynb"
+FLEXUID="$(id -u flexnb)"
+NB_SVC="env XDG_RUNTIME_DIR=/run/user/${FLEXUID} systemctl --user"
+
+# Make sure the hardened notebook container is running (normally already up at boot).
+sudo -u flexnb $NB_SVC start flexagg-jupyter.service
+sudo -u flexnb $NB_SVC --no-pager --lines=0 status flexagg-jupyter.service | sed -n '1,3p' || true
 
 # Expose localhost:8888 over Tailscale with a real HTTPS cert on this node's MagicDNS name.
-# -> CRO/Risk open  https://<this-node>.<tailnet>.ts.net/  (find the exact URL via `tailscale serve status`).
+# -> users open  https://<this-node>.<tailnet>.ts.net/  (exact URL via `tailscale serve status`).
 tailscale serve --bg --https=443 "http://127.0.0.1:${PORT}"
 echo "Tailscale serve mapping:"
 tailscale serve status || true
 
-# JupyterLab on localhost only; token auth (printed below) is the access control. PYTHONPATH so the
-# notebook's bare imports (notebook_helpers, barra_factor_risk_cube) resolve — never sys.path-inject.
-# It MUST be absolute: the kernel's cwd is the notebook's folder, so a relative `python_src` would
-# not resolve. The kernel inherits this env. If WebSocket origin checks bite behind the proxy, add:
-#   --ServerApp.allow_origin='https://<this-node>.<tailnet>.ts.net'
-export PYTHONPATH="${PWD}/python_src"
-exec barra/bin/jupyter lab "$NB" \
-  --no-browser --ip=127.0.0.1 --port="${PORT}" \
-  --ServerApp.allow_remote_access=True
+cat <<EOF
+
+  Notebook is served by the flexagg-jupyter container on 127.0.0.1:${PORT}.
+  Access control: nginx basic-auth + Jupyter token. The token is in
+  /home/flexnb/.config/flexagg-jupyter.env (flexnb-only) — share it out of band.
+EOF

@@ -1,0 +1,61 @@
+# Rootless Podman Quadlet unit — runs the hardened JupyterLab container as the locked-down
+# `flexnb` service user. Installed at: /home/flexnb/.config/containers/systemd/flexagg-jupyter.container
+# Reload with:  sudo -u flexnb XDG_RUNTIME_DIR=/run/user/$(id -u flexnb) systemctl --user daemon-reload
+#
+# Surface = the notebook ONLY, published to host loopback so nginx proxies it exactly as the old
+# host-python service did. Everything the user can touch is read-only or throwaway tmpfs; no host
+# home, no secrets, no tunnel creds are reachable from inside.
+[Unit]
+Description=Barra flexagg JupyterLab (hardened rootless container, /jupyter)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/flexagg-jupyter:latest
+ContainerName=flexagg-jupyter
+
+# Loopback-only publish: nginx (:8090) reverse-proxies /jupyter/ -> here. Never bound to a
+# routable interface; Cloudflare/Tailscale only ever reach it through nginx.
+PublishPort=127.0.0.1:8888:8888
+
+# Internal (no-uplink) network: inbound via the published port still works (rootlessport),
+# but the container has NO route off-box — kills internet exfil/C2 and host-LAN/SSH pivoting.
+# The notebook needs zero egress (reads prebuilt parquets; Atoti telemetry is optional).
+# Create once:  sudo -u flexnb ... podman network create --internal flexnb-noegress
+Network=flexnb-noegress
+
+# Code + data, READ-ONLY. The cube resolves data as <python_src>/../data, so these two land
+# side-by-side under /app. notebooks/ is read-only too; the entrypoint copies it into tmpfs /work.
+Volume=/home/abrennan/dev/barra_poc/python_src:/app/python_src:ro
+Volume=/home/abrennan/dev/barra_poc/data:/app/data:ro
+Volume=/home/abrennan/dev/barra_poc/notebooks:/app/notebooks:ro
+# our ActivePivot/Atoti licence (read-only secret). Setting ATOTI_LICENSE to it ALSO disables
+# all telemetry (Python + JVM) -> the container needs zero egress, enabling a full air-gap.
+Volume=/home/abrennan/dev/barra_poc/ActivePivot.lic.43457:/app/atoti.lic:ro
+
+# Token (rotated) lives in a 0600 file, not in argv. Base URL + allowed origin for the proxy.
+EnvironmentFile=/home/flexnb/.config/flexagg-jupyter.env
+Environment=JUPYTER_BASE_URL=/jupyter/
+Environment=JUPYTER_ALLOW_ORIGIN=https://risk.barra-poc.com
+# read-only rootfs => point HOME (atoti's ~/.atoti, jupyter's ~/.jupyter + runtime) at tmpfs
+Environment=HOME=/tmp
+Environment=ATOTI_HIDE_EULA_MESSAGE=True
+# our licence: activates Atoti AND disables telemetry (no outbound call) -> safe to air-gap
+Environment=ATOTI_LICENSE=/app/atoti.lic
+
+# ── hardening ───────────────────────────────────────────────────────────────────────────
+ReadOnly=true
+WorkingDir=/work
+Tmpfs=/work
+Tmpfs=/tmp
+DropCapability=all
+NoNewPrivileges=true
+# resource caps (PodmanArgs: these keys aren't first-class in Podman 4.9 Quadlet)
+PodmanArgs=--memory=6g --memory-swap=6g --cpus=2 --pids-limit=400
+
+[Service]
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=default.target

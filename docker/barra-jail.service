@@ -1,0 +1,15 @@
+# Loads the nftables egress jail for the notebook container at boot.
+# Install to /etc/systemd/system/barra-jail.service, then: systemctl enable --now barra-jail.service
+[Unit]
+Description=nftables egress jail for the rootless barra notebook container (flexnb uid 995)
+After=network-pre.target nftables.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/barra-jail.nft
+ExecStop=/usr/sbin/nft delete table inet barra_jail
+
+[Install]
+WantedBy=multi-user.target
