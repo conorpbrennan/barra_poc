@@ -93,17 +93,16 @@ and 13 → 14 once data sources are chosen.
   "🌐 Estimation universe" panel. Russell 3000 not classifiable on free data (iShares HTML, FTSE
   paid). Identity resolution caps ~current-book coverage; Unclassified is shown, not folded into the
   headline. Tests in `test_universe.py`. Done. (Latest filing: ~20% of book weight outside S&P 1500.)
-- [ ] **Phase 2 · Filtration funnel** (SPEC'd — docs/universe-diagnostics-plan.md). [M] Pre-filter
-  population **LOCKED to PIT S&P 500** (`population(t)` = hanshof change-log snapshot as-of t — the
-  only survivorship-free PIT index on free data; index component = S&P 500). Membership = PIT rules
-  applied to it; held book is coverage-only. All of Chris's filters as funnel stages: size, liquidity
-  (ADV + trading frequency — Volume already cached, no Step-11), history, listing/sec-type,
-  event/suspended, completeness, min cross-section, + stability buffers (cross-month hysteresis,
-  confirmed in). Free float & confirmed-M&A removal shown as disclosed *unavailable* stages (no free
-  source). NB the funnel is near-flat by design (S&P 500 is pre-curated) — it confirms the DQ layer,
-  and would bite on a broader input if a paid PIT source were added (only `population(t)` changes).
-  `barra_universe_funnel.py` → `data/universe_funnel.parquet` → `GET /funnel` → funnel view in the
-  "🌐 Estimation universe" panel → `test_funnel.py`. Decisions open: numeric thresholds.
+- [x] **Phase 2 · Filtration funnel.** [M] Pre-filter population **LOCKED to PIT S&P 500**
+  (`population(t)` = hanshof change-log snapshot as-of t — the only survivorship-free PIT index on free
+  data). `barra_universe_funnel.py` runs each member through the filter stack — listing → size →
+  history → trading frequency → liquidity/ADV → completeness → stability buffer (ADV-percentile
+  hysteresis) — tagging the first stage that drops it. Metrics are PIT from the builder's cached
+  prices/fundamentals (mcap, ADV, trading-freq — no Step-11 needed) + exposures completeness. Free
+  float & confirmed-M&A removal are disclosed *inert* stages (no free source); unmeasurable names →
+  "data unavailable", never a filter drop. Near-flat by design (latest: ~446/~486 survive), as Chris
+  predicted. Thresholds in `universe_filters.json`. `GET /funnel` + funnel view in the "🌐 Estimation
+  universe" panel. Tests in `test_funnel.py`. Done.
 - [ ] **Phase 3 · Span / high-confidence check.** [M] Does each holding sit inside the estimation
   universe's factor space (Chris's VALUE/SIZE picture): 2D factor-pair scatter + numeric in-span flag.
   (Prototyped: % of book by weight inside the PIT-S&P-500 Mahalanobis span across all filings — ~90%

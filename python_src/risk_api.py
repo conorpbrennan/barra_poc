@@ -62,6 +62,7 @@ from pydantic import BaseModel
 
 import barra_dq_checks
 import barra_universe_membership as _um
+import barra_universe_funnel as _uf
 from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS
 
 CUBE_PORT = int(os.environ.get("BARRA_CUBE_PORT", "9091"))   # own port, distinct from the 9090 UI cube
@@ -729,6 +730,55 @@ async def universe(date: str | None = Query(None, description="filing report_dat
             "detail": [{k: _clean(v) for k, v in row.items()}
                        for _, row in detail.iterrows()],
             "notes": _um.NOTES,
+        }
+    return await run_in_threadpool(run)
+
+
+# ============================================================================ filtration funnel
+# Phase 2 (docs/universe-diagnostics-plan.md). Serves the precomputed funnel: the PIT S&P 500 each
+# month run through the documented DQ filter stack, tagged with the first stage that drops each name.
+# Reads data/universe_funnel.parquet (built by barra_universe_funnel.py) — no cube, no network.
+
+@app.get("/funnel")
+async def funnel(date: str | None = Query(None, description="funnel month; default latest")):
+    """Estimation-universe filtration funnel by month: a population→survivors waterfall with the drop
+    count per stage, the survivor count (and how many are held), the selected month's drop list (name
+    + the stage that dropped it + its metrics), and the documented thresholds. The funnel is near-flat
+    by design — the S&P 500 is pre-curated, so the filters confirm a clean input rather than carve."""
+    def run():
+        if not _uf.ARTIFACT.exists():
+            raise HTTPException(503, "universe_funnel.parquet not built — run barra_universe_funnel.py")
+        df = pd.read_parquet(_uf.ARTIFACT)
+        df["month"] = pd.to_datetime(df["month"])
+        cfg = _uf.load_cfg()
+        recs = []
+        for mth, g in df.groupby("month"):
+            fc = _uf.funnel_counts(g, cfg)
+            recs.append({"month": str(mth.date()), **{k: fc[k] for k in
+                         ("population", "survivors", "held_survivors", "data_unavailable")},
+                         **{f"drop:{s}": fc["drops"][s] for s in _uf.STAGES}})
+        recs.sort(key=lambda r: r["month"])
+
+        sel = date or (recs[-1]["month"] if recs else None)
+        gm = df[df["month"] == pd.Timestamp(sel)] if sel else df.iloc[0:0]
+        dropped = (gm[gm["stage_dropped"].isin(_uf.STAGES)]
+                   .sort_values(["stage_dropped", "adv"], na_position="last")
+                   [["issuer", "ticker", "stage_dropped", "mcap", "hist_days", "trade_freq",
+                     "adv", "n_descriptors", "held"]])
+        return {
+            "stages": _uf.STAGES,
+            "series": recs,
+            "selected_date": sel,
+            "latest": _uf.funnel_counts(gm, cfg),
+            "dropped": [{k: _clean(v) for k, v in row.items()} for _, row in dropped.iterrows()],
+            "config": cfg,
+            "unavailable_stages": cfg.get("unavailable_stages", []),
+            "note": ("Pre-filter population is the point-in-time S&P 500 (survivorship-free). The "
+                     "funnel is near-flat by design — the S&P 500 is already committee-curated, so the "
+                     "filters confirm clean data rather than carve much away. 'data unavailable' = PIT "
+                     "members not in the built universe (delisted) or missing a share count; shown, "
+                     "not counted as a filter drop. Free float and confirmed-M&A removal have no free "
+                     "source and appear as inert, disclosed stages."),
         }
     return await run_in_threadpool(run)
 

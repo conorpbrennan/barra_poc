@@ -549,6 +549,55 @@ def render_universe():
                 dd["weight"] = dd["weight"].map(lambda v: f"{v:.2%}")
                 st.dataframe(dd[["issuer", "ticker", "cusip", "weight", "bucket"]],
                              hide_index=True, use_container_width=True)
+        # --- Phase 2: the DQ filtration funnel over the PIT S&P 500 ---
+        st.divider()
+        st.markdown("**Estimation universe — DQ filtration funnel** (point-in-time S&P 500)")
+        try:
+            fn = get("/funnel")
+        except Exception as e:
+            st.info(f"Funnel unavailable: {e} — run barra_universe_funnel.py to build it.")
+        else:
+            fseries = fn.get("series", [])
+            if not fseries:
+                st.info("No funnel data.")
+            else:
+                fl, fsel = fn["latest"], fn["selected_date"]
+                st.markdown(
+                    f"Of the **{fl['population']} point-in-time S&P 500 names** at {fsel}, "
+                    f"**{fl['survivors']} survive** the data-quality filters "
+                    f"({fl['held_survivors']} of them held). {fl['data_unavailable']} data-unavailable. "
+                    f"Near-flat by design — the S&P 500 is already curated, so the filters confirm a "
+                    f"clean input rather than carve much away.")
+                fdf = pd.DataFrame(fseries)
+                fdf["Date"] = pd.to_datetime(fdf["month"]); fdf = fdf.set_index("Date")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("Population vs survivors — most of the gap is data-availability "
+                               "(delisted PIT members we never pulled), not filtering; the genuine "
+                               "filter drops are the small per-stage counts at right.")
+                    st.line_chart(fdf[["population", "survivors", "data_unavailable"]])
+                with c2:
+                    st.caption(f"Drops by filter stage — {fsel}")
+                    drops = {s: fl["drops"][s] for s in fn["stages"] if fl["drops"].get(s)}
+                    st.bar_chart(pd.Series(drops, name="dropped")) if drops else \
+                        st.caption("No names dropped by a filter this month.")
+                dropped = fn.get("dropped", [])
+                if dropped:
+                    with st.expander(f"Names dropped by a filter — {fsel} ({len(dropped)})",
+                                     expanded=False):
+                        st.dataframe(pd.DataFrame(dropped)[["issuer", "ticker", "stage_dropped",
+                                     "mcap", "hist_days", "adv", "n_descriptors", "held"]],
+                                     hide_index=True, use_container_width=True)
+                with st.expander("Filter thresholds & unavailable stages", expanded=False):
+                    cfg = fn.get("config", {})
+                    st.caption("Thresholds (universe_filters.json): " + ", ".join(
+                        f"{k}={cfg[k]}" for k in ("min_mcap", "min_hist_days", "min_adv",
+                        "min_trade_freq", "min_descriptors") if k in cfg))
+                    st.caption(f"Stability buffer (anti-churn): {cfg.get('buffer', {})}")
+                    st.caption("Unavailable on free data (inert, disclosed): "
+                               + ", ".join(fn.get("unavailable_stages", [])))
+                    st.caption("• " + fn.get("note", ""))
+
         with st.expander("Method & caveats", expanded=False):
             for k in ("sp500", "sp1500", "russell", "ticker", "unclassified"):
                 if k in u.get("notes", {}):

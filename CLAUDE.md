@@ -163,6 +163,32 @@ ticker) — the latest filing's headline is the reliable read. Tests: `test_univ
 classification logic always runs; integ needs the backend + the built artifact). Phase 1 of the
 universe diagnostics — see `docs/universe-diagnostics-plan.md`.
 
+## Estimation universe — filtration funnel (`/funnel`)
+
+`barra_universe_funnel.py` is Phase 2 (another **precompute step**). The pre-filter population is the
+**point-in-time S&P 500** (the hanshof change-log snapshot as-of each month-end — the only
+survivorship-free PIT index on free data; this is the *locked* decision, endorsed by the desk). Each
+member is run through a fixed DQ filter stack — **listing → size → history → trading frequency →
+liquidity/ADV → completeness → stability buffer** — and tagged with the FIRST stage that drops it.
+Metrics are point-in-time from the builder's cached prices/fundamentals (mcap = `close × shares`
+as-of `filed`; ADV/trading-frequency from cached Volume — **no Step-11 frame work needed**) plus
+descriptor completeness from the `exposures` frame. **Free float** and **confirmed-M&A removal** have
+no free source and appear as inert, *disclosed* stages. A name we can't measure (delisted PIT member
+not in the built universe, or missing a share count) is tagged **"data unavailable"** — shown, never
+counted as a filter drop. The funnel is **near-flat by design**: the S&P 500 is committee-curated, so
+the filters confirm a clean input (latest month: ~446 of ~486 evaluable names survive); the visible
+population↔survivor gap in early years is data-availability (survivorship), not filtering. Stability
+buffers use ADV-percentile hysteresis (enter/exit bands) across months to stop churn. Thresholds live
+in repo-root `universe_filters.json` (documented + tunable). Writes `data/universe_funnel.parquet`
+(gitignored).
+
+`risk_api.py` `GET /funnel?date=` reads **only** that parquet: a per-month population→survivors
+waterfall with the drop count per stage, the selected month's drop list (name + the stage that
+dropped it + its metrics), and the thresholds. The "🌐 Estimation universe" panel (`render_universe`)
+renders it under the membership view (population/survivor/data-unavailable trend + per-stage drops +
+drop-list + thresholds). Tests: `test_funnel.py` (pure filter logic always runs; integ needs the
+backend + artifact). Phase 2 of the universe diagnostics — see `docs/universe-diagnostics-plan.md`.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

@@ -1,7 +1,9 @@
 # Plan — universe diagnostics (bitemporal index membership → funnel → span check)
 
-Status: Phase 1 BUILT (barra_universe_membership.py, GET /universe, "🌐 Estimation universe" panel,
-test_universe.py); Phases 2–3 planned. Diagnostic only — no change to the six-frame contract, the cube, or how
+Status: Phases 1–2 BUILT (Phase 1: barra_universe_membership.py, GET /universe; Phase 2:
+barra_universe_funnel.py, GET /funnel, universe_filters.json, test_funnel.py — both in the
+"🌐 Estimation universe" panel); Phase 3 planned, Phase 4 awaiting Chris. Diagnostic only — no change
+to the six-frame contract, the cube, or how
 `barra_build_frames.py` produces loadings. This layers an analysis + a dashboard panel on top of
 what already exists, so we can *see* what an estimation/coverage split would do before committing to
 the builder change in `estimation-coverage-design.md`.

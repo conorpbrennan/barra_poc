@@ -1,0 +1,11 @@
+{
+  "_doc": "Estimation-universe filtration thresholds (Phase 2 funnel; see docs/universe-diagnostics-plan.md). The pre-filter population is the point-in-time S&P 500. Every threshold here is shown in the dashboard panel so the criteria are documented, not hidden. Defaults seed from the values already implicit in barra_build_frames and are deliberately loose - the S&P 500 is already curated, so a near-flat funnel is the expected, correct result (per Chris).",
+  "min_mcap": 100000000,
+  "min_hist_days": 252,
+  "min_adv": 1000000,
+  "min_trade_freq": 0.9,
+  "min_descriptors": 6,
+  "allowed_sec_types": ["Common"],
+  "buffer": {"metric": "adv", "enter_pctile": 5, "exit_pctile": 2},
+  "unavailable_stages": ["free float", "confirmed M&A removal"]
+}
