@@ -34,6 +34,144 @@ cd python_src
 Both builders write the six frames to `data/` at the repo root (created on demand) and the
 cube reads from there (`OUT` / `out` constants, resolved relative to the script file).
 
+## Risk-analyst commentary (`/analysis`)
+
+`risk_api.py` has a `POST /analysis` endpoint that writes a short risk-manager read of one
+pivot view. It re-runs the *same* guarded pivot the UI shows (shared `_validate_pivot` /
+`_pivot_result` helpers, so it can never query an off-allowlist dim/measure), then sends only
+those tidy numbers to the Anthropic Messages API and streams back markdown. It's the **plain
+Messages API with no tools** — the model gets the figures as text and nothing else; it has zero
+access to the cube, the filesystem, or any tool, and cannot re-query. All domain grounding
+(measure meanings, the Market-loading concentration caveat, "cite the numbers, invent nothing")
+lives in `ANALYST_SYSTEM`. The Streamlit UI calls it from an on-demand "🔍 Risk-analyst
+commentary" button under the grid (no token spend unless clicked; cached per view+slice).
+
+`ANTHROPIC_API_KEY` is required for `/analysis` only. The process env wins; otherwise the key
+is read **only** from the repo `.env` (`_anthropic_key`) — the rest of `.env` is never sourced
+because its `ATOTI_LICENSE` path is broken and would break the cube. Without a key, `/analysis`
+returns a clean 502 and nothing else is affected. Model: `claude-opus-4-8`. Tests:
+`test_analysis.py` (unit guards always run; integration needs the backend; the one live LLM
+call is opt-in via `RUN_LLM=1`).
+
+## Desk limits (`/limits`)
+
+`risk_api.py` has a `GET /limits?date=&set=&book=` endpoint that compares the book's numbers to a
+desk limit set in repo-root `limits.json` (reloaded each call) and returns a red/amber/green status
+per limit + a worst-of overall. Book-level VaR/ES/HHI come from the cube (scenario-dependent, so the
+limit reads against one `ScenarioSet` — config default `HistFull`, overridable via `set`);
+single-name and sector weight come from the positions overlay as-of the date. All limits are UPPER
+bounds (`warn` = amber, `limit` = red). The Streamlit UI renders a RAG banner + detail table atop
+the page (`render_limits_banner`), and `/analysis` folds the same status into its payload so the
+commentary leads with any breach. Tests: `test_limits.py`.
+
+## Data-quality / trust (`/dq`)
+
+`barra_dq_checks.py` is both a CLI (`run()` prints a PASS/WARN/FAIL report) and a library: `run(frames)`
+returns the same checks as structured `{level, name, detail}` dicts. `risk_api.py` `GET /dq` calls it
+against the cube's **live in-memory frames** (`S["frames"]`, not a disk re-read) and adds the known
+stubs (Country="US" on every name, "Unknown" sectors) and each frame's latest date. The UI renders a
+pass/warn/fail badge + detail expander next to the limits banner (`render_dq_badge`). Tests: `test_dq.py`.
+
+## VaR backtest (`/backtest`)
+
+`risk_api.py` `GET /backtest?set=&date=&book=&alpha=&window=` validates the VaR methodology. The 13F
+book has no live daily P&L, so this is a **constant-portfolio backtest**: the current book's exposures
+applied to the daily factor-return history (the `Scenario PnL vector` + its `Scenario dates` dual),
+rolling a window (default 250d) to estimate VaR each day and counting exceptions where the realized
+day beat VaR. It runs the **Kupiec POF** test (`_kupiec_lr`, χ²(1)@95% = 3.841) and assigns the
+**Basel traffic-light** zone from the binomial CDF (`_basel_zone` — green/amber/red, generalizing the
+250/99 zones to any window). Counting-in-range isn't a cube primitive, so the rolling logic lives in
+the API (pure stats split out for unit tests). UI badge + detail expander (`render_backtest_badge`).
+Tests: `test_backtest.py`. Defaults to `HistFull` (the only set with a long daily history).
+
+`method` (in `_var_thresholds`) selects the VaR estimator: `equal` (plain rolling historical sim),
+`ewma` (RiskMetrics parametric-normal, decay `lam`), `fhs` (filtered historical simulation —
+EWMA-vol-scaled empirical tail). **Default is `fhs`, `lam=0.94`**, chosen by a sweep: at 99% over the
+Soros book, equal-HS under-covers (1.79%, Kupiec-amber) and parametric ewma over-breaches on the fat
+tail (~2.1-2.4%, red), while fhs λ=0.94 lands at ~1.0% (Kupiec LR ~0.01, green). FHS keeps the
+empirical fat tail but rescales it by reactive EWMA vol, so it gets reactivity without the normality
+penalty.
+
+## Drawdown (`/drawdown`)
+
+`risk_api.py` `GET /drawdown?set=&date=&book=` is the path lens VaR/ES miss. It pulls the same book
+P&L vector as `/backtest` (the `Scenario PnL vector` + its `Scenario dates` dual), compounds it into a
+constant-portfolio equity curve over the set's daily path, and takes peak-to-trough: `max_drawdown`
+(negative fraction), peak/trough dates, `recovered` + recovery date, and the longest underwater run.
+`_max_drawdown` is pure stats (unit-tested without a cube); cumulate/running-max isn't a cube
+primitive so it lives in the API like the backtest. Like the backtest it's a **constant-portfolio
+what-if** on the held book over history, not a live track record. Meaningful on HistFull (long path)
+and event sets; hypo sets are length-1 → `status: insufficient`. The UI panel `render_drawdown`
+charts the equity curve + underwater area; `/analysis` folds the headline in (the model leads with a
+deep drawdown the static tail can't show). Tests: `test_drawdown.py`. NB on the Soros book HistFull
+reads ≈ −39%, peak 2020-02-19 → trough 2020-03-23 (the COVID crash), recovered mid-2020.
+
+## Risk trends (`/trends`)
+
+`risk_api.py` `GET /trends?set=&measures=&by=` returns a tidy time series of book measures over the
+whole calendar for one `ScenarioSet`. The book-level path (no `by`) computes **date-by-date** — asking
+the cube for the scenario/HHI measures across all ~108 dates in one plan materialises the full P&L
+vector per date and OOMs the Java heap, so it loops one date (one vector) at a time. The `by=Factor`
+path is a single query (Net exposure is additive, no vectors). The UI "📈 Risk trends" panel
+(`render_trends`) charts Scenario VaR 99 / ES 97.5, Risk HHI, and the top style-factor exposures over
+2016–2024. Tests: `test_trends.py`.
+
+## Stress (`/stress`, `/reverse_stress`)
+
+A hypothetical shock's book P&L is linear: `dPnL = Σ_k x_k·(σ_k·vol_k)` — book net factor exposure ×
+(sigma shock × factor vol). `risk_api.py` computes both custom and reverse stress in the API from
+exposures (cube `Net exposure` by Factor) + factor vols (`_factor_vols`, matching `build_scenarios`'s
+`wide.std()`), so neither needs a cube rebuild. `POST /stress {shocks:{Factor:σ}}` returns the book
+P&L + per-factor contribution breakdown — verified to match the cube's baked-in Hypo sets to float
+precision. `GET /reverse_stress?loss=` inverts it: for a target loss `L`, the single-factor move
+`σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
+Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`). Tests: `test_stress.py`.
+
+## Pre-trade / what-if (`/whatif`)
+
+`risk_api.py` `POST /whatif {trades:[{position, weight}]}` recomputes book risk under a modified weight
+vector — resize/drop held names, or add a universe name (absolute target weight; 0 drops). It
+reproduces the cube's risk math in numpy (`_book_inputs` + `_risk_from_weights`): factor P&L vector
+`R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and Risk HHI from the marginal-Total-VaR shares —
+so **"before" matches the cube's reported figures exactly** and only the BEFORE→AFTER delta is the
+new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
+UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
+"add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
+VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Risk HHI, gross, net. UI panel `render_whatif`.
+Tests: `test_whatif.py`.
+
+## Estimation universe — index membership (`/universe`)
+
+`barra_universe_membership.py` is a **precompute step** (like a builder): for every Soros 13F filing it
+classifies each held name by index, **bitemporally** — `report_date` is valid time, `filing_date` is
+knowledge time, and S&P 500 membership is read **as-of `report_date`** from the hanshof PIT change log
+(survivorship-bias-free). Current S&P 1500 (Wikipedia 500/400/600, parsed with bs4 — no lxml) is a
+**current-membership proxy**, matched by ticker OR normalized company name (so foreign-domicile names
+like Linde/Accenture resolve without a US ticker). CUSIP→ticker reuses the builder's warm OpenFIGI
+crosswalk (call with the full held list so batches hit cache, not 429) + a SEC `company_tickers`
+name map. Names with neither ticker nor name match are **"Unclassified"**, kept OUT of the headline.
+Mutually-exclusive, weight-aggregated buckets: `S&P 500` (PIT) / `S&P 400/600` (current) / `Outside
+S&P 1500` / `Unclassified`. Russell 3000 is **not** classifiable on free data (iShares serves HTML,
+FTSE is paid). Writes `data/universe_membership.parquet` (gitignored, like the six frames). Run it
+from `python_src/` after a build.
+
+`risk_api.py` `GET /universe?date=` reads **only** that parquet (no cube, no network at request time):
+a weight-by-bucket time series, the latest (or `date`) filing's split + the "outside S&P 1500"
+headline, and the Outside/Unclassified names. UI "🌐 Estimation universe" panel (`render_universe`).
+Coverage is strong on recent filings and thins on older ones (accumulated delisted names lose their US
+ticker) — the latest filing's headline is the reliable read. Tests: `test_universe.py` (pure
+classification logic always runs; integ needs the backend + the built artifact). Phase 1 of the
+universe diagnostics — see `docs/universe-diagnostics-plan.md`.
+
+## In-UI docs (static serving)
+
+Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data
+reference). Streamlit static serving is enabled (`.streamlit/config.toml` → `enableStaticServing`),
+so files in `python_src/static/` are served at `<baseUrlPath>/app/static/...` (behind the same gate).
+`static/guide.html` is hand-written (the feature guide). `static/barra_model_reference.html` is
+**generated** by `barra_cro_report.py`, which now writes to both `tmp/` (the CLI artifact) and
+`python_src/static/`; rerun it to refresh. Tests: `test_docs.py`.
+
 ## The two model versions (v1 vs v2)
 
 Both produce the **identical six-frame schema** and feed the same unchanged cube. They differ

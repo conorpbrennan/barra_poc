@@ -324,6 +324,371 @@ except Exception as e:
     st.error(f"Backend not reachable at {API} — start risk_api first.\n\n{e}")
     st.stop()
 
+
+def render_limits_banner():
+    """Desk-limit RAG strip: a red/amber/green headline plus a per-limit detail table. Book-level
+    status from /limits (latest date, config scenario set); silent if limits aren't configured or
+    the call fails, so it never blocks the page."""
+    try:
+        lim = get("/limits")
+    except Exception:
+        return
+    if not lim.get("configured"):
+        return
+    checks = lim.get("checks", [])
+    n_br = len(lim.get("breaches", []))
+    n_am = sum(1 for c in checks if c["status"] == "amber")
+    head = f"Limits — {lim['book']} · {lim['set']} · {lim['date']}"
+    status = lim["status"]
+    if status == "breach":
+        st.error(f"🔴 {head} — {n_br} breach(es)" + (f", {n_am} warning(s)" if n_am else ""))
+    elif status == "amber":
+        st.warning(f"🟠 {head} — {n_am} warning(s)")
+    elif status == "green":
+        st.success(f"🟢 {head} — all within limits")
+    else:
+        st.info(f"{head} — status unknown")
+    with st.expander("Limit detail", expanded=(status == "breach")):
+        def _pct(v):
+            return "—" if v is None else f"{v:.2%}"
+        rows = [{"Limit": c["name"], "Scope": c["scope"], "Value": _pct(c["value"]),
+                 "Warn": _pct(c["warn"]), "Cap": _pct(c["limit"]),
+                 "Status": {"breach": "🔴 BREACH", "amber": "🟠 WARN", "green": "🟢 OK"}.get(
+                     c["status"], c["status"].upper()),
+                 "Detail": c.get("detail") or ""} for c in checks]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+def render_dq_badge():
+    """Data-quality / trust strip: a pass/warn/fail headline from /dq plus a detail expander with
+    every check, the known stubs, and each frame's latest date. Silent if /dq is unreachable."""
+    try:
+        dq = get("/dq")
+    except Exception:
+        return
+    s = dq.get("summary", {})
+    st_ = dq.get("status", "pass")
+    head = (f"Data quality — {s.get('PASS',0)} pass · {s.get('WARN',0)} warn · {s.get('FAIL',0)} fail"
+            f"  ·  data through {dq.get('latest_date',{}).get('positions','?')}")
+    if st_ == "fail":
+        st.error(f"🔴 {head}")
+    elif st_ == "warn":
+        st.warning(f"🟠 {head}")
+    else:
+        st.success(f"🟢 {head}")
+    with st.expander("Data-quality detail", expanded=(st_ == "fail")):
+        stubs = dq.get("stubs", {})
+        st.caption(f"Known stubs: {stubs.get('country_stub_US', 0)}/{stubs.get('n_securities', 0)} names "
+                   f"carry the Country=\"US\" stub · {stubs.get('sector_unknown', 0)} 'Unknown' sector. "
+                   "Country is not yet a real crosswalk (see ROADMAP Step 14).")
+        icon = {"PASS": "🟢", "WARN": "🟠", "FAIL": "🔴"}
+        rows = [{"": icon.get(c["level"], ""), "Check": c["name"], "Detail": c.get("detail") or ""}
+                for c in sorted(dq.get("checks", []), key=lambda c: {"FAIL": 0, "WARN": 1, "PASS": 2}[c["level"]])]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+def render_backtest_badge():
+    """VaR backtest (model validation): Basel traffic-light + Kupiec result for the rolling-window
+    backtest of the book's daily factor-P&L. Collapsed by default; silent if /backtest is down."""
+    try:
+        bt = get("/backtest")
+    except Exception:
+        return
+    if bt.get("status") != "ok":
+        return
+    zone = bt["basel_zone"]
+    conf = int(round(bt["alpha"] * 100))
+    meth = {"fhs": f"FHS λ={bt.get('lam')}", "ewma": f"EWMA λ={bt.get('lam')}",
+            "equal": "equal-weight HS"}.get(bt["method"], bt["method"])
+    head = (f"VaR backtest ({conf}% / {bt['window']}d, {bt['set']}, {meth}) — "
+            f"{bt['exceptions']} exceptions vs {bt['expected']} expected over {bt['tested']} days")
+    icon = {"green": "🟢", "amber": "🟠", "red": "🔴"}.get(zone, "")
+    line = f"{icon} {head} · Basel {zone.upper()}"
+    (st.error if zone == "red" else st.warning if zone == "amber" else st.success)(line)
+    with st.expander("Backtest detail", expanded=(zone == "red")):
+        verdict = "REJECTS the model" if bt["kupiec_reject"] else "does not reject the model"
+        st.caption(
+            f"Kupiec POF likelihood ratio {bt['kupiec_LR']} vs χ²(1)@95% = {bt['kupiec_crit']} — {verdict}. "
+            f"Constant-portfolio backtest: the current book's exposures applied to the daily factor-return "
+            f"history, rolling a {bt['window']}-day window to estimate VaR. It validates the VaR "
+            f"methodology, not a live P&L track record (the 13F book has none).")
+        # FHS methodology note — expandable, default closed (popover; nested expanders aren't allowed).
+        if bt["method"] == "fhs":
+            with st.popover("ℹ️ FHS methodology"):
+                st.markdown(
+                    f"**Filtered Historical Simulation** — the default VaR estimator here "
+                    f"(λ={bt.get('lam')}).\n\n"
+                    "- Standardise each past daily return by its EWMA volatility estimate "
+                    "(zₜ = rₜ / σₜ), so the history is read as shocks per unit of that day's vol.\n"
+                    "- Take the empirical quantile of those standardised residuals — this keeps the "
+                    "real fat tail, with **no normality assumption**.\n"
+                    "- Rescale that quantile by **today's** EWMA vol, so the estimate reacts to the "
+                    "current volatility regime.\n\n"
+                    "It's the middle ground. Equal-weight historical sim under-covers — it treats a "
+                    "calm day like a turbulent one. Parametric EWMA reacts to vol but over-breaches "
+                    "on the fat tail by assuming normality. Over the Soros book at 99%, FHS λ=0.94 "
+                    "lands near the expected ~1.0% exception rate (Kupiec green) where both of those "
+                    "miss.")
+        ed = bt.get("exception_dates", [])
+        if ed:
+            st.caption(f"Exception dates ({bt.get('n_exception_dates', len(ed))}):")
+            st.dataframe(pd.DataFrame({"VaR breach date": ed}), hide_index=True, use_container_width=True)
+
+
+def render_drawdown():
+    """Drawdown lens: max peak-to-trough of the book's simulated cumulative P&L over the scenario
+    path — a path risk VaR/ES don't show. Equity curve + underwater chart. Collapsed; silent if
+    /drawdown is down. Constant-portfolio what-if (the held book over history), not a live record."""
+    with st.expander("📉 Drawdown (constant-portfolio, over the scenario path)", expanded=False):
+        sets = members.get("ScenarioSet") or ["HistFull"]
+        sset = st.selectbox("Scenario set", sets,
+                            index=(sets.index("HistFull") if "HistFull" in sets else 0),
+                            key="pv_dd_set")
+        try:
+            dd = get("/drawdown", set=sset)
+        except Exception as e:
+            st.info(f"Drawdown unavailable: {e}")
+            return
+        if dd.get("status") != "ok":
+            st.info("No usable path for this set (hypothetical sets are a single shock — pick HistFull "
+                    "or an event set).")
+            return
+        rec = "recovered " + dd["recovery_date"] if dd["recovered"] else "not yet recovered"
+        st.markdown(
+            f"**Max drawdown {dd['max_drawdown']:.1%}** · peak {dd['peak_date']} → trough "
+            f"{dd['trough_date']} ({dd['drawdown_obs']} trading days) · {rec} · longest underwater "
+            f"{dd['longest_underwater_obs']} days")
+        path = pd.DataFrame(dd.get("path", []))
+        if not path.empty:
+            path["Date"] = pd.to_datetime(path["date"]); path = path.set_index("Date")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.caption("Equity curve — book held over the factor path (start = 1.0)")
+                st.line_chart(path[["equity"]])
+            with c2:
+                st.caption("Underwater — drawdown from the running peak (fraction)")
+                st.area_chart(path[["drawdown"]])
+        st.caption("Constant-portfolio what-if: the current book applied to the set's daily factor "
+                   "returns, compounded. A path lens VaR/ES miss — not a live P&L track record.")
+
+
+def render_trends():
+    """Risk-over-time panel: book VaR 99 / ES 97.5 and Risk HHI across the whole calendar, plus the
+    top style-factor exposures over time. One /trends call per dataset (cached); collapsed."""
+    with st.expander("📈 Risk trends (2016–2024)", expanded=False):
+        sets = members.get("ScenarioSet") or ["HistFull"]
+        sset = st.selectbox("Scenario set", sets, index=(sets.index("HistFull") if "HistFull" in sets else 0),
+                            key="pv_trend_set")
+        try:
+            rm = get("/trends", set=sset)
+            fx = get("/trends", set=sset, measures="Net exposure", by="Factor")
+        except Exception as e:
+            st.info(f"Trends unavailable: {e}")
+            return
+        df = pd.DataFrame(rm.get("records", []))
+        if df.empty:
+            st.info("No trend data for this set.")
+            return
+        df["Date"] = pd.to_datetime(df["Date"]); df = df.set_index("Date")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Tail risk — Scenario VaR 99 & ES 97.5 (fraction of book)")
+            cols = [c for c in ("Scenario VaR 99", "Scenario ES 97.5") if c in df]
+            st.line_chart(df[cols])
+        with c2:
+            st.caption("Concentration — Risk HHI (1 / HHI ≈ effective independent bets)")
+            if "Risk HHI" in df:
+                st.line_chart(df[["Risk HHI"]])
+        fdf = pd.DataFrame(fx.get("records", []))
+        if not fdf.empty and "Factor" in fdf.columns:
+            fdf = fdf[fdf["Factor"] != "Market"]                       # Market ≈ 1.0, dwarfs styles
+            piv = fdf.pivot_table(index="Date", columns="Factor", values="Net exposure", aggfunc="first")
+            piv.index = pd.to_datetime(piv.index)
+            top = list(piv.iloc[-1].abs().sort_values(ascending=False).head(6).index)
+            st.caption("Style factor exposures (Net exposure) — top 6 by latest |exposure|, Market excluded")
+            st.line_chart(piv[top])
+
+
+def render_universe():
+    """Estimation-universe diagnostic (Phase 1): which index each Soros holding sat in, per 13F
+    filing, BITEMPORALLY (S&P 500 membership read as-of the filing's report date). Leads with the
+    latest book's weight outside S&P 1500 — Chris's question on whether the book reaches names an
+    SP1500 estimation universe wouldn't cover. Collapsed; silent if /universe is unbuilt/down."""
+    with st.expander("🌐 Estimation universe — index membership of the book", expanded=False):
+        try:
+            u = get("/universe")
+        except Exception as e:
+            st.info(f"Universe membership unavailable: {e} — run barra_universe_membership.py to build it.")
+            return
+        series = u.get("series", [])
+        if not series:
+            st.info("No membership data.")
+            return
+        lat = u["latest"]
+        out_w, unc_w = lat["outside_sp1500"], lat["unclassified"]
+        st.markdown(
+            f"**{out_w:.1%} of the book sits outside the S&P 1500** as of the {lat['report_date']} "
+            f"filing ({lat['n_names']} names) — the coverage an SP1500 estimation universe would miss. "
+            f"In S&P 500 {lat['split'].get('S&P 500', 0):.1%} · S&P 400/600 "
+            f"{lat['split'].get('S&P 400/600', 0):.1%} · unclassified {unc_w:.1%}.")
+
+        df = pd.DataFrame(series)
+        df["Date"] = pd.to_datetime(df["report_date"]); df = df.set_index("Date")
+        cols = [b for b in u["buckets"] if b in df]
+        st.caption("Book weight by index bucket, per filing — S&P 500 is point-in-time; S&P 1500 is "
+                   "current membership; 'Unclassified' is the identity-resolution gap (kept out of the "
+                   "headline), which thins coverage on older filings.")
+        st.bar_chart(df[cols])
+
+        detail = u.get("detail", [])
+        if detail:
+            n_out = sum(1 for d in detail if d["bucket"] == "Outside S&P 1500")
+            with st.expander(f"Names outside S&P 1500 / unclassified — {lat['report_date']} "
+                             f"({n_out} outside, {len(detail) - n_out} unclassified)", expanded=False):
+                dd = pd.DataFrame(detail)
+                dd["weight"] = dd["weight"].map(lambda v: f"{v:.2%}")
+                st.dataframe(dd[["issuer", "ticker", "cusip", "weight", "bucket"]],
+                             hide_index=True, use_container_width=True)
+        with st.expander("Method & caveats", expanded=False):
+            for k in ("sp500", "sp1500", "russell", "ticker", "unclassified"):
+                if k in u.get("notes", {}):
+                    st.caption("• " + u["notes"][k])
+
+
+def render_stress():
+    """Custom & reverse stress. Custom: book P&L under user-set per-factor sigma shocks. Reverse:
+    the single-factor sigma move that would breach a target loss, ranked by vulnerability."""
+    with st.expander("🧪 Stress test (custom & reverse)", expanded=False):
+        facs = members.get("Factor") or []
+        t_custom, t_rev = st.tabs(["Custom shock", "Reverse stress"])
+        with t_custom:
+            st.caption("Shock factors in σ (standard deviations). Book P&L = Σ exposure × (σ × factor vol) "
+                       "— the same math as the built-in Hypo scenarios, but yours.")
+            base = pd.DataFrame({"Factor": facs, "Shock σ": [0.0] * len(facs)})
+            edited = st.data_editor(
+                base, key="pv_stress_editor", hide_index=True, use_container_width=True,
+                column_config={"Factor": st.column_config.TextColumn(disabled=True),
+                               "Shock σ": st.column_config.NumberColumn(format="%.2f", step=0.5)})
+            if st.button("Run stress", key="pv_stress_run"):
+                shocks = {r["Factor"]: float(r["Shock σ"]) for _, r in edited.iterrows() if r["Shock σ"]}
+                if not shocks:
+                    st.info("Enter at least one non-zero shock.")
+                else:
+                    try:
+                        res = requests.post(f"{API}/stress", json={"shocks": shocks}, timeout=30)
+                        res.raise_for_status(); res = res.json()
+                    except requests.RequestException as e:
+                        st.error(f"Stress failed: {e}"); res = None
+                    if res:
+                        tp = res["total_pnl"]
+                        (st.error if tp < 0 else st.success)(f"Book P&L under shock: **{tp:+.2%}**")
+                        cdf = pd.DataFrame(res["components"])
+                        cdf = cdf[["factor", "exposure", "sigma", "shock_return", "pnl"]].rename(
+                            columns={"factor": "Factor", "exposure": "Exposure", "sigma": "σ",
+                                     "shock_return": "Shock ret", "pnl": "P&L"})
+                        for c in ("Shock ret", "P&L"):
+                            cdf[c] = cdf[c].map(lambda v: f"{v:+.2%}")
+                        cdf["Exposure"] = cdf["Exposure"].map(lambda v: f"{v:+.3f}")
+                        cdf["σ"] = cdf["σ"].map(lambda v: f"{v:+.1f}")
+                        st.dataframe(cdf, hide_index=True, use_container_width=True)
+        with t_rev:
+            st.caption("For a target book loss, the single-factor σ move that would breach it — ranked "
+                       "by |σ| (smallest = the book's most vulnerable factor).")
+            loss = st.number_input("Target loss (fraction of book)", min_value=0.005, max_value=0.5,
+                                   value=0.055, step=0.005, format="%.3f", key="pv_rev_loss")
+            if st.button("Run reverse stress", key="pv_rev_run"):
+                try:
+                    res = requests.get(f"{API}/reverse_stress", params={"loss": loss}, timeout=30)
+                    res.raise_for_status(); res = res.json()
+                except requests.RequestException as e:
+                    st.error(f"Reverse stress failed: {e}"); res = None
+                if res and res.get("weakest"):
+                    w = res["weakest"]
+                    st.warning(f"Most vulnerable: **{w['factor']}** — a {w['sigma_to_breach']:+.1f}σ move "
+                               f"alone loses {loss:.1%}.")
+                    rdf = pd.DataFrame(res["factors"])[["factor", "exposure", "sigma_to_breach"]].rename(
+                        columns={"factor": "Factor", "exposure": "Exposure", "sigma_to_breach": "σ to breach"})
+                    rdf["Exposure"] = rdf["Exposure"].map(lambda v: f"{v:+.3f}")
+                    rdf["σ to breach"] = rdf["σ to breach"].map(lambda v: f"{v:+.1f}")
+                    st.dataframe(rdf, hide_index=True, use_container_width=True)
+
+
+def render_whatif():
+    """Pre-trade what-if: resize/drop holdings and see the book risk impact (VaR/ES/Total VaR/Specific
+    vol/HHI, gross/net) before vs after. Risk recomputed from the cube's loadings/returns/specvar."""
+    with st.expander("🔀 Pre-trade / what-if", expanded=False):
+        st.caption("Edit the New weight per holding (0 = drop), then run. Book risk is recomputed under "
+                   "the modified weights — the same engine the cube uses.")
+        try:
+            boot = requests.post(f"{API}/whatif", json={"trades": []}, timeout=30)
+            boot.raise_for_status(); boot = boot.json()
+        except requests.RequestException as e:
+            st.info(f"What-if unavailable: {e}")
+            return
+        hold = boot.get("holdings", [])
+        if not hold:
+            st.info("No holdings to trade.")
+            return
+        base = pd.DataFrame([{"Ticker": h["ticker"], "Position": h["position"],
+                              "Weight": h["weight"], "New weight": h["weight"]} for h in hold])
+        edited = st.data_editor(
+            base, key="pv_whatif_editor", hide_index=True, use_container_width=True, height=300,
+            column_config={"Ticker": st.column_config.TextColumn(disabled=True),
+                           "Position": None,                       # hide the FIGI
+                           "Weight": st.column_config.NumberColumn("Current", format="%.3f", disabled=True),
+                           "New weight": st.column_config.NumberColumn(format="%.3f", step=0.01, min_value=0.0)})
+
+        # add a name from the coverage universe that isn't currently held
+        held_figs = {h["position"] for h in hold}
+        addable = [u for u in boot.get("universe", []) if u["position"] not in held_figs]
+        by_ticker = {u["ticker"]: u["position"] for u in addable}
+        adds = st.session_state.setdefault("pv_whatif_adds", {})            # position -> (ticker, weight)
+        st.markdown("**Add from coverage universe**")
+        c1, c2, c3 = st.columns([3, 1, 1])
+        pick = c1.selectbox(f"Ticker ({len(addable)} available)", sorted(by_ticker), index=None,
+                            placeholder="pick a name to add…", key="pv_whatif_addtk",
+                            label_visibility="collapsed")
+        addw = c2.number_input("Weight", min_value=0.0, max_value=1.0, value=0.02, step=0.01,
+                               key="pv_whatif_addw", label_visibility="collapsed")
+        if c3.button("Add", key="pv_whatif_addbtn") and pick:
+            adds[by_ticker[pick]] = (pick, float(addw))
+        if adds:
+            cc1, cc2 = st.columns([4, 1])
+            cc1.caption("Staged adds: " + ", ".join(f"{t} {w:.1%}" for _, (t, w) in adds.items()))
+            if cc2.button("Clear adds", key="pv_whatif_clear"):
+                adds.clear(); st.rerun()
+
+        if st.button("Run what-if", key="pv_whatif_run"):
+            trades = [{"position": r["Position"], "weight": float(r["New weight"])}
+                      for _, r in edited.iterrows()
+                      if abs(float(r["New weight"]) - float(r["Weight"])) > 1e-9]
+            trades += [{"position": fig, "weight": w} for fig, (_, w) in adds.items()]
+            if not trades:
+                st.info("Change at least one weight to run a what-if.")
+            else:
+                try:
+                    res = requests.post(f"{API}/whatif", json={"trades": trades}, timeout=30)
+                    res.raise_for_status(); res = res.json()
+                except requests.RequestException as e:
+                    st.error(f"What-if failed: {e}"); res = None
+                if res:
+                    b, a, d = res["before"], res["after"], res["delta"]
+                    spec = [("Scenario VaR 99", "scenario_var_99"), ("Scenario VaR 97.5", "scenario_var_975"),
+                            ("Scenario ES 97.5", "es_975"), ("Scenario ES 99", "es_99"),
+                            ("Total VaR 99", "total_var_99"), ("Specific vol", "specific_vol"),
+                            ("Risk HHI", "risk_hhi"), ("Net exposure", "net"), ("Gross exposure", "gross")]
+
+                    def cell(v, key):
+                        return "—" if v is None else (f"{v:.3f}" if key == "risk_hhi" else f"{v:.2%}")
+
+                    def dcell(v, key):
+                        return "—" if v is None else (f"{v:+.3f}" if key == "risk_hhi" else f"{v:+.2%}")
+                    tbl = [{"Measure": lab, "Before": cell(b.get(k), k), "After": cell(a.get(k), k),
+                            "Δ": dcell(d.get(k), k)} for lab, k in spec]
+                    st.dataframe(pd.DataFrame(tbl), hide_index=True, use_container_width=True)
+                    st.caption("Traded: " + ", ".join(
+                        f"{t['ticker']} {t['old']:.1%}→{t['new']:.1%}" for t in res["trades"]))
+
 members = dims.get("members", {})
 
 
@@ -476,6 +841,51 @@ for _k in list(st.session_state.keys()):
         st.session_state[_k] = st.session_state[_k]
 
 st.title("Flex Agg ++")
+
+
+def _excel_links() -> str:
+    """Download links for the generated Excel validation workbooks. They're built into tmp/ by
+    barra_excel_section3.py / barra_excel_check.py; copy any present one into static/ so it serves
+    through the same gate as the docs. Returns the <a> HTML (empty if none built yet)."""
+    tmp = Path(__file__).resolve().parent.parent / "tmp"
+    static = Path(__file__).resolve().parent / "static"
+    books = [("barra_section3_1name_1month.xlsx", "📑 Section 3 worked example (Excel)"),
+             ("barra_risk_check_3pos.xlsx", "📑 Risk-measure check, 3 names (Excel)")]
+    out = []
+    for fn, label in books:
+        src = tmp / fn
+        if not src.exists():
+            continue
+        try:
+            dst = static / fn
+            if not dst.exists() or dst.stat().st_mtime < src.stat().st_mtime:
+                shutil.copy2(src, dst)
+        except OSError:
+            continue
+        out.append(f'<a href="app/static/{fn}" download '
+                   f'style="border:none;font-size:14px;color:#3b5e8c">{label} ↓</a>')
+    return ('&nbsp;&nbsp;·&nbsp;&nbsp;' + '&nbsp;&nbsp;·&nbsp;&nbsp;'.join(out)) if out else ""
+
+
+st.markdown(
+    '<a href="app/static/guide.html" target="_blank" rel="noopener" '
+    'style="border:none;font-size:14px;color:#3b5e8c">📖 Dashboard guide / docs ↗</a>'
+    '&nbsp;&nbsp;·&nbsp;&nbsp;'
+    '<a href="app/static/barra_model_reference.html" target="_blank" rel="noopener" '
+    'style="border:none;font-size:14px;color:#3b5e8c">📐 Model &amp; data reference ↗</a>'
+    '&nbsp;&nbsp;·&nbsp;&nbsp;'
+    '<a href="app/static/factor-model-roadmap.html" target="_blank" rel="noopener" '
+    'style="border:none;font-size:14px;color:#3b5e8c">🗺 Risk-review response &amp; roadmap ↗</a>'
+    + _excel_links(),
+    unsafe_allow_html=True)
+render_limits_banner()
+render_dq_badge()
+render_backtest_badge()
+render_drawdown()
+render_trends()
+render_universe()
+render_stress()
+render_whatif()
 
 
 def read_pivot_state():
@@ -1402,6 +1812,38 @@ with main_col:
     show_grid(body, value_cols, row_fields, key="pivot", pinned=pinned, neutral=neutral)
     st.download_button("Download CSV", mat.reset_index().to_csv(index=False).encode(),
                        "pivot.csv", "text/csv")
+
+    # ---- Risk-analyst commentary (on-demand) -------------------------------------------------
+    # POSTs the SAME query this grid ran to /analysis, which re-runs the guarded pivot and streams
+    # a written read from the LLM (plain Messages API, no tools). Button-triggered only — no token
+    # spend unless asked. Cached per (view, slice) in session_state; Regenerate forces a fresh call.
+    st.divider()
+    _an_name = st.session_state.get("pv_loaded_name", "this view")
+    _an_key = json.dumps([_an_name, real_rows, real_cols, measures, filters, bool(show_totals)],
+                         sort_keys=True, default=str)
+    _an_cache = st.session_state.setdefault("pv_analysis_cache", {})
+    with st.expander("🔍 Risk-analyst commentary", expanded=bool(_an_cache.get(_an_key))):
+        _notes = st.text_input("Optional context for the analyst (e.g. a mandate limit, what you're checking)",
+                               key="pv_analysis_notes")
+        _cached = _an_cache.get(_an_key)
+        if st.button("Regenerate analysis" if _cached else f"Analyze “{_an_name}”", key="pv_analysis_btn"):
+            body_json = {"rows": ",".join(real_rows), "cols": ",".join(real_cols),
+                         "measures": ",".join(measures), "filters": json.dumps(filters),
+                         "totals": bool(show_totals), "name": _an_name, "notes": _notes or None}
+            try:
+                r = requests.post(f"{API}/analysis", json=body_json, stream=True, timeout=180)
+                r.raise_for_status()
+                r.encoding = "utf-8"
+                text = st.write_stream(c for c in r.iter_content(chunk_size=None, decode_unicode=True) if c)
+                _an_cache[_an_key] = text
+            except requests.HTTPError as e:
+                detail = e.response.text if e.response is not None else str(e)
+                st.error(f"Analysis failed: {detail}")
+            except requests.RequestException as e:
+                st.error(f"Analysis request failed: {e}")
+        elif _cached:
+            st.markdown(_cached)
+            st.caption("Cached for this view + slice — click **Regenerate** for a fresh read.")
 
     if undefined:
         st.caption("“—” totals are **undefined**, not zero: a VaR can’t be aggregated across "

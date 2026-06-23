@@ -21,13 +21,15 @@ KEYS = {
     "specific_var":   ["Date", "Position"],
 }
 
-_results: list[tuple[str, str, str]] = []
+def run(frames: dict | None = None) -> list[dict]:
+    """Run every check and RETURN the results as a list of {level, name, detail} dicts (no printing
+    — the CLI block below prints). Pass `frames` (the cube's in-memory six) to check exactly what is
+    served; omit to read the parquet frames from disk. Reusable by risk_api's /dq endpoint."""
+    f = frames if frames is not None else {n: pd.read_parquet(OUT / f"{n}.parquet") for n in KEYS}
+    _results: list[dict] = []
 
-def check(level: str, name: str, detail: str = "") -> None:
-    _results.append((level, name, detail))
-
-def run() -> None:
-    f = {n: pd.read_parquet(OUT / f"{n}.parquet") for n in KEYS}
+    def check(level: str, name: str, detail: str = "") -> None:
+        _results.append({"level": level, "name": name, "detail": detail})
 
     # --- 1. key integrity: uniqueness + no nulls in key columns -------------
     for name, keys in KEYS.items():
@@ -114,14 +116,17 @@ def run() -> None:
     stub = (sec["Sector"] == "Unknown").mean()
     check("WARN" if stub > 0 else "PASS", "securities: Sector populated", f"{stub:.0%} 'Unknown' (known stub)")
 
-    # --- report ---------------------------------------------------------------
+    return _results
+
+
+def _print(results: list[dict]) -> None:
     order = {"FAIL": 0, "WARN": 1, "PASS": 2}
-    width = max(len(n) for _, n, _ in _results)
-    for lvl, name, detail in sorted(_results, key=lambda r: order[r[0]]):
-        print(f"[{lvl:4s}] {name:<{width}}  {detail}")
-    n = {k: sum(1 for r in _results if r[0] == k) for k in order}
+    width = max(len(r["name"]) for r in results)
+    for r in sorted(results, key=lambda r: order[r["level"]]):
+        print(f"[{r['level']:4s}] {r['name']:<{width}}  {r['detail']}")
+    n = {k: sum(1 for r in results if r["level"] == k) for k in order}
     print(f"\n{n['PASS']} pass, {n['WARN']} warn, {n['FAIL']} fail")
 
 
 if __name__ == "__main__":
-    run()
+    _print(run())

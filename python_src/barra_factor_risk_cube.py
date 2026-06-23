@@ -172,6 +172,28 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Scenario worst loss"] = -tt.array.min(m["Scenario PnL vector"])     # worst single scenario
     for k in ("Scenario mean PnL", "Scenario VaR 99", "Scenario worst loss"):
         m[k].formatter = "DOUBLE[0.00%]"
+    m["Scenario n"] = tt.array.len(m["Scenario PnL vector"])   # THIS set's vector length
+
+    # ---- extra confidence levels + Expected Shortfall (coherent tail measure) ------------------
+    # VaR at 95 / 97.5 alongside the existing 99 (the 95/99 pair reads tail fatness; 97.5 is the
+    # FRTB regulatory point). ES (a.k.a. CVaR) is the MEAN loss in the tail BEYOND VaR -- coherent
+    # / sub-additive where VaR is not, and the Basel FRTB replacement for VaR. The tail SIZE k
+    # scales with each set's OWN vector length n (HistFull 2203 vs COVID 82 vs hypo 1), so k is a
+    # MEASURE: k = ceil(alpha * n) worst observations and ES = -mean of the k lowest P&L. n_lowest
+    # accepts a measure for n, so one definition serves every ragged scenario set (k >= 1 always:
+    # ceil of a positive number; k <= n since alpha < 1, so never indexes past the vector).
+    m["Scenario VaR 95"]   = -tt.array.quantile(m["Scenario PnL vector"], 0.05)
+    m["Scenario VaR 97.5"] = -tt.array.quantile(m["Scenario PnL vector"], 0.025)
+    _k975 = tt.math.ceil(0.025 * m["Scenario n"])     # tail size for 97.5% ES
+    _k99  = tt.math.ceil(0.01  * m["Scenario n"])     # tail size for 99% ES
+    m["Scenario ES 97.5"] = -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k975))
+    m["Scenario ES 99"]   = -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k99))
+    # plain dispersion of the scenario P&L (per-observation sigma, same units as the returns): the
+    # non-tail risk number that pairs with VaR/ES and feeds the diversification read below.
+    m["Scenario PnL vol"] = tt.array.std(m["Scenario PnL vector"])
+    for k in ("Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5",
+              "Scenario ES 99", "Scenario PnL vol"):
+        m[k].formatter = "DOUBLE[0.00%]"
 
     # ---- index -> date DUAL of the P&L vector: aligned 1:1 with "Scenario PnL vector". --------
     # DateVec[i] is the date that produced PnL vector[i] (epoch days; one row per set, so
@@ -205,7 +227,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     cube.create_parameter_hierarchy_from_members(
         "ScenarioDay", list(range(N_days)), index_measure_name="ScenarioDay index")
     _day = m["ScenarioDay index"]
-    m["Scenario n"] = tt.array.len(m["Scenario PnL vector"])   # THIS set's vector length
+    # Scenario n (this set's vector length) is defined up with the tail measures above.
     # CLAMP the index in-bounds before reading the vector: Atoti errors the WHOLE query on an
     # out-of-range index (not a per-cell null), and shorter sets (COVID=82) are queried under the
     # full-size dimension (HistFull=2203). So index at a safe position (0 past the end) and NULL the
@@ -240,6 +262,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
                                      + (2.326 * m["Specific vol"]) ** 2)
     m["Specific vol"].formatter = "DOUBLE[0.00%]"
     m["Total VaR 99"].formatter = "DOUBLE[0.00%]"
+    # Expected-Shortfall analogue of Total VaR: factor-ES combined in quadrature with the
+    # idiosyncratic tail. For a normal tail the ES97.5 multiplier is phi(z)/(1-a) = 2.338 (~ the
+    # 2.326 used for 99% VaR -- ES97.5 == VaR99 under normality), applied to the specific vol.
+    m["Total ES 97.5"] = tt.math.sqrt(m["Scenario ES 97.5"] * m["Scenario ES 97.5"]
+                                      + (2.338 * m["Specific vol"]) ** 2)
+    m["Total ES 97.5"].formatter = "DOUBLE[0.00%]"
 
     # ---- Level-2 risk decomposition: additive contributions to Scenario VaR 99 ---------------
     # The factor-VaR is the book loss on the tail scenario t* (the 1%-quantile day of the BOOK
@@ -260,6 +288,18 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["% of Scenario VaR 99"] = (m["Marginal Scenario VaR 99"]
         / tt.total(m["Marginal Scenario VaR 99"], h["Security"], h["FactorDim"]))
 
+    # --- contribution to the FACTOR ES 97.5: a member's MEAN P&L over the BOOK's worst-k tail
+    #     scenarios (k = ceil(0.025 * n) lowest days of the BOOK P&L vector). Additive like the
+    #     VaR marginal (Σ_member = Scenario ES 97.5) but averaged over the whole tail SET rather
+    #     than read off the single 1% day -- ES is coherent, so this split is better-behaved.
+    #     book_tail_idx = the k lowest INDICES of the book vector; indexing each member's own P&L
+    #     vector by that index-array picks its P&L on exactly those book-tail days.
+    _k975_book = tt.math.ceil(0.025 * tt.array.len(book_pnl_vec))
+    _book_tail_idx = tt.array.n_lowest_indices(book_pnl_vec, _k975_book)
+    m["Marginal Scenario ES 97.5"] = -tt.array.mean(m["Scenario PnL vector"][_book_tail_idx])
+    m["% of Scenario ES 97.5"] = (m["Marginal Scenario ES 97.5"]
+        / tt.total(m["Marginal Scenario ES 97.5"], h["Security"], h["FactorDim"]))
+
     # --- contribution to TOTAL VaR 99 (factor + specific, combined in quadrature). Euler split of
     #     Total=√(F²+S²): each factor-marginal is scaled by F/Total, and the idiosyncratic block
     #     adds z²·(w²σ²)/Total PER NAME. Σ_member = Total VaR 99.
@@ -271,6 +311,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
                                   + (2.326 ** 2) * m["Specific variance"] / T_book)
     m["% of Total VaR 99"] = (m["Marginal Total VaR 99"]
         / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"]))
+
+    # ---- concentration: Herfindahl-Hirschman index of risk shares. HHI = Σ_name share², where
+    #      share is a NAME's fraction of book Total VaR (its Marginal Total VaR / the book total).
+    #      Summed at the POSITION grain via an OriginScope (factors lifted, one term per name),
+    #      like Specific variance. Reads 1/N for an evenly-diversified book up to 1.0 for a single
+    #      name; the standard single-number concentration gauge a desk watches against a limit.
+    _name_share = (m["Marginal Total VaR 99"]
+                   / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"]))
+    m["Risk HHI"] = tt.agg.sum(_name_share * _name_share, scope=tt.OriginScope({l["Position"]}))
+    m["Risk HHI"].formatter = "DOUBLE[0.000]"
 
     # --- INCREMENTAL VaR (Flex Agg sense): REMOVE the current member, recompute the BOOK VaR on
     #     the reduced portfolio, and subtract it from the reference book VaR. Unlike the marginals
@@ -299,10 +349,11 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Incremental Total VaR 99"] = book_total - Total_ex
 
     for _mn in ("Marginal Scenario VaR 99", "Marginal Total VaR 99",
-                "Incremental Scenario VaR 99", "Incremental Total VaR 99"):
+                "Incremental Scenario VaR 99", "Incremental Total VaR 99",
+                "Marginal Scenario ES 97.5"):
         m[_mn].formatter = "DOUBLE[0.00%]"
     m["VaR sensitivity"].formatter = "DOUBLE[0.0000]"
-    for _mn in ("% of Scenario VaR 99", "% of Total VaR 99"):
+    for _mn in ("% of Scenario VaR 99", "% of Total VaR 99", "% of Scenario ES 97.5"):
         m[_mn].formatter = "DOUBLE[0.0%]"
 
     print(f"cube built: {len(exposures):,} leaf rows, {len(style)} style factors, "
@@ -322,6 +373,16 @@ if __name__ == "__main__":
     # THE SWITCH: same measure, every scenario mode, side by side (as-of latest COB)
     print(cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], m["Total VaR 99"],
                      levels=[l["ScenarioSet"]], filter=l["Date"] == last))
+
+    # tail board: VaR ladder + Expected Shortfall + dispersion across every scenario set
+    print(cube.query(m["Scenario VaR 95"], m["Scenario VaR 97.5"], m["Scenario VaR 99"],
+                     m["Scenario ES 97.5"], m["Scenario ES 99"], m["Scenario PnL vol"],
+                     m["Total ES 97.5"], m["Risk HHI"],
+                     levels=[l["ScenarioSet"]], filter=l["Date"] == last))
+
+    # factor ES contributions (additive: factors sum to book Scenario ES 97.5)
+    print(cube.query(m["Marginal Scenario ES 97.5"], m["% of Scenario ES 97.5"],
+                     levels=[l["Factor"]], filter=(l["Date"] == last) & (l["ScenarioSet"] == "HistFull")))
 
     # any scenario mode still drills the full hierarchy -- e.g. COVID replay by sector
     print(cube.query(m["Scenario worst loss"], levels=[l["Sector"]],
