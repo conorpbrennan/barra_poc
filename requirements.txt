@@ -7,6 +7,9 @@ pyarrow==24.0.0      # parquet read/write backend for pandas
 # Cube only (barra_factor_risk_cube.py)
 atoti==0.9.15
 
+# Per-view risk-analyst commentary (risk_api.py /analysis): plain Messages API, no tools.
+anthropic==0.111.0
+
 # Excel validation workbook (barra_excel_check.py)
 openpyxl==3.1.5
 
