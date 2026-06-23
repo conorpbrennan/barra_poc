@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard guide — Flex Agg ++ risk</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --bg:#fdfdfb; --panel:#f1efe9; --line:#d8d5cd;
+    --accent:#3b5e8c; --accent-dk:#2a4d69; --muted:#6b675f;
+    --ok:#3f7d4e; --warn:#b5651d; --bad:#a3322b;
+    --serif:Georgia,'Iowan Old Style','Times New Roman',serif;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--serif);
+       line-height:1.55;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:820px;margin:0 auto;padding:48px 24px 90px}
+  header{border-bottom:2px solid var(--accent-dk);padding-bottom:18px;margin-bottom:8px}
+  h1{font-size:30px;font-weight:600;margin:0 0 4px;letter-spacing:.2px}
+  .sub{color:var(--muted);font-size:16px;margin:0}
+  h2{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent-dk);
+     margin:40px 0 6px;font-weight:600}
+  h3{margin:18px 0 4px;font-size:19px;font-weight:600}
+  p{margin:.5em 0}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid rgba(59,94,140,.35)}
+  a:hover{border-bottom-color:var(--accent)}
+  .lead{font-size:18px;color:#3a3833;margin-top:16px}
+  code{font-family:var(--mono);font-size:14px;background:var(--panel);padding:1px 5px;border-radius:4px}
+  ul{margin:.4em 0 .8em;padding-left:22px} li{margin:.25em 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--accent);
+        border-radius:8px;padding:14px 16px;margin:14px 0}
+  .card .label{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent-dk);font-weight:600}
+  .chip{display:inline-block;font-size:12.5px;font-weight:600;padding:1px 8px;border-radius:20px;margin-right:6px}
+  .g{background:#e3efe6;color:var(--ok)} .a{background:#f3e7d6;color:var(--warn)} .r{background:#f2dedb;color:var(--bad)}
+  .muted{color:var(--muted);font-size:14px}
+  table{border-collapse:collapse;width:100%;margin:10px 0;font-size:14.5px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--accent-dk);font-size:12.5px;letter-spacing:.08em;text-transform:uppercase}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Flex Agg ++ — dashboard guide</h1>
+  <p class="sub">Barra-style factor-risk on the Soros 13F book · what each panel means and how to use it</p>
+</header>
+
+<p class="lead">Everything you see is computed by the Atoti cube and served through a small guarded
+API — the dashboard never invents a number. The top of the page carries four <b>status strips</b>
+(limits, data quality, VaR backtest, trends); every pivot view has an on-demand <b>risk-analyst
+commentary</b> button. This guide covers each.</p>
+
+<h2>Top-of-page status strips</h2>
+
+<h3>🚦 Desk limits (RAG)</h3>
+<p>A red/amber/green read of the book against the desk limit set, shown on every view. It's
+book-level and independent of the pivot you're looking at.</p>
+<ul>
+  <li><span class="chip g">green</span> within limits ·
+      <span class="chip a">amber</span> past the <code>warn</code> threshold ·
+      <span class="chip r">breach</span> past the hard <code>limit</code>.</li>
+  <li>Checks: <b>Total VaR 99</b>, <b>Scenario ES 97.5</b>, <b>Risk HHI</b> (book-level, read against
+      one scenario set), plus <b>single-name</b> and <b>sector weight</b> concentration.</li>
+  <li>All limits are <b>upper bounds</b>. Expand <i>Limit detail</i> for value vs warn vs cap and the
+      offending name/sector.</li>
+</ul>
+<div class="card"><span class="label">Edit the limits</span>
+  <p style="margin:.3em 0">Edit <code>limits.json</code> at the repo root — reloaded on every check,
+  no restart. The VaR/ES/HHI limits read against the scenario set in <code>scenario_set</code>
+  (default <code>HistFull</code>).</p></div>
+
+<h3>🔎 Data quality</h3>
+<p>A pass/warn/fail trust check on the exact frames the cube is serving — key integrity, referential
+integrity, value ranges, calendar continuity, coverage. Expand for every check plus the known stubs:
+the demo universe is capped, <b>Country is stubbed to "US"</b> for all names, and a handful of names
+carry an "Unknown" sector. Read the risk numbers with those caveats in mind.</p>
+
+<h3>📊 VaR backtest (model validation)</h3>
+<p>Does the VaR actually hold up? At 99%, losses should beat VaR on ~1% of days. The backtest counts
+how often that happened over history, runs the <b>Kupiec POF</b> test, and assigns the <b>Basel
+traffic-light</b> zone.</p>
+<ul>
+  <li>The 13F book has no live daily P&amp;L, so this is a <b>constant-portfolio backtest</b>: today's
+      book applied to the daily factor-return history, rolling a window to estimate VaR each day. It
+      validates the <i>methodology</i>, not a trading record.</li>
+  <li>The default estimator is <b>FHS</b> (filtered historical simulation, λ=0.94) — chosen by a
+      sweep because it lands ~1.0% breaches (green) where plain historical sim under-covers and a
+      normal EWMA over-breaches on the fat tail.</li>
+</ul>
+<table>
+  <tr><th>method</th><th>what it does</th></tr>
+  <tr><td><code>fhs</code> (default)</td><td>EWMA-vol-scaled empirical tail — reactive <i>and</i> fat-tailed</td></tr>
+  <tr><td><code>equal</code></td><td>plain rolling historical simulation (equal-weighted window)</td></tr>
+  <tr><td><code>ewma</code></td><td>RiskMetrics parametric-normal (reactive but thin-tailed)</td></tr>
+</table>
+
+<h3>📈 Risk trends (2016–2024)</h3>
+<p>Risk over time, not just today: <b>Scenario VaR 99 &amp; ES 97.5</b>, <b>Risk HHI</b>
+(1 / HHI ≈ the effective number of independent bets), and the <b>top style-factor exposures</b>.
+Pick the scenario set; answers "is risk rising, and where is it coming from?"</p>
+
+<h3>🧪 Stress test (custom &amp; reverse)</h3>
+<p>Two modes. <b>Custom shock</b> — set any per-factor move in σ (standard deviations) and see the
+book P&amp;L, with a per-factor contribution breakdown (<code>P&amp;L = Σ exposure × (σ × factor
+vol)</code>, the same engine as the built-in Hypo scenarios). <b>Reverse stress</b> — give a target
+loss and get, per factor, the single-factor move that would breach it, ranked by |σ| so the book's
+most vulnerable factor is on top (for this long-equity book that's the Market factor — it has unit
+beta, so it takes the smallest move).</p>
+
+<h3>🔀 Pre-trade / what-if</h3>
+<p>Edit the weight of any holding (0 = drop), or <b>add a name from the coverage universe</b> (the
+"add from coverage universe" picker lists every name with loadings that isn't currently held), then
+run. You see the book risk impact <em>before vs after</em> — Scenario VaR / ES, Total VaR, Specific
+vol, Risk HHI, and gross/net. Risk is recomputed from the same loadings, factor returns and specific
+variance the cube uses, so the "before" column matches the cube's reported numbers and the Δ column
+is the trade's effect. Trim a concentrated name and watch HHI fall; double one and watch it rise.</p>
+
+<h2>Risk-analyst commentary (per view)</h2>
+<p>Under any grid view, the <b>🔍 Risk-analyst commentary</b> button writes a short risk-manager read
+of exactly the numbers on screen.</p>
+<ul>
+  <li>It re-runs the <i>same</i> guarded query the grid shows, then sends only those figures to the
+      model. It is the <b>plain Messages API with no tools</b> — the model has zero access to the cube,
+      the filesystem, or anything else, and cannot re-query.</li>
+  <li>It's grounded: cite the numbers, invent nothing, and <b>lead with any limit breach</b>.</li>
+  <li>On-demand only (no spend unless clicked); cached per view + slice. Try it on the saved views
+      under <i>Public / Soros 13F filings</i>.</li>
+</ul>
+
+<h2>The pivot</h2>
+<p>The main grid is a generic pivot over the cube: put dimensions on Rows/Columns, pick Measures,
+slice with the Slicers. Every number — including totals — is computed by the cube (totals are
+recomputed at the aggregated level, never summed from cells, because VaR is non-additive). Save a
+configuration as a <b>view</b> from the Repository panel.</p>
+
+<footer>
+  Flex Agg ++ · factor-risk proof-of-concept on free/public data. All figures are model output on a
+  capped demo universe — not investment advice.
+</footer>
+</div>
+</body>
+</html>

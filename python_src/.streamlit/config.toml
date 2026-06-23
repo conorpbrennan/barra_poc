@@ -11,3 +11,8 @@ font = "serif"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# serve python_src/static/* at <baseUrlPath>/app/static/* so the UI can link to the
+# dashboard guide (static/guide.html) for remote users behind the tunnel.
+enableStaticServing = true

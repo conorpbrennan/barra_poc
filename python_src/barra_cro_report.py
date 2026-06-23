@@ -91,14 +91,11 @@ def build() -> None:
         scen[f"{name} ({', '.join(f'{k} {v:+.0f}σ' for k, v in shock.items())})"] = (
             -h, -h, float(np.sqrt(h * h + (Z99 * spec_vol) ** 2)))
 
-    # --- DQ results --------------------------------------------------------------------
-    dq._results.clear()
-    with contextlib.redirect_stdout(io.StringIO()):
-        dq.run()
-    dqr = list(dq._results)
-    n_pass = sum(1 for lvl, *_ in dqr if lvl == "PASS")
-    warns = [(name, det) for lvl, name, det in dqr if lvl == "WARN"]
-    fails = [(name, det) for lvl, name, det in dqr if lvl == "FAIL"]
+    # --- DQ results (barra_dq_checks.run now returns structured {level,name,detail} dicts) -----
+    dqr = dq.run()
+    n_pass = sum(1 for r in dqr if r["level"] == "PASS")
+    warns = [(r["name"], r["detail"]) for r in dqr if r["level"] == "WARN"]
+    fails = [(r["name"], r["detail"]) for r in dqr if r["level"] == "FAIL"]
 
     # --- estimation universe: 13F book UNION market-index seed --------------------------
     uni_n = securities["Position"].nunique()              # total estimation universe
@@ -510,6 +507,20 @@ Each layer is documented at the relevant line of code.</div>
     currently {spec_vol:.2%} daily, with as-of specific variance available for {sv_cov:.0%} of held names.</li>
 <li><span class="formula">Total VaR 99 = √(VaR² + (2.326·specific vol)²)</span>. The factor tail and an
     independent-normal idiosyncratic tail, combined.</li>
+<li><span class="formula">VaR ladder 95 / 97.5 / 99 = −P5 / −P2.5 / −P1(dPnL)</span>. The 95/99 spread
+    reads tail fatness; 97.5% is the FRTB regulatory point.</li>
+<li><span class="formula">ES 97.5 / 99 = −mean of the worst 2.5% / 1% of days</span>. Expected Shortfall
+    (CVaR) — the average loss in the tail beyond VaR. Coherent / sub-additive where VaR is not, and the
+    Basel FRTB replacement for VaR. <span class="formula">Total ES 97.5</span> combines it with the
+    idiosyncratic tail in quadrature, like Total VaR.</li>
+<li><span class="formula">Risk HHI = Σ<sub>name</sub> share²</span>, share = a name's fraction of book
+    Total VaR. 1 / HHI ≈ the effective number of independent risk bets — the single-number
+    concentration gauge a desk watches against a limit.</li>
+<li><span class="formula">Marginal VaR / ES</span> — a member's own P&amp;L on the book's tail day(s).
+    <em>Additive</em>: sums to the book VaR/ES, so it splits the tail across factors, sectors, names.
+    <span class="formula">Incremental VaR</span> — the book VaR released by removing a member
+    (recompute-without); diversification-aware and <em>not</em> additive, answering "what does cutting
+    this release?".</li>
 </ul>
 
 <table>
@@ -524,7 +535,48 @@ Each layer is documented at the relevant line of code.</div>
 <p class="small">Negative VaR on short event windows means the current factor tilts would
 have profited in that window's 1st-percentile day.</p>
 
-<h2>7 · Limitations the numbers inherit</h2>
+<h2>7 · VaR backtest &amp; model validation</h2>
+<p>The 13F book has no live daily P&amp;L, so VaR is validated by a <em>constant-portfolio backtest</em>:
+the current book's exposures applied to the daily factor-return history, rolling a 250-day window to
+estimate VaR each day and counting <em>exceptions</em> where the realised day beat VaR. This validates
+the methodology, not a trading record.</p>
+<ul>
+<li><span class="formula">Kupiec POF</span> — a likelihood-ratio test that the observed exception rate
+    matches the 1% claimed at 99%. χ²(1) at 95% = 3.841; above that, the calibration is rejected.</li>
+<li><span class="formula">Basel traffic-light</span> — green / amber / red from the binomial CDF of the
+    exception count, generalising the 250-day/99% zones to any window.</li>
+</ul>
+<p>Three estimators are available; the default was chosen by a sweep over this book:</p>
+<table>
+<tr><th>Estimator</th><th>Tail</th><th>Reactivity</th><th>99% backtest</th></tr>
+<tr><td>Equal-weight historical sim</td><td>empirical (fat)</td><td>slow (window edge)</td><td>~1.8% — under-covers, amber</td></tr>
+<tr><td>EWMA (RiskMetrics, normal)</td><td>normal (thin)</td><td>fast</td><td>~2.1–2.4% — over-breaches, red</td></tr>
+<tr><td><strong>FHS (default, λ=0.94)</strong></td><td>empirical (fat)</td><td>fast</td><td>~1.0% — well-calibrated, green</td></tr>
+</table>
+<p class="small">Filtered Historical Simulation rescales the empirical (fat-tailed) shock distribution
+by reactive EWMA volatility — reactivity without the normality penalty. Live in the dashboard's
+VaR-backtest badge.</p>
+
+<h2>8 · Risk tooling on the cube</h2>
+<p>Operational layers exposed in the dashboard, all reading the same cube and frames:</p>
+<ul>
+<li><strong>Desk limits (RAG)</strong> — book VaR / ES / Risk HHI and single-name / sector weight vs a
+    desk limit set, red/amber/green with breach flags.</li>
+<li><strong>Data-quality panel</strong> — the §5 checks surfaced live against the served frames, plus the
+    known stubs (Country, Unknown sector).</li>
+<li><strong>Risk-analyst commentary</strong> — an on-demand written read of any view's numbers (LLM,
+    grounded strictly on the figures shown, no tool or data access), leading with any limit breach.</li>
+<li><strong>Risk trends</strong> — Scenario VaR / ES and Risk HHI, plus factor exposures, across the
+    2016–2024 calendar.</li>
+<li><strong>Stress test</strong> — custom one-day shocks (any per-factor σ → book P&amp;L, same
+    <span class="formula">Σ x<sub>k</sub>·σ<sub>k</sub>·vol<sub>k</sub></span> engine as the Hypo sets)
+    and reverse stress (the single-factor move that breaches a target loss, ranked by vulnerability).</li>
+<li><strong>Pre-trade / what-if</strong> — resize / drop / add a position and see book VaR, ES, Total
+    VaR, Specific vol and Risk HHI before vs after; the risk math is reproduced in numpy so the
+    "before" reconciles with the cube and the delta is the trade's effect.</li>
+</ul>
+
+<h2>9 · Limitations the numbers inherit</h2>
 <ul>
 <li><strong>13F is a quarterly, lagged, long-only disclosure.</strong> Intra-quarter trading,
     shorts, options and non-US listings are invisible. The book is the latest filed snapshot.</li>
@@ -550,7 +602,11 @@ have profited in that window's 1st-percentile day.</p>
 
 </body></html>"""
     OUT.write_text(html)
-    print(f"wrote {OUT} ({len(html)/1024:.0f} KB)")
+    # also publish to the UI's static dir so the dashboard can link it (tmp/ is not served)
+    static = pathlib.Path(__file__).resolve().parent / "static" / "barra_model_reference.html"
+    static.parent.mkdir(exist_ok=True)
+    static.write_text(html)
+    print(f"wrote {OUT} and {static} ({len(html)/1024:.0f} KB)")
 
 
 if __name__ == "__main__":
