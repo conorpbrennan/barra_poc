@@ -189,6 +189,27 @@ renders it under the membership view (population/survivor/data-unavailable trend
 drop-list + thresholds). Tests: `test_funnel.py` (pure filter logic always runs; integ needs the
 backend + artifact). Phase 2 of the universe diagnostics — see `docs/universe-diagnostics-plan.md`.
 
+## Estimation universe — span / high-confidence (`/span`)
+
+`barra_universe_span.py` is Phase 3 (precompute): Chris's VALUE/SIZE picture, generalized. For each
+month it takes the **estimation cloud** = the funnel survivors (Phase 2; falls back to the PIT S&P 500
+∩ exposures if the funnel artifact is absent), computes each holding's squared **Mahalanobis distance**
+D² from the cloud's centre in the cloud's own covariance, and flags **"inside"** = D² within the
+cloud's 99th-percentile edge (the region the estimation universe populated, where exposures are
+well-supported; beyond it the model extrapolates). It also records which descriptors push a name out
+(loading beyond the cloud's 1–99th box). Aggregated **by 13F weight**: ~90% of the book sits inside on
+average, drifting from ~95% pre-2021 to ~85% since (the book moving into smaller/higher-vol names — the
+Phase-4 question). Pure geometry is unit-tested. Writes `data/universe_span.parquet` (gitignored).
+
+`risk_api.py` `GET /span?date=&fx=&fy=` reads the artifact for the per-month inside-share series + the
+selected month's per-name verdict (D²/inside/extreme factors), and builds a **live 2D `fx`×`fy`
+scatter** (estimation cloud vs the book, coloured inside/outside) from the in-memory `exposures` frame
+— so any factor pair can be picked without rebuilding (default Size×ResidVol). The "🌐 Estimation
+universe" panel (`render_universe`) renders the inside-% trend, the scatter with a factor-pair
+selector, and the outside-the-span drill-down. Loadings are z-scored/winsorized, so the "space" is in
+standardized-exposure terms. Tests: `test_span.py`. Phase 3 of the universe diagnostics — see
+`docs/universe-diagnostics-plan.md`.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

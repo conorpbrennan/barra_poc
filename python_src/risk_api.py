@@ -63,6 +63,7 @@ from pydantic import BaseModel
 import barra_dq_checks
 import barra_universe_membership as _um
 import barra_universe_funnel as _uf
+import barra_universe_span as _us
 from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS
 
 CUBE_PORT = int(os.environ.get("BARRA_CUBE_PORT", "9091"))   # own port, distinct from the 9090 UI cube
@@ -779,6 +780,75 @@ async def funnel(date: str | None = Query(None, description="funnel month; defau
                      "members not in the built universe (delisted) or missing a share count; shown, "
                      "not counted as a filter drop. Free float and confirmed-M&A removal have no free "
                      "source and appear as inert, disclosed stages."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ============================================================================ span / high-confidence
+# Phase 3 (docs/universe-diagnostics-plan.md). Does each holding sit inside the factor-space spanned by
+# the estimation universe (Chris's VALUE/SIZE picture)? Squared Mahalanobis distance vs the funnel-
+# survivor cloud, "inside" = within the cloud's 99th-pct edge. Precomputed series + per-name verdict
+# read from data/universe_span.parquet; the 2D scatter is built live from the in-memory exposures frame
+# so any factor pair can be picked.
+
+@app.get("/span")
+async def span(date: str | None = Query(None, description="month; default latest"),
+               fx: str = Query("Size"), fy: str = Query("ResidVol")):
+    """Span / high-confidence check: a per-month time series of the book weight INSIDE the estimation
+    universe's factor space, the selected month's per-name verdict (D², inside/outside, which factors
+    push a name out), and a 2D `fx`×`fy` scatter of the estimation cloud vs the held book — the literal
+    version of Chris's VALUE/SIZE illustration. ~90% of the book sits inside on average; it has drifted
+    from ~95% pre-2021 to ~85% since."""
+    if fx not in _us.STYLE or fy not in _us.STYLE:
+        raise HTTPException(400, f"fx/fy must be style factors: {_us.STYLE}")
+
+    def run():
+        if not _us.ARTIFACT.exists():
+            raise HTTPException(503, "universe_span.parquet not built — run barra_universe_span.py")
+        df = pd.read_parquet(_us.ARTIFACT)
+        df["month"] = pd.to_datetime(df["month"])
+        series = []
+        for mth, g in df.groupby("month"):
+            series.append({"month": str(mth.date()),
+                           "inside_wt": _us.inside_share(g["weight"].values, g["inside"].values),
+                           "n_held": int(len(g)), "n_inside": int(g["inside"].sum())})
+        series.sort(key=lambda r: r["month"])
+
+        sel = date or (series[-1]["month"] if series else None)
+        gm = df[df["month"] == pd.Timestamp(sel)] if sel else df.iloc[0:0]
+        detail = (gm.sort_values("d2", ascending=False)
+                  [["issuer", "ticker", "weight", "d2", "edge", "inside", "extreme"]])
+
+        # live 2D scatter from the exposures frame (cloud = funnel survivors, held = the book)
+        exp = S["frames"]["exposures"]; D = pd.Timestamp(sel)
+        w = (exp[(exp["Date"] == D) & (exp["Factor"].isin([fx, fy]))]
+             .pivot_table(index="Position", columns="Factor", values="Loading"))
+        cloud_pos = held_pos = set()
+        if _uf.ARTIFACT.exists():
+            fn = pd.read_parquet(_uf.ARTIFACT, columns=["month", "position", "survived"])
+            fn = fn[(pd.to_datetime(fn["month"]) == D) & (fn["survived"] == True)]  # noqa: E712
+            cloud_pos = set(fn["position"].dropna()) & set(w.index)
+        held_pos = set(gm["position"]) & set(w.index)
+        inside_map = dict(zip(gm["position"], gm["inside"]))
+        iss = dict(zip(S["frames"]["securities"]["Position"], S["frames"]["securities"]["Issuer"]))
+
+        def pt(p):
+            return {"x": _clean(w.loc[p, fx]) if fx in w else None,
+                    "y": _clean(w.loc[p, fy]) if fy in w else None}
+        cloud = [pt(p) for p in cloud_pos if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
+        book = [{**pt(p), "inside": bool(inside_map.get(p, False)), "issuer": iss.get(p, "")}
+                for p in held_pos if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
+
+        lat = {"month": sel, "n_held": int(len(gm)), "n_inside": int(gm["inside"].sum()),
+               "inside_wt": _us.inside_share(gm["weight"].values, gm["inside"].values)} if len(gm) else {}
+        return {
+            "factors": _us.STYLE, "series": series, "selected_date": sel, "latest": lat,
+            "detail": [{k: _clean(v) for k, v in row.items()} for _, row in detail.iterrows()],
+            "scatter": {"fx": fx, "fy": fy, "cloud": cloud, "held": book},
+            "note": ("'Inside' = squared Mahalanobis distance within the estimation cloud's own 99th "
+                     "percentile — the region the estimation universe populated, where model exposures "
+                     "are well-supported. Outside = extrapolation. Cloud = funnel survivors; loadings "
+                     "are z-scored/winsorized, so the space is in standardized-exposure terms."),
         }
     return await run_in_threadpool(run)
 

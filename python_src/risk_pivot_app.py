@@ -598,6 +598,58 @@ def render_universe():
                                + ", ".join(fn.get("unavailable_stages", [])))
                     st.caption("• " + fn.get("note", ""))
 
+        # --- Phase 3: span / high-confidence check (is the book inside the model's factor space?) ---
+        st.divider()
+        st.markdown("**Estimation universe — span / high-confidence check** "
+                    "(does the book sit inside the model's factor space?)")
+        st.session_state.setdefault("pv_span_fx", "Size")
+        st.session_state.setdefault("pv_span_fy", "ResidVol")
+        try:
+            sp = get("/span", fx=st.session_state["pv_span_fx"], fy=st.session_state["pv_span_fy"])
+        except Exception as e:
+            st.info(f"Span check unavailable: {e} — run barra_universe_span.py to build it.")
+        else:
+            if not sp.get("series"):
+                st.info("No span data.")
+            else:
+                sl = sp["latest"]
+                st.markdown(
+                    f"**{sl['inside_wt']:.0%} of the book sits inside** the estimation universe's factor "
+                    f"space at {sp['selected_date']} ({sl['n_inside']}/{sl['n_held']} names) — exposures "
+                    f"there are well-supported. The rest is extrapolation (small, higher-vol names beyond "
+                    f"anything the S&P 500 spans). The book has drifted out: ~95% inside pre-2021, ~85% "
+                    f"since — Chris's intentional-vs-not question (Phase 4).")
+                sdf = pd.DataFrame(sp["series"])
+                sdf["Date"] = pd.to_datetime(sdf["month"]); sdf = sdf.set_index("Date")
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("Book weight inside the span over time")
+                    st.line_chart(sdf[["inside_wt"]])
+                with c2:
+                    facs = sp["factors"]
+                    fc1, fc2 = st.columns(2)
+                    fc1.selectbox("x factor", facs, key="pv_span_fx")
+                    fc2.selectbox("y factor", facs, key="pv_span_fy")
+                    sc = sp["scatter"]
+                    pts = [{"x": p["x"], "y": p["y"], "group": "estimation cloud"}
+                           for p in sc["cloud"] if p["x"] is not None and p["y"] is not None]
+                    pts += [{"x": p["x"], "y": p["y"],
+                             "group": "book · inside" if p["inside"] else "book · outside"}
+                            for p in sc["held"] if p["x"] is not None and p["y"] is not None]
+                    st.caption(f"{sc['fx']} vs {sc['fy']} — estimation cloud vs the book")
+                    if pts:
+                        st.scatter_chart(pd.DataFrame(pts), x="x", y="y", color="group")
+                outs = [d for d in sp.get("detail", []) if not d["inside"]]
+                if outs:
+                    with st.expander(f"Holdings outside the span (extrapolation) — "
+                                     f"{sp['selected_date']} ({len(outs)})", expanded=False):
+                        od = pd.DataFrame(outs)
+                        od["weight"] = od["weight"].map(lambda v: f"{v:.2%}")
+                        od["d2"] = od["d2"].map(lambda v: f"{v:.0f}")
+                        st.dataframe(od[["issuer", "ticker", "weight", "d2", "extreme"]],
+                                     hide_index=True, use_container_width=True)
+                st.caption("• " + sp.get("note", ""))
+
         with st.expander("Method & caveats", expanded=False):
             for k in ("sp500", "sp1500", "russell", "ticker", "unclassified"):
                 if k in u.get("notes", {}):

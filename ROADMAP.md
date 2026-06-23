@@ -103,10 +103,14 @@ and 13 → 14 once data sources are chosen.
   "data unavailable", never a filter drop. Near-flat by design (latest: ~446/~486 survive), as Chris
   predicted. Thresholds in `universe_filters.json`. `GET /funnel` + funnel view in the "🌐 Estimation
   universe" panel. Tests in `test_funnel.py`. Done.
-- [ ] **Phase 3 · Span / high-confidence check.** [M] Does each holding sit inside the estimation
-  universe's factor space (Chris's VALUE/SIZE picture): 2D factor-pair scatter + numeric in-span flag.
-  (Prototyped: % of book by weight inside the PIT-S&P-500 Mahalanobis span across all filings — ~90%
-  mean, ~95% pre-2021 falling to ~85% since 2021.)
+- [x] **Phase 3 · Span / high-confidence check.** [M] Does each holding sit inside the estimation
+  universe's factor space (Chris's VALUE/SIZE picture)? `barra_universe_span.py` computes each
+  holding's squared Mahalanobis distance from the funnel-survivor cloud; "inside" = within the cloud's
+  99th-pct edge, plus the per-factor extremes that push a name out. `GET /span?date=&fx=&fy=` serves the
+  weight-inside time series + per-name verdict + a live 2D factor-pair scatter (cloud vs book) built
+  from the exposures frame. Panel: inside-% trend, scatter with factor-pair picker, outside-the-span
+  drill-down. ~90% of book inside on avg, ~95% pre-2021 → ~85% since (the Phase-4 drift). Tests in
+  `test_span.py`. Done.
 - [ ] **Phase 4 · Style-drift attribution — intentional vs not** (Chris's follow-up, 2026-06-23). [M]
   The span check surfaced a post-2021 drift of the book out of the S&P 500's factor space (toward
   smaller, higher-vol names). Chris's point: at ~85% overlap it's fine for the estimation universe,

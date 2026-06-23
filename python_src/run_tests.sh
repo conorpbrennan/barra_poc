@@ -47,5 +47,8 @@ echo
 echo "=== universe funnel tests (unit always; integ needs :8010 + built artifact) ==="
 BARRA_API="${BARRA_API:-http://127.0.0.1:8010}" $PY test_funnel.py; r14=$?
 echo
-[ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ $r3 -eq 0 ] && [ $r4 -eq 0 ] && [ $r5 -eq 0 ] && [ $r6 -eq 0 ] && [ $r7 -eq 0 ] && [ $r8 -eq 0 ] && [ $r9 -eq 0 ] && [ $r10 -eq 0 ] && [ $r11 -eq 0 ] && [ $r12 -eq 0 ] && [ $r13 -eq 0 ] && [ $r14 -eq 0 ] && echo "ALL GREEN" || echo "FAILURES (repo=$r1 ui=$r2 measures=$r3 analysis=$r4 limits=$r5 dq=$r6 backtest=$r7 trends=$r8 docs=$r9 stress=$r10 drawdown=$r11 whatif=$r12 universe=$r13 funnel=$r14)"
-exit $(( r1 || r2 || r3 || r4 || r5 || r6 || r7 || r8 || r9 || r10 || r11 || r12 || r13 || r14 ))
+echo "=== universe span tests (unit always; integ needs :8010 + built artifact) ==="
+BARRA_API="${BARRA_API:-http://127.0.0.1:8010}" $PY test_span.py; r15=$?
+echo
+[ $r1 -eq 0 ] && [ $r2 -eq 0 ] && [ $r3 -eq 0 ] && [ $r4 -eq 0 ] && [ $r5 -eq 0 ] && [ $r6 -eq 0 ] && [ $r7 -eq 0 ] && [ $r8 -eq 0 ] && [ $r9 -eq 0 ] && [ $r10 -eq 0 ] && [ $r11 -eq 0 ] && [ $r12 -eq 0 ] && [ $r13 -eq 0 ] && [ $r14 -eq 0 ] && [ $r15 -eq 0 ] && echo "ALL GREEN" || echo "FAILURES (repo=$r1 ui=$r2 measures=$r3 analysis=$r4 limits=$r5 dq=$r6 backtest=$r7 trends=$r8 docs=$r9 stress=$r10 drawdown=$r11 whatif=$r12 universe=$r13 funnel=$r14 span=$r15)"
+exit $(( r1 || r2 || r3 || r4 || r5 || r6 || r7 || r8 || r9 || r10 || r11 || r12 || r13 || r14 || r15 ))
