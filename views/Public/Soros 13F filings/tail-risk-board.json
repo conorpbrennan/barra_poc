@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "Tail risk board — VaR ladder & ES",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-06-20T19:30:00Z",
+  "updated": "2026-06-20T19:30:00Z",
+  "state": {
+    "rows": [
+      "ScenarioSet"
+    ],
+    "cols": [],
+    "measures": [
+      "Scenario VaR 95",
+      "Scenario VaR 97.5",
+      "Scenario VaR 99",
+      "Scenario ES 97.5",
+      "Scenario ES 99",
+      "Scenario PnL vol"
+    ],
+    "slice_dims": [
+      "Book",
+      "Date"
+    ],
+    "filters": {
+      "Book": [
+        "Soros"
+      ],
+      "Date": [
+        "2024-12-31"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": false,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "sort": [
+      {
+        "colId": "Scenario ES 97.5",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ]
+  }
+}
