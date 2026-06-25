@@ -677,6 +677,10 @@ VaR-backtest badge.</p>
     known stubs (Country, Unknown sector).</li>
 <li><strong>Risk-analyst commentary</strong> — an on-demand written read of any view's numbers (LLM,
     grounded strictly on the figures shown, no tool or data access), leading with any limit breach.</li>
+<li><strong>Scoped Q&amp;A (Ask the risk model)</strong> — a free-text question answered by the LLM with
+    <em>one</em> tool: <code>query_cube</code>, the same guarded pivot the grid uses. It pulls its own
+    slices (each shown inline) and cites them; it can reach nothing off the allowlist, the filesystem,
+    the web, or any second tool. The agentic loop is bounded.</li>
 <li><strong>Risk trends</strong> — Scenario VaR / ES and Risk HHI, plus factor exposures, across the
     2016–2024 calendar.</li>
 <li><strong>Stress test</strong> — custom one-day shocks (any per-factor σ → book P&amp;L, same
@@ -687,6 +691,14 @@ VaR-backtest badge.</p>
     "before" reconciles with the cube and the delta is the trade's effect.</li>
 <li><strong>Drawdown</strong> — the constant-portfolio equity curve and max peak-to-trough over the
     scenario path (the COVID crash reads ≈ −39%), the path lens VaR/ES miss.</li>
+<li><strong>Liquidity (days-to-liquidate)</strong> — per name <span class="formula">MV / (participation
+    · ADV)</span> on a trailing-63-day dollar ADV; the share of the book liquidatable within a horizon,
+    the weighted-average days, the least-liquid names, and any name with no ADV (reported separately).
+    ~87% of the Soros book clears within 5 days at 20% participation.</li>
+<li><strong>What changed (quarter-over-quarter)</strong> — a deterministic diff between two 13F filings:
+    positions entered / exited / resized, the net factor-exposure drift attributed (rotation vs loading
+    drift), and the book risk delta (VaR / ES / HHI / specific vol, what-if math), with an on-demand
+    written read.</li>
 <li><strong>Estimation universe (4-phase diagnostic)</strong> — for the held book: which index each
     name sits in, point-in-time (membership); the DQ filtration funnel over the PIT S&amp;P 500 (§2·c);
     the span / high-confidence check (is each holding inside the estimation universe's factor space, by

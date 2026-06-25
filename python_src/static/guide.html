@@ -125,6 +125,23 @@ On the Soros book over full history this reads ≈ <b>−39%</b> — the Feb–M
 risk a single-day VaR can't show. Meaningful on long paths (HistFull, event sets); a one-shock Hypo
 set is too short.</p>
 
+<h3>💧 Liquidity (days-to-liquidate)</h3>
+<p>How long to unwind the book. Each name's <b>days-to-liquidate = market value ÷ (participation ×
+ADV)</b>, where ADV is its trailing-63-day dollar volume and participation is the share of ADV you'll
+trade per day (slider, default 20%). The panel shows the share of the book you can exit within a horizon
+(slider, default 5 days), the weighted-average days, the least-liquid names, and any name with no ADV
+(delisted / illiquid — reported separately, never counted as instant). On the Soros book at 20%
+participation ~87% of weight clears within 5 days, weighted-average ≈ 2.2 days, worst ≈ 13 days.</p>
+
+<h3>📋 What changed (quarter-over-quarter)</h3>
+<p>A deterministic diff between this 13F filing and the prior one. Three reads: <b>positions</b> entered
+/ exited / resized by weight; <b>factor-exposure drift</b> attributed to its sources (rotation from names
+entering/exiting vs re-pricing from held-name loading drift — the same split as the style-drift panel);
+and the <b>book risk delta</b> (Scenario VaR / ES, Total VaR, Risk HHI, specific vol, gross/net) computed
+at each date with the what-if math, so it's cube-consistent. An on-demand button writes a grounded "what
+changed" read that leads with the biggest move and flags drift as intentional (rotation) vs not (loading
+drift).</p>
+
 <h2>Estimation-universe diagnostics</h2>
 <p>A four-phase read of the universe the model is built on and where the book sits relative to it —
 from Chris's (Soros risk) review. The first three live in one <b>🌐 Estimation universe</b> panel; the
@@ -166,6 +183,15 @@ of exactly the numbers on screen.</p>
   <li>On-demand only (no spend unless clicked); cached per view + slice. Try it on the saved views
       under <i>Public / Soros 13F filings</i>.</li>
 </ul>
+
+<h3>💬 Ask the risk model (scoped Q&amp;A)</h3>
+<p>Ask a free-text question and the model answers from the live cube. Unlike the per-view commentary,
+this one <b>has a tool</b> — but exactly one: <code>query_cube</code>, the same guarded pivot the grid
+uses. So it pulls its own slices to answer, citing the numbers it queried (each query is shown inline),
+and can reach <b>nothing else</b> — no off-allowlist measure, no filesystem, no web, no second tool. The
+loop is bounded, so it pulls a few slices and answers. Example: "Which factor drives the most Total VaR
+on HistFull at the latest date?" → it queries Total VaR by factor for that date and set, then reports
+that Market is ~97% (the uniform unit market loading) with the style factors a rump.</p>
 
 <h2>The pivot</h2>
 <p>The main grid is a generic pivot over the cube: put dimensions on Rows/Columns, pick Measures,

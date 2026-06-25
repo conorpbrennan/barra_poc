@@ -260,17 +260,18 @@ assumption, so it needs a short design pass before code — flagged, not hidden.
 <tbody>
 <tr><td>1</td><td>Point-in-time data</td><td><span class="dot d-inplace"></span>In place</td><td class="small">—</td><td class="small">bias-free estimation</td></tr>
 <tr><td>4</td><td>Drawdown lens</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">path risk VaR/ES miss</td></tr>
-<tr><td>2&nbsp;·&nbsp;3</td><td>Estimation/coverage split + uncapped coverage</td><td><span class="dot d-designed"></span>Designed</td><td class="small">~1 wk</td><td class="small">correct off-index loadings; clean fit; foundation for §5</td></tr>
-<tr><td>5</td><td>Active risk vs. benchmark</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">project</td><td class="small">needs §2</td></tr>
-<tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">on top of §5</td><td class="small">decomposition layer</td></tr>
+<tr><td>2&nbsp;·&nbsp;3</td><td>Estimation/coverage split + uncapped coverage</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">correct off-index loadings; clean fit; foundation for §5–6</td></tr>
+<tr><td>5</td><td>Active risk vs. benchmark</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">project</td><td class="small">needs a benchmark source (blocked)</td></tr>
+<tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-designed"></span>Partial</td><td class="small">evidence shipped</td><td class="small">style-drift attribution panel: rotation vs loading drift; final call needs desk intent</td></tr>
 <tr><td>7</td><td>Full orthogonalisation + diagnostics</td><td><span class="dot d-designed"></span>Partial</td><td class="small">moderate</td><td class="small">builder change</td></tr>
 <tr><td>8</td><td>Linked securities</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">design first</td><td class="small">block-diagonal specific risk</td></tr>
 </tbody>
 </table>
-<p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (the keystone — it
-unblocks uncapped coverage loadings and makes active risk meaningful) → <b>active risk</b> and the
-<b>intentional/unwanted</b> decomposition together → orthogonalisation diagnostics and linked securities
-as they fit.</p>
+<p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (done — the keystone, now
+live and the basis for the span and style-drift panels; it unblocked the uncapped coverage loadings) →
+the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel; <b>active
+risk</b> remains blocked on a benchmark source → orthogonalisation diagnostics and linked securities as
+they fit.</p>
 
 <p class="foot">Generated for the factor-model risk review. Methodology cross-refers to
 <code>barra_build_frames.py</code> (estimation), <code>barra_factor_risk_cube.py</code> (risk engine),
