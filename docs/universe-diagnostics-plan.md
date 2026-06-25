@@ -1,11 +1,11 @@
 # Plan — universe diagnostics (bitemporal index membership → funnel → span check)
 
-Status: Phases 1–3 BUILT (Phase 1: barra_universe_membership.py, GET /universe; Phase 2:
+Status: Phases 1–4 BUILT (Phase 1: barra_universe_membership.py, GET /universe; Phase 2:
 barra_universe_funnel.py, GET /funnel, universe_filters.json; Phase 3: barra_universe_span.py,
-GET /span, test_span.py — all in the "🌐 Estimation universe" panel). The estimation-universe
-decision is settled: **option (1), PIT S&P 500, endorsed by Chris** (2026-06-23). Phase 4 (style-drift
-attribution) is the only item left and is **buildable now** (not blocked on Chris's write-up).
-Diagnostic only — no change to the six-frame contract, the cube, or how
+GET /span; Phase 4: barra_universe_drift.py, GET /drift — Phases 1–3 in the "🌐 Estimation universe"
+panel, Phase 4 in the "🧭 Style-drift attribution" panel; tests per phase). The estimation-universe
+decision is settled: **option (1), PIT S&P 500, endorsed by Chris** (2026-06-23). All four phases of
+Chris's review are built. Diagnostic only — no change to the six-frame contract, the cube, or how
 `barra_build_frames.py` produces loadings. This layers an analysis + a dashboard panel on top of
 what already exists, so we can *see* what an estimation/coverage split would do before committing to
 the builder change in `estimation-coverage-design.md`.
@@ -278,18 +278,31 @@ span. Aggregated by 13F weight: ~82% of the book inside on average post estimati
 (coverage loadings uncapped, so off-index holdings show their true extreme positions — lower and
 truer than the ~90% the old uniform ±3 clip gave), dipping since 2021. Loadings are z-scored/winsorized, so the space is in standardized-exposure terms.
 
-## Phase 4 — style-drift attribution (intentional vs not) — PLANNED, buildable now
+## Phase 4 — style-drift attribution (intentional vs not) — BUILT
 
 The span trend surfaced a real post-2021 drift of the book out of the S&P 500's span (toward smaller,
 higher-vol names). Chris's read (2026-06-23): at ~85% overlap it's fine for the *estimation universe*,
-but the drift itself is the interesting question — was it **intentional** (a deliberate style tilt, or
-a new PM covering smaller names) or **unintentional** (a re-pricing of risk that made those names more
-attractive)? The action differs: **update the benchmark** if intentional, **update the hedging** if
-not. The deliverable: decompose the drift by factor (Size/ResidVol/Liquidity contributions over time)
-and tie it to filing-over-filing position changes (overlaps roadmap Step 9). **Not blocked** on Chris's
-write-up — that's a separate general primer. What we *can't* settle is the final intentional/not
-verdict (it needs desk knowledge of Soros's intent / PM changes), so the deliverable presents the
-evidence and points to the action, leaving the judgment to the desk.
+but the drift itself is the interesting question — **intentional** (deliberate style tilt / new PM) or
+**unintentional** (re-pricing)? Action differs: **benchmark** if intentional, **hedge** if not.
+
+`barra_universe_drift.py` makes it empirical. It tracks the book's net factor exposure x_k = Σ w·L over
+time and decomposes each factor's drift Δx_k (pre-split t0 → latest t1) into four sources that sum to Δ
+exactly:
+
+| source | meaning | leans |
+|---|---|---|
+| **entered / exited** | new names rotated in / out | rotation → **intentional → benchmark** |
+| **reweighted** | held names resized | an active sizing decision |
+| **loading_drift** | held names' own loadings moved | re-pricing → **unintentional → hedge** |
+
+`GET /drift?split=` serves the per-factor trend, the ranked t0→t1 drift, the attribution, and a
+per-factor "lean"; the "🧭 Style-drift attribution" panel charts it. **Finding (split 2021-01-01,
+2020-12-31 → 2024-12-31):** the drift is **dominated by `entered`** across the movers (ResidVol
+−0.05→+1.13, Δ+1.18 almost all from new names; NonLinSize, Value, Beta likewise) — the book *rotated
+into* smaller/higher-vol/value names rather than the held names drifting there. So it **leans
+intentional → update the benchmark**. The uncapped-coverage split matters here: the book's true
+off-index tilts now show. The final verdict still needs desk knowledge (Soros's intent / PM changes);
+this is the evidence, not the call. Tests in `test_drift.py`.
 
 ---
 

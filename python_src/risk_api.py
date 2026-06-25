@@ -64,6 +64,7 @@ import barra_dq_checks
 import barra_universe_membership as _um
 import barra_universe_funnel as _uf
 import barra_universe_span as _us
+import barra_universe_drift as _ud
 from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS
 
 CUBE_PORT = int(os.environ.get("BARRA_CUBE_PORT", "9091"))   # own port, distinct from the 9090 UI cube
@@ -849,6 +850,65 @@ async def span(date: str | None = Query(None, description="month; default latest
                      "percentile — the region the estimation universe populated, where model exposures "
                      "are well-supported. Outside = extrapolation. Cloud = funnel survivors; loadings "
                      "are z-scored/winsorized, so the space is in standardized-exposure terms."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ============================================================================ style-drift attribution
+# Phase 4 (docs/universe-diagnostics-plan.md). The book's net factor exposure x_k(t) over time, the
+# pre/post-`split` drift per factor, and an attribution of each factor's drift into entered / exited /
+# reweighted / loading_drift — making Chris's intentional-vs-not question empirical: drift dominated by
+# NEW names rotating in leans intentional (→ benchmark); drift from HELD names' loadings drifting leans
+# unintentional (→ hedge). Series read from data/universe_drift.parquet; attribution computed live.
+
+@app.get("/drift")
+async def drift(split: str = Query("2021-01-01", description="pre/post boundary for the drift")):
+    """Style-drift attribution: per-factor net-exposure trend, the pre/post-`split` drift ranked by
+    magnitude, and a decomposition of each factor's drift into entered / exited / reweighted /
+    loading_drift — with a per-factor 'lean' (rotation → intentional → benchmark; re-pricing →
+    unintentional → hedge). The final verdict needs desk knowledge; this lays out the evidence."""
+    def run():
+        if not _ud.ARTIFACT.exists():
+            raise HTTPException(503, "universe_drift.parquet not built — run barra_universe_drift.py")
+        df = pd.read_parquet(_ud.ARTIFACT); df["month"] = pd.to_datetime(df["month"])
+        series = df.pivot_table(index="month", columns="factor", values="net_exposure").sort_index()
+        sp = pd.Timestamp(split)
+
+        exp, pos = S["frames"]["exposures"], S["frames"]["positions"]
+        months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))
+        pre = months[months < sp]
+        t0 = pre[-1] if len(pre) else months[0]
+        t1 = months[-1]
+        w0, l0 = _ud.book_at(exp, pos, t0)
+        w1, l1 = _ud.book_at(exp, pos, t1)
+        attr = _ud.decompose(w0, l0, w1, l1)
+        x0, x1 = _ud.book_exposure(w0, l0), _ud.book_exposure(w1, l1)   # exposure at t0 / t1
+
+        srecs = [{"month": str(m.date()),
+                  **{f: _clean(series.loc[m, f]) for f in series.columns}} for m in series.index]
+        # rank by the t0→t1 drift the attribution decomposes; delta = sum of the four sources exactly.
+        sumrecs = []
+        for f in sorted(_ud.STYLE, key=lambda k: abs(attr[k]["delta"]), reverse=True):
+            a = attr[f]
+            cands = [("rotation (new / dropped names) — leans intentional → benchmark",
+                      abs(a["entered"]) + abs(a["exited"])),
+                     ("re-pricing (held names' loadings drifted) — leans unintentional → hedge",
+                      abs(a["loading_drift"])),
+                     ("resizing (active weight changes on held names)", abs(a["reweighted"]))]
+            lean = max(cands, key=lambda kv: kv[1])[0]
+            sumrecs.append({"factor": f, "early": _clean(x0[f]), "late": _clean(x1[f]),
+                            "delta": _clean(a["delta"]),
+                            **{f"src_{k}": _clean(a[k]) for k in _ud.SOURCES}, "lean": lean})
+        return {
+            "factors": _ud.STYLE, "sources": _ud.SOURCES, "split": str(sp.date()),
+            "t0": str(t0.date()), "t1": str(t1.date()),
+            "series": srecs, "summary": sumrecs,
+            "note": ("Net book exposure x_k = Σ w·L per factor. Drift Δx_k between the pre-split book "
+                     "and the latest is split into entered / exited (rotation) / reweighted (resizing) "
+                     "/ loading_drift (held names' own loadings moving). Rotation-dominated drift leans "
+                     "intentional (mandate shifted → update the benchmark); loading-drift-dominated "
+                     "leans unintentional (re-pricing → update the hedge). The verdict is the desk's — "
+                     "this is the evidence, per Chris (2026-06-23)."),
         }
     return await run_in_threadpool(run)
 

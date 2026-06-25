@@ -657,6 +657,43 @@ def render_universe():
                     st.caption("• " + u["notes"][k])
 
 
+def render_drift():
+    """Phase 4: style-drift attribution. Which factors the book drifted on since `split`, and whether
+    the drift came from rotating into NEW names (leans intentional → benchmark) or HELD names' loadings
+    drifting (leans unintentional → hedge). Chris's 2026-06-23 question, made empirical. Collapsed."""
+    with st.expander("🧭 Style-drift attribution (intentional vs not)", expanded=False):
+        try:
+            d = get("/drift")
+        except Exception as e:
+            st.info(f"Drift unavailable: {e} — run barra_universe_drift.py to build it.")
+            return
+        summ = d.get("summary", [])
+        if not summ:
+            st.info("No drift data.")
+            return
+        top = summ[0]
+        st.markdown(
+            f"Biggest drift since {d['split']}: **{top['factor']}** "
+            f"({top['early']:+.2f} → {top['late']:+.2f}, Δ {top['delta']:+.2f}). {top['lean']}")
+        sdf = pd.DataFrame(d["series"]); sdf["Date"] = pd.to_datetime(sdf["month"]); sdf = sdf.set_index("Date")
+        topf = [r["factor"] for r in summ[:6] if r["factor"] in sdf]
+        c1, c2 = st.columns(2)
+        with c1:
+            st.caption("Book net factor exposure over time (top 6 movers)")
+            st.line_chart(sdf[topf])
+        with c2:
+            st.caption(f"Drift attribution {d['t0']} → {d['t1']} (top movers)")
+            arows = [{"Factor": r["factor"],
+                      **{s.replace("_", " "): round(r[f"src_{s}"], 3) for s in d["sources"]}}
+                     for r in summ[:6]]
+            st.bar_chart(pd.DataFrame(arows).set_index("Factor"))
+        rows = [{"Factor": r["factor"], "Pre": f"{r['early']:+.2f}", "Post": f"{r['late']:+.2f}",
+                 "Δ": f"{r['delta']:+.2f}", "What drove it": r["lean"].split(" — ")[0]} for r in summ]
+        st.caption(f"Per-factor drift pre/post {d['split']}, ranked, with the dominant source")
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption("• " + d.get("note", ""))
+
+
 def render_stress():
     """Custom & reverse stress. Custom: book P&L under user-set per-factor sigma shocks. Reverse:
     the single-factor sigma move that would breach a target loss, ranked by vulnerability."""
@@ -986,6 +1023,7 @@ render_backtest_badge()
 render_drawdown()
 render_trends()
 render_universe()
+render_drift()
 render_stress()
 render_whatif()
 

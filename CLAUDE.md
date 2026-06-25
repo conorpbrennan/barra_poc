@@ -213,6 +213,26 @@ extreme loadings rather than being clipped to ±3, so this reads lower and truer
 dipping since 2021. Tests: `test_span.py`. Phase 3 of the universe diagnostics — see
 `docs/universe-diagnostics-plan.md`.
 
+## Estimation universe — style-drift attribution (`/drift`)
+
+`barra_universe_drift.py` is Phase 4 (precompute): it makes Chris's intentional-vs-not question
+empirical. It tracks the book's **net factor exposure** `x_k = Σ w·L` over time (writes
+`data/universe_drift.parquet`, the per-month series) and decomposes each factor's drift `Δx_k`
+(pre-`split` book `t0` → latest `t1`) into four sources that **sum to Δ exactly**: **entered / exited**
+(rotation in/out), **reweighted** (held-name resizing), **loading_drift** (held names' own loadings
+moving). The read: rotation-dominated drift leans **intentional** (mandate shifted → update the
+**benchmark**); loading-drift-dominated leans **unintentional** (re-pricing → update the **hedge**).
+The final verdict needs desk knowledge — this is the evidence, not the call.
+
+`risk_api.py` `GET /drift?split=` reads the series artifact for the per-factor trend and computes the
+attribution **live** from the in-memory `exposures`/`positions` frames (so `t0` follows the `split`
+date); it returns the ranked drift, the four-source split per factor, and a per-factor "lean". The
+"🧭 Style-drift attribution" panel (`render_drift`) charts the net-exposure trend + the attribution
+bars + a ranked table. **Finding:** the post-2021 drift (ResidVol/NonLinSize/Value/Beta up — book into
+smaller, higher-vol names) is dominated by `entered`, so it leans **intentional → benchmark**. The
+uncapped-coverage split matters: the book's true off-index tilts now show. Tests: `test_drift.py`.
+Phase 4 of the universe diagnostics — see `docs/universe-diagnostics-plan.md`.
+
 ## Estimation vs coverage universe — the loading-cap split
 
 `barra_build_frames.py` splits its single universe into **estimation** (the clean S&P 500 seed,

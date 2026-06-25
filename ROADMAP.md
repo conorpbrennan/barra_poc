@@ -133,19 +133,18 @@ point from Chris's notes is mapped to its status below.
   drill-down. ~82% of book inside on avg post estimation/coverage split (off-index holdings now show
   their true extreme loadings, so lower/truer than the pre-split ~90%), dipping since 2021 (Phase-4 drift). Tests in
   `test_span.py`. Done.
-- [ ] **Phase 4 · Style-drift attribution — intentional vs not** (Chris's follow-up, 2026-06-23). [M]
-  The span check surfaced a post-2021 drift of the book out of the S&P 500's factor space (toward
-  smaller, higher-vol names). Chris's point: at ~85% overlap it's fine for the estimation universe,
-  but the drift itself raises the question of whether the shift was **intentional** (a deliberate
-  style tilt / a new PM covering smaller names) or **unintentional** (risk re-pricing making those
-  names more attractive) — and the action differs: **update the benchmark** if intentional, **update
-  the hedging** if not. Decompose the drift by factor (Size/ResidVol/Liquidity contributions over
-  time), tie it to filing-over-filing exposure changes (ties to Step 9 "what changed QoQ"), and
-  surface it as a flag the risk read can act on. **NOT blocked** on Chris's write-up (that's a separate
-  general primer) — buildable now. The final intentional/not *verdict* needs desk knowledge (Soros's
-  intent / PM changes) we don't have, so the deliverable lays out the evidence and points to the action,
-  leaving the call to the desk. The only remaining item from Chris's 2026-06-23 email; his option-(1)
-  decision (PIT S&P 500) and the near-flat-funnel reassurance are both already done.
+- [x] **Phase 4 · Style-drift attribution — intentional vs not** (Chris's follow-up, 2026-06-23). [M]
+  Makes Chris's question empirical. `barra_universe_drift.py` tracks the book's net factor exposure
+  x_k = Σ w·L over time and decomposes each factor's drift Δx_k (pre-split t0 → latest t1) into four
+  sources — **entered / exited** (rotation), **reweighted** (resizing), **loading_drift** (held names'
+  own loadings moving) — that sum to Δ exactly. The read: rotation-dominated drift leans **intentional**
+  (mandate shifted → **update the benchmark**); loading-drift-dominated leans **unintentional**
+  (re-pricing → **update the hedge**). `GET /drift?split=` serves the per-factor trend, the ranked
+  drift, the attribution, and a per-factor "lean"; "🧭 Style-drift attribution" panel (`render_drift`).
+  **Finding:** the post-2021 drift (ResidVol +1.2, NonLinSize/Value/Beta up — book into smaller,
+  higher-vol names) is **dominated by `entered`** (new names rotating in), so it leans **intentional →
+  benchmark**. The final verdict still needs desk knowledge (Soros's intent / PM changes); this is the
+  evidence. Tests in `test_drift.py`. Done. Closes the last item from Chris's 2026-06-23 email.
 
 ### Still open from Chris's 22 Jun notes
 
