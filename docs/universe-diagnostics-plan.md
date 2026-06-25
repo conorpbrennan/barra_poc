@@ -2,8 +2,10 @@
 
 Status: Phases 1–3 BUILT (Phase 1: barra_universe_membership.py, GET /universe; Phase 2:
 barra_universe_funnel.py, GET /funnel, universe_filters.json; Phase 3: barra_universe_span.py,
-GET /span, test_span.py — all in the "🌐 Estimation universe" panel); Phase 4 awaiting Chris's
-write-up. Diagnostic only — no change to the six-frame contract, the cube, or how
+GET /span, test_span.py — all in the "🌐 Estimation universe" panel). The estimation-universe
+decision is settled: **option (1), PIT S&P 500, endorsed by Chris** (2026-06-23). Phase 4 (style-drift
+attribution) is the only item left and is **buildable now** (not blocked on Chris's write-up).
+Diagnostic only — no change to the six-frame contract, the cube, or how
 `barra_build_frames.py` produces loadings. This layers an analysis + a dashboard panel on top of
 what already exists, so we can *see* what an estimation/coverage split would do before committing to
 the builder change in `estimation-coverage-design.md`.
@@ -258,13 +260,36 @@ the cold pull of S&P-1500\built names is the one slow step, and it's throttled/c
 builder pull). The filter logic is small and mostly already exists; the risk is data-quality on the
 newly-pulled small-cap tail — which is exactly what the funnel is built to expose.
 
-## Phase 3 — the span / high-confidence check (after Phase 2)
+## Phase 3 — the span / high-confidence check (BUILT)
 
 Chris's VALUE/SIZE picture, generalized: does each holding sit inside the factor-space spanned by the
-estimation universe? Two reads on the same panel — (a) 2D factor-pair scatter (estimation cloud vs
-book names, pick the pair), the literal version of his illustration; (b) a numeric per-holding
-in-span flag via bounding-box and/or Mahalanobis distance against the estimation cross-section, so
-"high confidence vs extrapolation" is a sortable column, not just a chart. Method choice open.
+estimation universe? `barra_universe_span.py` + `GET /span`, both reads on the same panel:
+
+- **(a) the literal 2D scatter** — estimation cloud vs the book for a chosen factor pair (picker;
+  default Size×ResidVol), built live from the exposures frame so any pair works without rebuilding.
+- **(b) the numeric verdict** — squared **Mahalanobis distance** of each holding from the cloud
+  centre (in the cloud's own covariance, across all 10 style factors jointly), "inside" = within the
+  cloud's 99th-percentile edge, plus the per-factor extremes (1–99th box) that push a name out.
+
+**Method chosen: Mahalanobis** (over a plain bounding box) — it accounts for the cloud's spread and
+factor correlations, so "inside" means inside the actual estimation ellipsoid, not a loose box. The
+estimation cloud is the **Phase-2 funnel survivors**, so the three phases chain: membership → funnel →
+span. Aggregated by 13F weight: ~82% of the book inside on average post estimation/coverage split
+(coverage loadings uncapped, so off-index holdings show their true extreme positions — lower and
+truer than the ~90% the old uniform ±3 clip gave), dipping since 2021. Loadings are z-scored/winsorized, so the space is in standardized-exposure terms.
+
+## Phase 4 — style-drift attribution (intentional vs not) — PLANNED, buildable now
+
+The span trend surfaced a real post-2021 drift of the book out of the S&P 500's span (toward smaller,
+higher-vol names). Chris's read (2026-06-23): at ~85% overlap it's fine for the *estimation universe*,
+but the drift itself is the interesting question — was it **intentional** (a deliberate style tilt, or
+a new PM covering smaller names) or **unintentional** (a re-pricing of risk that made those names more
+attractive)? The action differs: **update the benchmark** if intentional, **update the hedging** if
+not. The deliverable: decompose the drift by factor (Size/ResidVol/Liquidity contributions over time)
+and tie it to filing-over-filing position changes (overlaps roadmap Step 9). **Not blocked** on Chris's
+write-up — that's a separate general primer. What we *can't* settle is the final intentional/not
+verdict (it needs desk knowledge of Soros's intent / PM changes), so the deliverable presents the
+evidence and points to the action, leaving the judgment to the desk.
 
 ---
 
@@ -282,9 +307,15 @@ straightforward; Track B is just current ETF holdings. No cube/frame/contract ch
 so the blast radius is one new script + one endpoint + one panel + one test file. The survivorship
 and ticker-drift caveats are real but disclosed, not silent.
 
-## Open questions for Chris (Phase 1 surfaces, doesn't need)
+## Questions to Chris — RESOLVED (his 2026-06-23 reply)
 
-- Is a current-membership proxy for S&P 1500 / Russell acceptable for the "outside" sizing, or does
-  he want true PIT there (which on free data we can't cleanly do)?
-- Ticker-drift on the historical match — tolerable for a POC read, or worth a CUSIP-based
-  reconciliation?
+- **Estimation universe breadth / PIT membership** — RESOLVED: go with **option (1), the point-in-time
+  S&P 500** ("survivorship bias should be avoided at all costs"). A broader index would need a paid PIT
+  feed (Norgate ~$630/yr, or WRDS/Compustat); parked unless the book's drift later forces it. The
+  span check shows ~82% of the book sits inside the S&P 500's factor space (post-split), so option 1 is
+  well-supported.
+- **Near-flat funnel** — RESOLVED: expected and fine; for liquid SPX names the daily prices are
+  market-clearing, so the DQ filters confirming clean data is the correct result.
+- **Ticker-drift / current-membership proxy (Phase 1 Track B)** — accepted as a disclosed POC caveat;
+  the headline reads off the latest filing where coverage is strong.
+- **Still open (Phase 4):** the drift's intentional-vs-not question — see Phase 4 above.

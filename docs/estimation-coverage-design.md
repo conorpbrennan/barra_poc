@@ -1,7 +1,29 @@
 # Design note — estimation vs. coverage universe
 
-Status: proposal, for review (incl. Chris @ Soros risk) before any builder change.
-Scope: `python_src/barra_build_frames.py` (v2). The cube and the six-frame contract are unchanged.
+Status: **IMPLEMENTED** in `python_src/barra_build_frames.py` (flag `UNCAP_COVERAGE`, default on).
+The cube and the six-frame contract are unchanged. Endorsed by Chris (option 1, PIT S&P 500).
+Scope: `python_src/barra_build_frames.py` (v2).
+
+> **What was built (2026):**
+> - **Estimation universe** = the market-index seed (the S&P 500), flagged `is_estimation` on `sec`.
+>   **Coverage** = estimation ∪ every held name; coverage-only = held-but-not-S&P-500.
+> - **`_split_z`** standardizes each descriptor against the **estimation** cross-section's median/MAD,
+>   **winsorizes estimation rows at ±3**, and leaves **coverage rows uncapped** — with a loose
+>   `COVERAGE_CAP = ±10` backstop so a genuine large tilt (a tiny name's Size ≈ −6) survives but a
+>   corrupt XBRL value (negative-equity Leverage, etc.) can't produce an `inf`/`−48000` loading.
+> - **`regress_factors` fits factor returns on the estimation universe only**; specific residuals are
+>   then formed for **every** coverage name against those fitted returns (so a held non-S&P-500 name
+>   still gets a specific-risk forecast without polluting the factor returns).
+> - Rebuilt: 503 estimation / 693 coverage-only names. **Before → after:** style-loading range
+>   −3.1…3.1 → −10.1…10.6; most-negative held Size loading −2.97 → **−6.78** (its true value, was
+>   clipped); **style-factor VaR 99 (ex-Market) 0.51% → 1.05%** — the split surfaces book style risk the
+>   ±3 clip was hiding; the market-dominated headline Total VaR ≈ 3.6% is unchanged (Market is a
+>   structural 1.0 loading); the span check reads ~82% of the book inside on average (latest month
+>   70.5%) vs the artificially-high ~90% under the old uniform clip; `factor_returns`/`specific_var`
+>   row counts ≈ unchanged; all desk limits green. `UNCAP_COVERAGE=False` reproduces the legacy
+>   single-universe behaviour. Full test suite green.
+
+The original proposal and rationale follow.
 
 ## The point Chris raised
 
@@ -78,16 +100,19 @@ measure are untouched. This is purely a change to *how the loadings and factor r
 
 ## Open questions for Chris
 
-1. **Estimation universe definition / breadth.** Proposal: estimate on the **S&P 1500** (broader,
-   more stable daily cross-section, still clean data) rather than the current S&P 500 seed — and let
-   **coverage** carry Russell-3000-level breadth as the book needs. Not raw R3000 for *estimation*:
-   free-source data degrades on micro-caps and that noise pulls every factor return (Chris's
-   "high-quality data" point). Two caveats: index membership should be point-in-time (we currently
-   apply today's list across history — a survivorship bias, worse the broader we go), and the per-name
-   pull scales ~3× (SP1500) / ~6× (R3000). Settle by an empirical sweep (factor-return stability /
-   condition number, names-per-day & `<30` skip rate, Kupiec/Basel backtest). Open for Chris: SP1500
-   vs a screened R3000? required liquidity/market-cap screen? PIT membership source? Minimum
-   data-quality bar (how many of the 10 descriptors must be present)?
+> **Update (2026-06-23): Q1 RESOLVED.** Chris's steer was **option (1), the point-in-time S&P 500** —
+> "survivorship bias should be avoided at all costs." That settled it over the S&P 1500 idea below: on
+> free data only the S&P 500 has clean PIT membership (the hanshof change log), and the diagnostics
+> built since (see `universe-diagnostics-plan.md`) confirm it's well-supported — the funnel over the
+> PIT S&P 500 is near-flat (the names are already clean) and the span check shows ~90% of the book
+> sits inside the S&P 500's factor space. Broader (S&P 1500 / R3000) would need a paid PIT feed
+> (Norgate ~$630/yr or WRDS/Compustat) and is parked unless the book's drift later forces it. The
+> remaining estimation-universe membership is defined by **PIT data-quality rules**, not an index
+> beyond the S&P 500 seed.
+
+1. ~~**Estimation universe definition / breadth.**~~ RESOLVED (see above). *(Original proposal,
+   retained for context:)* estimate on the **S&P 1500** rather than the current S&P 500 seed, letting
+   coverage carry R3000-level breadth. Superseded by the PIT-S&P-500 decision.
 2. **Coverage breadth.** Held names only, or held ∪ a candidate watchlist we maintain?
 3. **Capping policy.** Hard ±3σ on estimation, fully uncapped coverage — or a looser coverage cap
    (e.g. ±10) as a corrupt-data backstop while still letting genuine large tilts through?

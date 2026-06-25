@@ -206,9 +206,32 @@ selected month's per-name verdict (D²/inside/extreme factors), and builds a **l
 scatter** (estimation cloud vs the book, coloured inside/outside) from the in-memory `exposures` frame
 — so any factor pair can be picked without rebuilding (default Size×ResidVol). The "🌐 Estimation
 universe" panel (`render_universe`) renders the inside-% trend, the scatter with a factor-pair
-selector, and the outside-the-span drill-down. Loadings are z-scored/winsorized, so the "space" is in
-standardized-exposure terms. Tests: `test_span.py`. Phase 3 of the universe diagnostics — see
+selector, and the outside-the-span drill-down. Loadings are z-scored (estimation winsorized, coverage
+uncapped), so the "space" is in standardized-exposure terms. With the estimation/coverage split on,
+~82% of the book sits inside the estimation cloud on average (off-index holdings now show their true
+extreme loadings rather than being clipped to ±3, so this reads lower and truer than the old ~90%),
+dipping since 2021. Tests: `test_span.py`. Phase 3 of the universe diagnostics — see
 `docs/universe-diagnostics-plan.md`.
+
+## Estimation vs coverage universe — the loading-cap split
+
+`barra_build_frames.py` splits its single universe into **estimation** (the clean S&P 500 seed,
+flagged `is_estimation` on `sec`) and **coverage** (estimation ∪ every held name). Controlled by
+`UNCAP_COVERAGE` (default on; `False` = legacy single-universe / cap-everything). Three coupled effects:
+
+- **Standardization (`_split_z`)** — each descriptor is centred/scaled by the **estimation**
+  cross-section's median/MAD. **Estimation loadings are winsorized at ±3**; **coverage loadings are
+  left uncapped**, with only a loose `COVERAGE_CAP = ±10` backstop. So a genuinely tiny held name reads
+  its true large-negative Size loading (≈ −6, Chris's point) instead of being clipped to −3 — but a
+  corrupt XBRL value (negative-equity Leverage → `inf`) is still clamped, not allowed to blow up.
+- **Factor returns** are regressed on the **estimation universe only**, so held-but-not-S&P-500 names
+  never pull the factor-return estimates.
+- **Specific risk** is still formed for **every** coverage name (residual of its own daily return
+  against the estimation-fitted factor returns), so the cube can price the whole book.
+
+The six-frame schema and the cube are unchanged — `is_estimation` lives only inside the builder.
+Rebuild to take effect (it changes factor returns, specific risk, and every downstream number; book
+Total VaR ≈ 3.6%, unchanged headline). See `docs/estimation-coverage-design.md`.
 
 ## In-UI docs (static serving)
 

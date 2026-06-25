@@ -617,8 +617,9 @@ def render_universe():
                     f"**{sl['inside_wt']:.0%} of the book sits inside** the estimation universe's factor "
                     f"space at {sp['selected_date']} ({sl['n_inside']}/{sl['n_held']} names) — exposures "
                     f"there are well-supported. The rest is extrapolation (small, higher-vol names beyond "
-                    f"anything the S&P 500 spans). The book has drifted out: ~95% inside pre-2021, ~85% "
-                    f"since — Chris's intentional-vs-not question (Phase 4).")
+                    f"anything the S&P 500 spans). With coverage loadings uncapped, off-index holdings "
+                    f"show their true extreme positions: ~82% of the book sits inside on average, "
+                    f"dipping since 2021 (≈59% in 2022) — Chris's intentional-vs-not question (Phase 4).")
                 sdf = pd.DataFrame(sp["series"])
                 sdf["Date"] = pd.to_datetime(sdf["month"]); sdf = sdf.set_index("Date")
                 c1, c2 = st.columns(2)

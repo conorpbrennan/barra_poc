@@ -170,6 +170,67 @@ def build() -> None:
     n_days = wide.shape[0]
     gen = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
 
+    # --- estimation-universe DQ filter stack (Phase 2 funnel; universe_filters.json) ----------
+    import json as _json
+    _root = pathlib.Path(__file__).resolve().parent.parent
+    try:
+        fcfg = {k: v for k, v in _json.loads((_root / "universe_filters.json").read_text()).items()
+                if not k.startswith("_")}
+    except Exception:
+        fcfg = {}
+
+    def _money(v):
+        try:
+            return f"${float(v) / 1e6:,.0f}M"
+        except Exception:
+            return str(v)
+    _tf = fcfg.get("min_trade_freq")
+    _tf_s = f"≥ {_tf:.0%}" if isinstance(_tf, (int, float)) else "—"
+    _buf = fcfg.get("buffer", {})
+    _buf_s = (f"enter {_buf.get('enter_pctile', '—')}th / exit {_buf.get('exit_pctile', '—')}th "
+              f"pctile {_buf.get('metric', '')}" if _buf else "—")
+    filter_rows = [
+        ("1 · Listing / security type", "primary common", "Drop warrants, preferred, units, "
+         "closed-end funds. S&amp;P 500 membership already implies a primary common listing, so this "
+         "stage is effectively pass-through here."),
+        ("2 · Size — min market cap", _money(fcfg.get("min_mcap", "—")), "close × shares-outstanding, "
+         "point-in-time (shares as-of the SEC <code>filed</code> date). Data quality correlates with "
+         "size; small-cap moves are dominated by microstructure noise."),
+        ("3 · History — min trading days", f"{fcfg.get('min_hist_days', '—')}d", "Length of the daily "
+         "price series as-of the month-end — a minimum trading history before admission."),
+        ("4 · Trading frequency", _tf_s, "Fraction of recent days with non-zero volume — screens "
+         "stale / thinly-traded quotes."),
+        ("5 · Liquidity — min ADV", _money(fcfg.get("min_adv", "—")) + "/day", "Trailing mean dollar "
+         "volume (close × volume). Ensures each day's price is market-clearing, not a stale quote."),
+        ("6 · Completeness", f"≥ {fcfg.get('min_descriptors', '—')} of 10", "Enough non-null style "
+         "descriptors present for the name to be represented in the model."),
+        ("7 · Stability buffer", _buf_s, "Hysteresis on the liquidity rank across months: a name "
+         "enters above the high band and leaves only below the low band, so membership doesn't churn "
+         "in and out at a single threshold."),
+        ("— Free float", "<em>unavailable</em>", "No free-data source for float-adjusted shares; "
+         "shown as a disclosed, inert stage (drops nobody)."),
+        ("— Confirmed-M&amp;A removal", "<em>unavailable</em>", "Needs deal data — confirmed targets "
+         "track deal probability, not factors. Disclosed, inert."),
+    ]
+    filter_html = "".join(f"<tr><td>{n}</td><td class='num'>{t}</td><td>{d}</td></tr>"
+                          for n, t, d in filter_rows)
+    try:
+        _fdf = pd.read_parquet(_root / "data" / "universe_funnel.parquet")
+        _fl = _fdf[_fdf["month"] == _fdf["month"].max()]
+        fn_month = str(pd.Timestamp(_fdf["month"].max()).date())
+        fn_pop = int(len(_fl))
+        fn_unavail = int((_fl["stage_dropped"] == "data unavailable").sum())
+        fn_surv = int(_fl["survived"].sum())
+        fn_eval = fn_pop - fn_unavail
+        funnel_result = (f"On the latest month (<strong>{fn_month}</strong>), of "
+                         f"<strong>{fn_eval}</strong> evaluable point-in-time S&amp;P 500 names "
+                         f"(<strong>{fn_unavail}</strong> more are delisted members we can't measure, "
+                         f"tagged <em>data unavailable</em>, never counted as a filter drop), "
+                         f"<strong>{fn_surv}</strong> survive the stack.")
+    except Exception:
+        funnel_result = ("Run <code>barra_universe_funnel.py</code> to populate the per-month "
+                         "survivor counts.")
+
     css = """
     body { background:#fffff8; color:#151515; font-family:Palatino,'Palatino Linotype',Georgia,serif;
            max-width:980px; margin:2.5rem auto 5rem; padding:0 2rem; line-height:1.55; font-size:15px; }
@@ -330,6 +391,36 @@ needs cold-cache SEC, OpenFIGI and Stooq calls plus a fundamentals pull. Those a
 cached to disk, and run in parallel across worker threads, so build time grows with the universe.
 To go wider, point <code>SEED_INDEX</code> at a bigger benchmark (S&amp;P 1500 or Russell 3000).
 The book stays a subset by construction.</p>
+
+<h2>2·c · Estimation-universe data-quality filters</h2>
+<p>A real estimation universe is defined by data-quality <em>rules</em>, not by index membership
+(Chris, §5.2: "the estimation universe is a statistical sample chosen for clean estimation, not an
+investable index"). The pre-filter population is the <strong>point-in-time S&amp;P 500</strong> — the
+only survivorship-free index available on free data (read as-of each month from a constituent change
+log that keeps delisted names), and the desk's settled choice over a broader index
+(<strong>Chris, 2026-06-23:</strong> "go with option (1) … survivorship bias should be avoided at all
+costs"). Each member is then run, point-in-time, through a fixed filter stack and tagged with the
+<em>first</em> stage that drops it:</p>
+
+<table>
+<tr><th>Filter (in order)</th><th class="num">Threshold</th><th>What it screens / why</th></tr>
+{filter_html}
+</table>
+
+<p>{funnel_result} The funnel is <strong>near-flat by design</strong>: the S&amp;P 500 is already a
+committee-curated set, so the filters <em>confirm</em> clean data rather than carve much away —
+exactly as expected (<strong>Chris:</strong> for the most-traded SPX names the daily prices are
+reliable / market-clearing). A name we cannot measure (a delisted member absent from the built
+universe, or one missing a share count) is shown as <em>data unavailable</em>, never as a filter
+drop, so the per-stage counts only ever reflect genuine threshold failures. Two of the criteria —
+<strong>free float</strong> and <strong>confirmed-M&amp;A removal</strong> — have no free data source
+and appear as inert, disclosed stages so the methodology is documented in full.</p>
+
+<p class="small">Thresholds live in <code>universe_filters.json</code> (documented and tunable). This
+filtration is the Phase-2 diagnostic over the estimation universe — surfaced live in the dashboard's
+"🌐 Estimation universe" panel (per-month population→survivor waterfall, per-stage drop list, and the
+span / high-confidence check) and detailed in <code>docs/universe-diagnostics-plan.md</code>. It is a
+diagnostic on data quality; it does not alter the §3 cross-section the cube currently fits on.</p>
 
 <h2>3 · Transformation register — exposures, factor returns, specific risk</h2>
 <p>This is the heart of the model and the part with no external benchmark, so every stage is set

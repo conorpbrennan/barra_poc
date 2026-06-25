@@ -47,6 +47,11 @@ and 13 → 14 once data sources are chosen.
   name), via the cube's risk math reproduced in numpy — "before" matches the cube exactly. UI
   "🔀 Pre-trade / what-if" panel (holdings weight editor). Tests in `test_whatif.py`. Done.
 
+- [x] **Drawdown lens (`/drawdown`).** [S–M] Constant-portfolio max peak-to-trough over the scenario
+  path (equity curve + underwater area), the path lens VaR/ES miss; headline folded into `/analysis`.
+  UI `render_drawdown`. Tests in `test_drawdown.py`. Done. (Built from Chris's "drawdown is a missing
+  lens" note; on the Soros book HistFull reads ≈ −39%, the 2020 COVID crash.)
+
 - [ ] **Step 7 · Scheduled CRO report.** [M] Wire `barra_cro_report.py` + the `/analysis` commentary
   into a daily/weekly markdown/PDF on a cron/timer. Touches: api, llm, timer unit, test.
 
@@ -83,7 +88,23 @@ and 13 → 14 once data sources are chosen.
 
 ---
 
-## Universe diagnostics (from Chris's review — see docs/universe-diagnostics-plan.md)
+## Chris's review — model improvements & universe diagnostics
+
+22–23 Jun review (see `docs/universe-diagnostics-plan.md`, `docs/estimation-coverage-design.md`). Each
+point from Chris's notes is mapped to its status below.
+
+- [x] **Estimation / coverage split — uncapped coverage loadings.** [M] builder. The central
+  data-quality point from Chris's notes: *"cap the loadings in the estimation universe, don't cap the
+  coverage universe."* `barra_build_frames.py` now flags `is_estimation` (the S&P 500 seed),
+  standardizes each descriptor against the estimation cross-section, **winsorizes estimation at ±3**,
+  leaves **coverage uncapped** (with a `COVERAGE_CAP = ±10` backstop against corrupt XBRL values), and
+  **fits factor returns on estimation names only** while still forming specific risk for every coverage
+  name. `UNCAP_COVERAGE` flag (default on; `False` = legacy). Rebuilt: 503 estimation / 693
+  coverage-only. **Before → after:** style-loading range −3.1…3.1 → −10.1…10.6; most-negative held
+  Size loading −2.97 → **−6.78** (true, was clipped); style-factor VaR 99 ex-Market **0.51% → 1.05%**
+  (reveals previously-clipped style risk); market-dominated headline Total VaR ≈ 3.6% unchanged (Market
+  is structural); span inside-share ~90% → ~82%. `factor_returns`/`specific_var` counts ≈ unchanged;
+  full suite green. See `docs/estimation-coverage-design.md` (IMPLEMENTED). Done.
 
 - [x] **Phase 1 · Bitemporal index membership.** [M] `barra_universe_membership.py` classifies every
   13F holding by index, per filing, bitemporally (S&P 500 membership read as-of the report date from
@@ -109,7 +130,8 @@ and 13 → 14 once data sources are chosen.
   99th-pct edge, plus the per-factor extremes that push a name out. `GET /span?date=&fx=&fy=` serves the
   weight-inside time series + per-name verdict + a live 2D factor-pair scatter (cloud vs book) built
   from the exposures frame. Panel: inside-% trend, scatter with factor-pair picker, outside-the-span
-  drill-down. ~90% of book inside on avg, ~95% pre-2021 → ~85% since (the Phase-4 drift). Tests in
+  drill-down. ~82% of book inside on avg post estimation/coverage split (off-index holdings now show
+  their true extreme loadings, so lower/truer than the pre-split ~90%), dipping since 2021 (Phase-4 drift). Tests in
   `test_span.py`. Done.
 - [ ] **Phase 4 · Style-drift attribution — intentional vs not** (Chris's follow-up, 2026-06-23). [M]
   The span check surfaced a post-2021 drift of the book out of the S&P 500's factor space (toward
@@ -119,7 +141,25 @@ and 13 → 14 once data sources are chosen.
   names more attractive) — and the action differs: **update the benchmark** if intentional, **update
   the hedging** if not. Decompose the drift by factor (Size/ResidVol/Liquidity contributions over
   time), tie it to filing-over-filing exposure changes (ties to Step 9 "what changed QoQ"), and
-  surface it as a flag the risk read can act on. Awaiting Chris's write-up for framing.
+  surface it as a flag the risk read can act on. **NOT blocked** on Chris's write-up (that's a separate
+  general primer) — buildable now. The final intentional/not *verdict* needs desk knowledge (Soros's
+  intent / PM changes) we don't have, so the deliverable lays out the evidence and points to the action,
+  leaving the call to the desk. The only remaining item from Chris's 2026-06-23 email; his option-(1)
+  decision (PIT S&P 500) and the near-flat-funnel reassurance are both already done.
+
+### Still open from Chris's 22 Jun notes
+
+- [ ] **Linked securities (share classes / dual listings / ADRs).** [M] builder/cube. Chris: linked
+  lines break the uncorrelated-idiosyncratic (diagonal-Δ) assumption. **Not handled** — each line is
+  treated as an independent name today. Would need a primary-line designation + a shared specific-risk
+  block. Flagged in CLAUDE.md as a separate note.
+- [ ] **Factor orthogonalization (multicollinearity).** [S] builder. Chris: orthogonalize factors to
+  avoid multicollinearity. **Partial** — only NonLinSize is orthogonalized to Size (`build_exposures`);
+  a general sequential-orthogonalization pass over the style block is not done.
+- **Mapped to existing roadmap items:** *active risk / active return vs a benchmark* → **Step 13**
+  (blocked on benchmark data); *intentional vs unwanted loadings & hedging* → **Phase 4** above;
+  *drawdown lens* → **done** (`/drawdown`, see Tier A); *point-in-time data* → **done** (PIT
+  fundamentals + the bitemporal Phases 1–3).
 
 ## Done
 
