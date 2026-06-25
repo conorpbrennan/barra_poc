@@ -806,6 +806,34 @@ def render_whatchanged():
             st.caption("Cached — click **Regenerate** for a fresh read.")
 
 
+def render_ask():
+    """Step 10: scoped Q&A drill-down. Ask a free-text desk question; the model answers by pulling
+    its own cube slices through the same guarded pivot the grid uses (one `query_cube` tool, nothing
+    else — no files, no web). Streamed, with each query shown inline. Silent if the backend is down."""
+    with st.expander("💬 Ask the risk model (scoped Q&A)", expanded=False):
+        st.caption("Free-text question, answered from live cube slices the model pulls itself — one "
+                   "guarded `query_cube` tool, the same allowlist as the grid. It cites the numbers it "
+                   "queried and can reach nothing else.")
+        q = st.text_input("Question", key="pv_ask_q",
+                          placeholder="e.g. Which factor drives the most Total VaR on HistFull at the latest date?")
+        notes = st.text_input("Optional desk context", key="pv_ask_notes")
+        _cache = st.session_state.setdefault("pv_ask_cache", {})
+        if st.button("Ask", key="pv_ask_btn") and q.strip():
+            try:
+                r = requests.post(f"{API}/ask", json={"question": q, "notes": notes or None},
+                                  stream=True, timeout=300)
+                r.raise_for_status(); r.encoding = "utf-8"
+                _cache[q] = st.write_stream(c for c in r.iter_content(chunk_size=None,
+                                            decode_unicode=True) if c)
+            except requests.HTTPError as e:
+                st.error(f"Failed: {e.response.text if e.response is not None else e}")
+            except requests.RequestException as e:
+                st.error(f"Request failed: {e}")
+        elif q.strip() and (cached := _cache.get(q)):
+            st.markdown(cached)
+            st.caption("Cached — click **Ask** for a fresh answer.")
+
+
 def render_stress():
     """Custom & reverse stress. Custom: book P&L under user-set per-factor sigma shocks. Reverse:
     the single-factor sigma move that would breach a target loss, ranked by vulnerability."""
@@ -1137,6 +1165,7 @@ render_trends()
 render_universe()
 render_drift()
 render_whatchanged()
+render_ask()
 render_liquidity()
 render_stress()
 render_whatif()

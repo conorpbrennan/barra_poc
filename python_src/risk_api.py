@@ -1679,3 +1679,159 @@ async def whatchanged_analysis(body: WhatChangedBody):
         except anthropic.APIError as e:
             yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
     return StreamingResponse(gen(), media_type="text/markdown")
+
+
+# ---------------------------------------------------------------- Step 10: scoped Q&A drill-down
+# The first LLM endpoint with a tool. The model gets EXACTLY ONE tool — query_cube — which is the
+# /pivot allowlist behind _validate_pivot + _pivot_result. So it can pull its own slices to answer a
+# free-text question, but it still cannot reach an off-allowlist dim/measure, the filesystem, the
+# network, or any other tool. We run a manual agentic loop (not the SDK tool runner) because each
+# tool call must go through the same guard the UI uses and the cube query is a slow synchronous call;
+# the loop is bounded (ASK_MAX_ROUNDS) and each result is trimmed (ASK_MAX_RECORDS) to cap tokens.
+
+ASK_MAX_ROUNDS = 8          # tool round-trips before we stop and let the model answer with what it has
+ASK_MAX_RECORDS = 250       # rows handed back per query_cube call (book is ~105 names; this is slack)
+
+QUERY_CUBE_TOOL = {
+    "name": "query_cube",
+    "description": (
+        "Pull one slice of the Barra factor-risk cube — the SAME guarded pivot the dashboard renders. "
+        "Returns tidy records: one row per cell with the row/col members and the requested measures.\n\n"
+        "Allowed dimensions (rows/cols/filters keys): " + ", ".join(DIM_NAMES) + ".\n"
+        "Allowed measures: " + ", ".join(MEASURE_NAMES) + ".\n\n"
+        "Rules that mirror the dashboard:\n"
+        "- `rows` and `measures` are required (at least one each); `cols` is optional.\n"
+        "- `filters` is {dimension: [members]} — AND across dimensions, OR within one. Slice Date to a "
+        "single month (e.g. \"2024-12-31\") and, for any scenario measure, slice ScenarioSet to ONE set "
+        "(HistFull / Evt:* / Hypo:*) — scenario measures are blank without a single-ScenarioSet context.\n"
+        "- Off-allowlist names are rejected; read the error and retry with a valid name."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "rows": {"type": "array", "items": {"type": "string"},
+                     "description": "dimensions on rows (>=1, from the allowed list)"},
+            "cols": {"type": "array", "items": {"type": "string"},
+                     "description": "dimensions on columns (optional)"},
+            "measures": {"type": "array", "items": {"type": "string"},
+                         "description": "measures (>=1, from the allowed list)"},
+            "filters": {"type": "object",
+                        "description": "{dimension: [members]} slicers; values are member strings"},
+            "totals": {"type": "boolean",
+                       "description": "add cube-computed margins (per_row/per_col/grand)"},
+        },
+        "required": ["rows", "measures"],
+    },
+}
+
+
+def _run_query_cube(args: dict) -> dict:
+    """Execute one query_cube tool call. Validation runs FIRST (no cube needed) and on failure
+    returns an {"error": ...} dict — NOT a raise — so the model sees the message and can retry on
+    a valid name instead of the loop dying. The records are capped to keep the context bounded."""
+    rlist = [str(x) for x in (args.get("rows") or [])]
+    clist = [str(x) for x in (args.get("cols") or [])]
+    mlist = [str(x) for x in (args.get("measures") or [])]
+    raw_f = args.get("filters") or {}
+    fdict = _parse_filters(json.dumps(raw_f) if raw_f else None, None, None)
+    try:
+        _validate_pivot(rlist, clist, mlist, fdict)
+    except HTTPException as e:
+        return {"error": e.detail}
+    res = _pivot_result(rlist, clist, mlist, fdict, bool(args.get("totals")))
+    recs = res.get("records") or []
+    if len(recs) > ASK_MAX_RECORDS:        # never silently drop — tell the model it was truncated
+        res["records"] = recs[:ASK_MAX_RECORDS]
+        res["truncated"] = f"showed {ASK_MAX_RECORDS} of {len(recs)} rows — narrow the slice for the rest"
+    return res
+
+
+ASK_SYSTEM = """\
+You are a buy-side market-risk manager answering a desk question about a Barra-style equity factor-risk
+model. The book is the Soros Fund Management 13F holdings, run as a long-only weight overlay; monthly
+calendar, 2016–2024.
+
+You have ONE tool, `query_cube`, which pulls slices of the live cube (the allowed dimensions and
+measures are listed in its description). You have nothing else — no filesystem, no web, no other tool,
+and no figures beyond what query_cube returns. To answer, pull the slices you need, then write the read.
+
+How to use the cube:
+- Numbers are fractions of book value. 0.035 means 3.5%. VaR/ES/vol are losses, reported positive.
+- Net exposure: aggregated factor loading (weight x loading); additive, no ScenarioSet needed. Market
+  carries a loading of 1.0 per name, so a fully invested book has ~unit Market exposure.
+- Scenario VaR 95/97.5/99 and ES 97.5/99 are losses at that confidence / tail means. Total VaR 99 /
+  Total ES 97.5 fold in the diagonal SPECIFIC (idiosyncratic) block. Marginal/% measures are a member's
+  additive share of the book number (they sum to the total); Incremental VaR is diversification-aware
+  and does NOT sum. Risk HHI is the Herfindahl of per-name Total-VaR shares; 1/HHI ~ effective bets.
+- EVERY scenario measure is blank unless you slice ScenarioSet to ONE set. Sets: HistFull (full
+  historical sim), Evt:* (a past window — COVID2020, Rates2022, Selloff2018), Hypo:* (hand-set sigma
+  shocks — ValueRotation, RiskOff, MomentumCrash). Slice Date to one month for a point-in-time read.
+- KEY CAVEAT: every name shares the uniform Market loading of 1.0, so in any set with real market moves
+  (HistFull, Evt:*) Market dominates book risk (~95%) and HHI is low. The Hypo:* shocks zero Market and
+  bump only style factors, so risk collapses onto the few names with those tilts and HHI jumps. A Hypo:*
+  set reading far more concentrated than HistFull is that mechanism, not a data problem.
+
+Hard rules:
+- Reason ONLY from numbers query_cube returned. Cite the figures you used. Never invent a position,
+  issuer, date, or value. If a query errored or came back empty, say so and adjust — don't guess.
+- Be economical: a few well-chosen queries beat many. Don't pull Date x Position grids you won't use.
+- Known limits to flag when relevant: universe capped at 250 names; Country stubbed "US"; ~5 names fall
+  back to "Unknown" sector. Don't over-read precision.
+
+Output: tight GitHub-flavoured markdown for a risk desk. Lead with a one-line direct answer, then the
+supporting figures as a few bullets, then a short "So what" if it helps. No preamble, no restating the
+question, no filler. Write plainly: direct, short sentences."""
+
+
+class AskBody(BaseModel):
+    question: str
+    notes: str | None = None       # optional desk context typed by the user
+
+
+@app.post("/ask")
+async def ask(body: AskBody):
+    """Streamed scoped Q&A. The model gets one tool — query_cube — and answers a free-text desk
+    question by pulling its own cube slices through the SAME _validate_pivot/_pivot_result guard the
+    UI uses. Manual agentic loop, bounded to ASK_MAX_ROUNDS tool round-trips; off-allowlist names are
+    rejected inside the tool (the model retries), so it can never reach anything off the allowlist."""
+    _rate_limit()
+    q = (body.question or "").strip()
+    if not q:
+        raise HTTPException(400, "ask a question")
+    client = _anthropic()          # 502 before any work if there's no key
+    user0 = q if not body.notes else f"{q}\n\nDesk context: {body.notes.strip()}"
+    messages = [{"role": "user", "content": user0}]
+
+    def gen():
+        for _ in range(ASK_MAX_ROUNDS):
+            try:
+                with client.messages.stream(
+                    model="claude-opus-4-8", max_tokens=4000,
+                    thinking={"type": "adaptive"},
+                    system=[{"type": "text", "text": ASK_SYSTEM,
+                             "cache_control": {"type": "ephemeral"}}],   # cached: stable across asks
+                    tools=[QUERY_CUBE_TOOL],
+                    messages=messages,
+                ) as stream:
+                    yield from stream.text_stream                        # text deltas only; thinking hidden
+                    final = stream.get_final_message()
+            except anthropic.APIError as e:                             # mid-stream: 200 already sent
+                yield f"\n\n_[ask failed: {e.__class__.__name__}]_"
+                return
+            if final.stop_reason != "tool_use":
+                return                                                  # model answered — done
+            messages.append({"role": "assistant", "content": final.content})  # keep thinking+tool_use
+            results = []
+            for blk in final.content:
+                if getattr(blk, "type", None) != "tool_use":
+                    continue
+                args = blk.input if isinstance(blk.input, dict) else {}
+                yield (f"\n\n> 🔎 `query_cube` rows={args.get('rows')} "
+                       f"cols={args.get('cols') or '—'} measures={args.get('measures')} "
+                       f"filters={args.get('filters') or '—'}\n\n")
+                out = _run_query_cube(args)
+                results.append({"type": "tool_result", "tool_use_id": blk.id,
+                                "content": json.dumps(out, default=str)})
+            messages.append({"role": "user", "content": results})
+        yield "\n\n_[reached the query limit — answering with what I have]_"
+    return StreamingResponse(gen(), media_type="text/markdown")

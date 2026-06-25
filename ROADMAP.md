@@ -67,9 +67,13 @@ and 13 → 14 once data sources are chosen.
   commentary button. Tests in `test_whatchanged.py` (unit + integ; live LLM opt-in via RUN_LLM=1).
   Reuses Phase 4's `decompose`. Done.
 
-- [ ] **Step 10 · LLM — scoped Q&A drill-down.** [M] Give the model exactly one `query_cube` tool
-  (the `/pivot` allowlist) via the Anthropic SDK tool runner, so it can pull slices itself — still
-  zero filesystem/network, one tool only. Touches: api, llm, test.
+- [x] **Step 10 · LLM — scoped Q&A drill-down.** [M] `POST /ask {question, notes?}` gives the model
+  exactly one tool — `query_cube`, the `/pivot` allowlist behind the same `_validate_pivot` /
+  `_pivot_result` guard — and runs a bounded manual agentic loop so it pulls its own cube slices to
+  answer a free-text desk question. Still zero filesystem/network, one tool only; off-allowlist names
+  are rejected inside the tool (the model retries). Streams markdown, echoing each query inline. UI
+  "💬 Ask the risk model" panel. Tests in `test_ask.py` (unit tool-schema + guard; integ 400; live
+  loop opt-in via RUN_LLM=1). Done.
 
 ## Tier B — buildable but needs pipeline work
 

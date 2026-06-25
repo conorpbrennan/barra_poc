@@ -72,6 +72,26 @@ Messages-API, no-tools pattern as `/analysis`** (model `claude-opus-4-8`, adapti
 (unit `_prior_filing_date`; integ shape + the four-source reconciliation; live LLM opt-in via
 `RUN_LLM=1`). Step 9 of the risk-tooling roadmap.
 
+## Scoped Q&A drill-down (`/ask`)
+
+`risk_api.py` `POST /ask {question, notes?}` is the **one LLM endpoint with a tool**. The model gets
+**exactly one tool — `query_cube`** — which is the `/pivot` allowlist behind the *same*
+`_validate_pivot` + `_pivot_result` guards the grid and `/analysis` use. So it can pull its own cube
+slices to answer a free-text desk question, but it **cannot reach an off-allowlist dim/measure, the
+filesystem, the network, or any other tool**. We run a **manual agentic loop** (not the SDK tool
+runner) because each call must go through that guard and the cube query is a slow synchronous call:
+loop is bounded to `ASK_MAX_ROUNDS` (8) tool round-trips, each result trimmed to `ASK_MAX_RECORDS`
+(250) rows (with a `truncated` note, never silent). `_run_query_cube` validates **before** touching
+the cube and returns an `{"error": ...}` dict on a bad name (so the model retries, the loop doesn't
+die) — that error path is unit-testable with no cube. The tool description enumerates the live
+`DIM_NAMES`/`MEASURE_NAMES` so the model picks valid names; `ASK_SYSTEM` carries the same grounding as
+`ANALYST_SYSTEM` (Market-loading caveat, scenario-set slicing, cite-the-numbers). Streams markdown
+(model `claude-opus-4-8`, adaptive thinking, cached system prompt), echoing each `query_cube` call
+inline (`> 🔎 query_cube …`) so the grounding is visible. UI "💬 Ask the risk model" panel
+(`render_ask`). Tests: `test_ask.py` (unit tool-schema + allowlist guard always; integ empty-question
+400; live full loop opt-in via `RUN_LLM=1`, asserts a `query_cube` marker appears). Step 10 of the
+risk-tooling roadmap.
+
 ## Desk limits (`/limits`)
 
 `risk_api.py` has a `GET /limits?date=&set=&book=` endpoint that compares the book's numbers to a
