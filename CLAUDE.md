@@ -159,6 +159,21 @@ UI bootstraps its editor, and `universe` (every tradeable name with loadings tha
 VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Risk HHI, gross, net. UI panel `render_whatif`.
 Tests: `test_whatif.py`.
 
+## Liquidity / days-to-liquidate (`/liquidity`)
+
+`risk_api.py` `GET /liquidity?date=&participation=&horizon=` answers "how long to unwind this book."
+The builder now carries a **trailing-63d dollar-ADV** column on the `positions` frame (mcap-style:
+`close × volume` rolled 63d, as-of the calendar date, from the same cached Stooq/Yahoo Volume the
+prices come from — no Step-11 frame work beyond the one column). The API computes per name
+**days-to-liquidate = MV / (participation·ADV)** (`_days_to_liquidate`, pure → unit-tested), then the
+book **share of weight liquidatable within `horizon`** days, the **weighted-average days**, the
+least-liquid names (detail sorted desc), and any names with **no ADV** (delisted/illiquid, reported
+separately — never silently counted as instant). `participation` (default 0.20) is the fraction of
+each name's ADV you'll trade per day; `horizon` (default 5) is the cutoff. No cube — reads
+`S["frames"]` positions + securities. UI "💧 Liquidity (days-to-liquidate)" panel `render_liquidity`
+(participation/horizon sliders). Tests: `test_liquidity.py`. NB on the Soros book at 20%
+participation: ~87% of weight liquidatable within 5 days, wavg ≈ 2.2d, worst ≈ 13.4d (GFL), no-ADV 0.
+
 ## Estimation universe — index membership (`/universe`)
 
 `barra_universe_membership.py` is a **precompute step** (like a builder): for every Soros 13F filing it
@@ -330,7 +345,7 @@ different source APIs; they are resolved to a single FIGI before frames are emit
 | Frame | Key | Payload | Role |
 |---|---|---|---|
 | `exposures` | (Date, Position, Factor) | Loading | the granular leaf |
-| `positions` | (Date, Book, Position) | Weight, MV | Soros 13F weight overlay, as-of joined |
+| `positions` | (Date, Book, Position) | Weight, MV, ADV | Soros 13F weight overlay, as-of joined (ADV = trailing-63d $ vol, for `/liquidity`) |
 | `securities` | (Position) | Ticker, CIK, CUSIP, Issuer, Sector, Country | dimension |
 | `factor_meta` | (Factor) | FactorGroup | dimension |
 | `factor_returns` | (Date, Factor) | Return | the shared scenario cache |

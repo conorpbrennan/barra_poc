@@ -19,7 +19,7 @@ Design (settled with the desk):
 
 Emits six frames:
   exposures      (Date, Position, Factor) -> Loading      <-- GRANULAR LEAF
-  positions      (Date, Book, Position)   -> Weight, MV    <-- Soros overlay
+  positions      (Date, Book, Position)   -> Weight, MV, ADV <-- Soros overlay (ADV = days-to-liquidate)
   securities     (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
   factor_meta    (Factor)                 -> FactorGroup
   factor_returns (Date, Factor)           -> Return        <-- the shared cache
@@ -717,7 +717,24 @@ def build_frames():
                            left_on="Date", right_on="filing_date", direction="backward")
     positions = cal_df.dropna(subset=["filing_date"]).merge(p, on="filing_date")
     positions["Book"] = "Soros"
-    positions = positions[["Date", "Book", "Position", "Weight", "MV"]]
+    # --- ADV (avg daily $ volume) for days-to-liquidate (Step 11) ----------
+    # Per (Date, Position): trailing-63-day mean dollar volume from the cached prices, sampled at each
+    # month-end. Carried on the positions frame (held names only) so the API can read days-to-liquidate
+    # = MV / (participation * ADV) without re-pulling. NaN where price/volume is missing.
+    fig2tkr = dict(zip(sec["figi"], sec["ticker"]))
+    adv_rows = []
+    for P in positions["Position"].unique():
+        px = prices.get(fig2tkr.get(P))
+        if px is None or "Volume" not in px:
+            continue
+        dv = (px["Close"] * px["Volume"]).rolling(63, min_periods=20).mean()
+        idx = px.index.searchsorted(cal, side="right")
+        for D, i in zip(cal, idx):
+            if i > 0 and pd.notna(dv.iloc[i - 1]):
+                adv_rows.append({"Date": D, "Position": P, "ADV": float(dv.iloc[i - 1])})
+    adv = pd.DataFrame(adv_rows) if adv_rows else pd.DataFrame(columns=["Date", "Position", "ADV"])
+    positions = positions.merge(adv, on=["Date", "Position"], how="left")
+    positions = positions[["Date", "Book", "Position", "Weight", "MV", "ADV"]]
 
     # --- dimensions --------------------------------------------------------
     securities = sec.rename(columns={"figi": "Position", "ticker": "Ticker",

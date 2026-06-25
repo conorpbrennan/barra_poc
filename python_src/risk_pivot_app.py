@@ -694,6 +694,46 @@ def render_drift():
         st.caption("• " + d.get("note", ""))
 
 
+def render_liquidity():
+    """Step 11: days-to-liquidate per held name = MV / (participation × ADV). Headline = share of the
+    book liquidatable within a horizon; least-liquid names; names with no ADV. Collapsed; silent if
+    /liquidity is down (e.g. frames built before the Step-11 ADV column)."""
+    with st.expander("💧 Liquidity — days to liquidate", expanded=False):
+        c1, c2 = st.columns(2)
+        part = c1.slider("Participation (% of ADV / day)", 5, 50, 20, 5, key="pv_liq_part") / 100.0
+        hor = c2.slider("Horizon (days)", 1, 20, 5, 1, key="pv_liq_hor")
+        try:
+            lq = get("/liquidity", participation=part, horizon=float(hor))
+        except Exception as e:
+            st.info(f"Liquidity unavailable: {e} — rebuild frames with the Step-11 builder.")
+            return
+        pct = lq.get("pct_weight_within_horizon")
+        wavg = lq.get("weighted_avg_days"); mx = lq.get("max_days")
+        st.markdown(
+            f"At **{part:.0%} of ADV/day**, **{(pct or 0):.0%} of the book by weight** can be exited "
+            f"within **{hor:.0f} days** (as of {lq['date']}). Weighted-avg "
+            f"{('%.1f' % wavg) if wavg is not None else '—'} days; worst "
+            f"{('%.0f' % mx) if mx is not None else '—'}. {lq['n_no_adv']} names "
+            f"({lq['weight_no_adv']:.1%}) have no ADV.")
+        detail = lq.get("detail", [])
+        if detail:
+            dd = pd.DataFrame(detail)
+            dd["Weight"] = dd["Weight"].map(lambda v: f"{v:.2%}")
+            dd["MV"] = dd["MV"].map(lambda v: f"${v / 1e6:,.0f}M")
+            dd["ADV"] = dd["ADV"].map(lambda v: f"${v / 1e6:,.1f}M")
+            dd["days"] = dd["days"].map(lambda v: f"{v:.1f}")
+            st.caption("Least-liquid holdings — days to exit (descending)")
+            st.dataframe(dd.head(15)[["Issuer", "Ticker", "Sector", "Weight", "MV", "ADV", "days"]],
+                         hide_index=True, use_container_width=True)
+        if lq.get("no_adv_names"):
+            with st.expander(f"Names with no ADV ({lq['n_no_adv']})", expanded=False):
+                nd = pd.DataFrame(lq["no_adv_names"])
+                nd["weight"] = nd["weight"].map(lambda v: f"{v:.2%}")
+                st.dataframe(nd[["issuer", "ticker", "weight"]], hide_index=True,
+                             use_container_width=True)
+        st.caption("• " + lq.get("note", ""))
+
+
 def render_whatchanged():
     """Step 9: what changed quarter-over-quarter — positions in/out/resized, the factor-exposure
     drift attributed (rotation vs loading drift), the book risk delta, plus an on-demand LLM
@@ -1097,6 +1137,7 @@ render_trends()
 render_universe()
 render_drift()
 render_whatchanged()
+render_liquidity()
 render_stress()
 render_whatif()
 

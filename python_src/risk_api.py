@@ -1297,6 +1297,69 @@ async def whatif(body: WhatIfBody):
     return await run_in_threadpool(_whatif_result, body.date or _latest_date(), body.book, body.trades)
 
 
+# ============================================================================ liquidity risk
+# Step 11: days-to-liquidate per held name = position $MV / (participation × ADV) — how many trading
+# days to exit at a chosen % of average daily $ volume without dominating the tape. ADV is carried on
+# the positions frame (the builder's trailing-63d mean dollar volume). Parameterized (participation /
+# horizon are request args) so it's computed in the API from the live frame, like /stress, /drawdown,
+# /whatif — not a fixed cube measure.
+
+def _days_to_liquidate(mv: pd.Series, adv: pd.Series, participation: float) -> pd.Series:
+    """Days to exit each position at `participation` of ADV: MV / (participation × ADV). NaN where ADV
+    is missing or non-positive (unmeasurable, not zero)."""
+    cap = participation * adv
+    return (mv / cap).where(cap > 0)
+
+
+@app.get("/liquidity")
+async def liquidity(date: str | None = Query(None, description="as-of date; default latest"),
+                    book: str = Query("Soros"),
+                    participation: float = Query(0.20, gt=0, le=1,
+                                                 description="fraction of ADV traded per day"),
+                    horizon: float = Query(5.0, gt=0, description="days to flag a name as illiquid")):
+    """Days-to-liquidate for the held book: per name MV / (participation·ADV), the share of book value
+    liquidatable within `horizon` days, the weighted-average days, and the worst (least-liquid) names.
+    Names with no ADV are reported separately, never counted as instantly liquid."""
+    def run():
+        f = S["frames"]; pos = f["positions"]
+        d = pd.Timestamp(date) if date else pd.Timestamp(pos["Date"].max())
+        bk = pos[(pos["Book"] == book) & (pos["Date"] == d)].copy()
+        if bk.empty:
+            raise HTTPException(404, f"no positions for {book} on {d.date()}")
+        if "ADV" not in bk.columns:
+            raise HTTPException(503, "positions frame has no ADV column — rebuild with the Step-11 builder")
+        sec = f["securities"][["Position", "Issuer", "Ticker", "Sector"]]
+        bk = bk.merge(sec, on="Position", how="left")
+        bk["days"] = _days_to_liquidate(bk["MV"], bk["ADV"], participation)
+        measurable = bk[bk["days"].notna()]
+        no_adv = bk[bk["days"].isna()]
+        tot_mv = float(bk["MV"].sum())
+        within = measurable[measurable["days"] <= horizon]
+        wavg = (float((measurable["Weight"] * measurable["days"]).sum()
+                      / measurable["Weight"].sum()) if len(measurable) else None)
+        detail = (measurable.sort_values("days", ascending=False)
+                  [["Issuer", "Ticker", "Sector", "Weight", "MV", "ADV", "days"]])
+        return {
+            "date": str(d.date()), "book": book,
+            "participation": participation, "horizon_days": horizon,
+            "n_names": int(len(bk)),
+            "pct_mv_within_horizon": float(within["MV"].sum() / tot_mv) if tot_mv else None,
+            "pct_weight_within_horizon": float(within["Weight"].sum()),
+            "weighted_avg_days": wavg,
+            "max_days": float(measurable["days"].max()) if len(measurable) else None,
+            "n_no_adv": int(len(no_adv)),
+            "weight_no_adv": float(no_adv["Weight"].sum()),
+            "detail": [{k: _clean(v) for k, v in row.items()} for _, row in detail.iterrows()],
+            "no_adv_names": [{"issuer": _clean(r["Issuer"]), "ticker": _clean(r["Ticker"]),
+                              "weight": _clean(r["Weight"])}
+                             for _, r in no_adv.sort_values("Weight", ascending=False).iterrows()],
+            "note": ("Days-to-liquidate = position MV ÷ (participation × ADV); ADV is the trailing-63d "
+                     "mean daily $ volume on the positions frame. A constant-portfolio liquidity read "
+                     "on the held book — not a live order book."),
+        }
+    return await run_in_threadpool(run)
+
+
 # ============================================================================ analysis (LLM)
 # A written risk-manager read of ONE view. The model is the plain Anthropic Messages API with
 # NO tools: it receives the view's tidy numbers as text and returns prose. It has no access to

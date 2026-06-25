@@ -73,9 +73,13 @@ and 13 → 14 once data sources are chosen.
 
 ## Tier B — buildable but needs pipeline work
 
-- [ ] **Step 11 · Liquidity risk (days-to-liquidate).** [M] Volume is fetched in the builder but is
-  NOT in the six frames — add an ADV column to the pipeline, carry it into a frame, then a cube
-  measure (position ÷ ADV) and a UI flag. Touches: builder, cube, api, ui, rebuild, test.
+- [x] **Step 11 · Liquidity risk (days-to-liquidate).** [M] `GET /liquidity?date=&participation=&horizon=`
+  Builder now carries a trailing-63d dollar-ADV column on the `positions` frame; the API computes
+  days-to-liquidate = MV / (participation·ADV) per name, the book share liquidatable within a horizon,
+  the weighted-average days, the least-liquid names, and any names with no ADV. UI "💧 Liquidity
+  (days-to-liquidate)" panel with participation/horizon sliders. Tests in `test_liquidity.py` (unit
+  formula always; integ needs :8010 + the ADV frame). On the Soros book at 20% participation: ~87% of
+  weight liquidatable within 5 days, wavg ~2.2d, worst ~13.4d (GFL), no-ADV names 0.
 
 - [ ] **Step 12 · Deeper-history events (2008 GFC, Euro crisis).** [M–L] `factor_returns` only goes
   back to 2016. The v1 builder already pulls published Ken French / JKP daily returns (decades deep)
