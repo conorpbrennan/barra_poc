@@ -72,9 +72,21 @@ def run(frames: dict | None = None) -> list[dict]:
     exp = f["exposures"]
     nan_load = exp["Loading"].isna().sum()
     check("FAIL" if nan_load else "PASS", "exposures: no null loadings", f"{nan_load}" if nan_load else "")
-    big = exp[exp["Loading"].abs() > 6]
-    check("WARN" if len(big) else "PASS", "exposures: |z| <= 6 (winsorised z-scores)",
-          f"{len(big)} rows, max |z| {exp['Loading'].abs().max():.1f}" if len(big) else "")
+    # Loading-magnitude guard. With the estimation/coverage split (UNCAP_COVERAGE), coverage loadings
+    # are INTENTIONALLY uncapped up to ±COVERAGE_CAP (estimation stays winsorised at ±3), so the old
+    # flat ±6 bound false-warns by design. Flag only loadings beyond the cap (+ a re-standardisation
+    # margin) — that range catches genuine corruption (the inf / 1e4 blowups) but not the designed tilt.
+    try:
+        from barra_build_frames import UNCAP_COVERAGE, COVERAGE_CAP
+    except Exception:
+        UNCAP_COVERAGE, COVERAGE_CAP = False, 6.0
+    lim = COVERAGE_CAP * 1.5 if UNCAP_COVERAGE else 6.0
+    label = (f"exposures: |loading| within coverage cap (±{COVERAGE_CAP:g}; estimation winsorised ±3)"
+             if UNCAP_COVERAGE else "exposures: |z| <= 6 (winsorised z-scores)")
+    big = exp[exp["Loading"].abs() > lim]
+    check("WARN" if len(big) else "PASS", label,
+          f"{len(big)} rows beyond ±{lim:g}, max |loading| {exp['Loading'].abs().max():.1f}"
+          if len(big) else f"max |loading| {exp['Loading'].abs().max():.1f}")
 
     fr = f["factor_returns"]
     wild = fr[fr["Return"].abs() > 0.5]

@@ -117,6 +117,44 @@ vol, Risk HHI, and gross/net. Risk is recomputed from the same loadings, factor 
 variance the cube uses, so the "before" column matches the cube's reported numbers and the Δ column
 is the trade's effect. Trim a concentrated name and watch HHI fall; double one and watch it rise.</p>
 
+<h3>📉 Drawdown</h3>
+<p>The path lens VaR and ES miss. The current book is applied to the scenario set's daily factor-return
+history and compounded into a <b>constant-portfolio equity curve</b>; the panel charts that curve and
+the underwater (peak-to-trough) area, with the max drawdown, the peak→trough dates and the recovery.
+On the Soros book over full history this reads ≈ <b>−39%</b> — the Feb–Mar 2020 COVID crash — a path
+risk a single-day VaR can't show. Meaningful on long paths (HistFull, event sets); a one-shock Hypo
+set is too short.</p>
+
+<h2>Estimation-universe diagnostics</h2>
+<p>A four-phase read of the universe the model is built on and where the book sits relative to it —
+from Chris's (Soros risk) review. The first three live in one <b>🌐 Estimation universe</b> panel; the
+fourth is its own.</p>
+
+<h3>🌐 Estimation universe — membership, funnel, span</h3>
+<ul>
+  <li><b>Index membership (point-in-time).</b> For each 13F filing, the book's weight split across
+      S&amp;P 500 (read as-of the filing date, survivorship-free) / S&amp;P 400–600 / outside the
+      S&amp;P 1500 / unclassified. Answers "does the book reach names a clean large-cap universe
+      wouldn't cover?" — on the latest filing ~20% sits outside the S&amp;P 1500.</li>
+  <li><b>Filtration funnel.</b> The point-in-time S&amp;P 500 run through a documented data-quality
+      filter stack (size, history, trading frequency, liquidity/ADV, completeness, stability buffer),
+      tagging the first filter that drops each name. <b>Near-flat by design</b> — the S&amp;P 500 is
+      already committee-curated, so the filters confirm clean data rather than carve much away.</li>
+  <li><b>Span / high-confidence check.</b> Is each holding <i>inside</i> the factor-space the
+      estimation universe spans (high confidence) or out beyond it (extrapolation)? Measured by
+      Mahalanobis distance from the estimation cloud, with a 2D factor-pair scatter (cloud vs book) and
+      a per-name verdict. ~82% of the book sits inside on average, drifting out since 2021.</li>
+</ul>
+
+<h3>🧭 Style-drift attribution (intentional vs not)</h3>
+<p>The book drifted out of the S&amp;P 500's factor space since ~2021 (into smaller, higher-vol names).
+Was that <b>intentional</b> (a deliberate tilt / new PM) or <b>unintentional</b> (risk re-pricing)? The
+panel tracks the book's net factor exposure over time and decomposes each factor's drift into
+<b>rotation</b> (new names entering / exiting) vs <b>held-name loading drift</b>. Rotation-dominated
+leans intentional → <i>update the benchmark</i>; loading-drift-dominated leans unintentional → <i>update
+the hedge</i>. On this book the post-2021 drift is rotation-dominated, so it leans intentional. The
+final call needs desk knowledge (the manager's intent); the panel lays out the evidence.</p>
+
 <h2>Risk-analyst commentary (per view)</h2>
 <p>Under any grid view, the <b>🔍 Risk-analyst commentary</b> button writes a short risk-manager read
 of exactly the numbers on screen.</p>

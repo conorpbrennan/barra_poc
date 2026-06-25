@@ -17,7 +17,7 @@ import pandas as pd
 import barra_dq_checks as dq
 from barra_build_frames import (EWMA_HALFLIFE_D, MCAP_FLOOR, SOROS_CIK, START, END,
                                 STYLE_FACTORS, MARKET_PROXY,
-                                positions_from_13f, SEED_INDEX)
+                                positions_from_13f, SEED_INDEX, UNCAP_COVERAGE, COVERAGE_CAP)
 from barra_factor_risk_cube import EVENT_WINDOWS, HYPO_SHOCKS, load_frames
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "tmp" / "barra_model_reference.html"
@@ -169,6 +169,28 @@ def build() -> None:
     n_names = positions["Position"].nunique()
     n_days = wide.shape[0]
     gen = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # estimation/coverage split prose for §3 stage (b)
+    if UNCAP_COVERAGE:
+        cap_clause = ("<strong>Estimation</strong> rows (the names the factor returns are fit on) are "
+                      "winsorised at <strong>±3σ</strong>; <strong>coverage</strong> rows (held names "
+                      "not in the seed) are left <strong>uncapped</strong>, bounded only by a loose "
+                      f"±{COVERAGE_CAP:g} backstop against corrupt data.")
+        cap_why = (f"This is Chris's data-quality point: a tiny held name far below anything in the "
+                   f"{seed_label} reads its <em>true</em> large-negative Size loading (≈ −6), not a "
+                   f"clip to −3 — the correct statement of a real tilt, and capping belongs only in "
+                   f"the estimation set, to protect the regression.")
+        est_fit_clause = (f" The regression is fit on the <strong>estimation universe only</strong> "
+                          f"(the {seed_label} seed), so held-but-not-seed names never pull the factor "
+                          f"returns.")
+        cov_spec_clause = (" Specific risk is formed for <strong>every coverage name</strong> (its own "
+                           "residual against the estimation-fit factor returns), so the cube prices the "
+                           "whole book even though only estimation names enter the fit.")
+    else:
+        cap_clause = "Every row is winsorised at <strong>±3σ</strong> (the estimation/coverage split is off)."
+        cap_why = ""
+        est_fit_clause = ""
+        cov_spec_clause = ""
 
     # --- estimation-universe DQ filter stack (Phase 2 funnel; universe_filters.json) ----------
     import json as _json
@@ -481,18 +503,16 @@ about.</p>
     Growth stay put. The panel refreshes price signals every month and fundamental signals every
     quarter.</li>
 
-<li><strong>(b) Robust cross-sectional standardisation (winsorisation).</strong> Each descriptor
-    is standardised <em>within each month's cross-section</em>, not across time. The transform is
-    robust rather than the usual mean/σ. Centre by the <em>median</em> and scale by the
-    <em>MAD</em> (median absolute deviation × 1.4826 for normal consistency), winsorise the score
-    at <strong>±3σ</strong> (a hard clip), then re-standardise the clipped column to mean&nbsp;0,
-    σ&nbsp;1. If a cross-section has no spread (MAD ≈ 0) it carries no information, so we set the
-    whole column missing for that month. Median/MAD centring is what makes the clip work: one
-    wrong-units outlier cannot move the centre or the scale, so the ±3σ clip lands it at a finite,
-    harmless value instead of letting it dominate the column. That is the failure the earlier
-    quantile clip ran into (§5). <code>NonLinSize</code> is also <strong>orthogonalised to
-    Size</strong> (regressed on Size, the residual kept and re-standardised), so the factor is the
-    genuinely non-linear part of size, not a second copy of Size.</li>
+<li><strong>(b) Robust cross-sectional standardisation — the estimation/coverage split.</strong>
+    Each descriptor is standardised <em>within each month's cross-section</em>, not across time,
+    robustly: centre by the <em>median</em>, scale by the <em>MAD</em> (× 1.4826). The centring
+    statistics and the cap come from the <strong>estimation universe only</strong> (the clean
+    {seed_label} seed), not the whole cross-section. {cap_clause} Both sets are then re-standardised
+    on the estimation post-clip mean/σ so they share one scale. {cap_why} If a cross-section has no
+    spread (MAD ≈ 0) the column is set missing for the month. Median/MAD centring is what makes the
+    cap work: one wrong-units outlier cannot move the centre or scale (§5). <code>NonLinSize</code>
+    is also <strong>orthogonalised to Size</strong> (on the estimation fit), so the factor is the
+    genuinely non-linear part of size.</li>
 
 <li><strong>(c) The monthly-to-daily bridge (Barra timing).</strong> Exposures are slow-moving, so
     we compute them <em>monthly</em>. Factor returns have to be daily for the tails to be real.
@@ -530,7 +550,7 @@ about.</p>
     prepended. That <strong>intercept is the Market factor</strong>. It is weighted least squares
     with weight ∝ <strong>√mcap</strong>, so large names anchor the fit (implemented by multiplying
     both sides by mcap<sup>¼</sup>). The fitted coefficients <em>are</em> that day's factor returns
-    Δf<sub>k</sub>, and the residuals are the name-specific returns. Output: {n_days:,} days ×
+    Δf<sub>k</sub>, and the residuals are the name-specific returns.{est_fit_clause} Output: {n_days:,} days ×
     ({len(factors)} style + Market) factor returns, the shared scenario cache.</li>
 
 <li><strong>(f) Specific (idiosyncratic) risk.</strong> We square each day's regression residual
@@ -538,7 +558,7 @@ about.</p>
     name, giving a daily specific <em>variance</em> per (name, day). For the cube join we
     <strong>snapshot this at each calendar month-end</strong> (the model's join cadence). The
     specific block is strictly <em>diagonal</em>: one variance per name, no cross-name specific
-    covariance, in line with the daily VaR horizon.</li>
+    covariance, in line with the daily VaR horizon.{cov_spec_clause}</li>
 
 <li><strong>(g) Market intercept as a leaf loading.</strong> After the regression we give every
     (date, name) a <code>Market</code> loading of exactly <strong>1.0</strong> in the exposure
@@ -665,6 +685,15 @@ VaR-backtest badge.</p>
 <li><strong>Pre-trade / what-if</strong> — resize / drop / add a position and see book VaR, ES, Total
     VaR, Specific vol and Risk HHI before vs after; the risk math is reproduced in numpy so the
     "before" reconciles with the cube and the delta is the trade's effect.</li>
+<li><strong>Drawdown</strong> — the constant-portfolio equity curve and max peak-to-trough over the
+    scenario path (the COVID crash reads ≈ −39%), the path lens VaR/ES miss.</li>
+<li><strong>Estimation universe (4-phase diagnostic)</strong> — for the held book: which index each
+    name sits in, point-in-time (membership); the DQ filtration funnel over the PIT S&amp;P 500 (§2·c);
+    the span / high-confidence check (is each holding inside the estimation universe's factor space, by
+    Mahalanobis distance); and <strong>style-drift attribution</strong> — the book's net factor
+    exposure over time, with each factor's drift split into rotation (new names) vs held-name loading
+    drift, to read the post-2021 tilt as intentional (→ benchmark) or not (→ hedge). See
+    <code>docs/universe-diagnostics-plan.md</code>.</li>
 </ul>
 
 <h2>9 · Limitations the numbers inherit</h2>
