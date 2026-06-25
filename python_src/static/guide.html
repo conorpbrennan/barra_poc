@@ -48,11 +48,19 @@
 </header>
 
 <p class="lead">Everything you see is computed by the Atoti cube and served through a small guarded
-API — the dashboard never invents a number. The top of the page carries four <b>status strips</b>
-(limits, data quality, VaR backtest, trends); every pivot view has an on-demand <b>risk-analyst
-commentary</b> button. This guide covers each.</p>
+API — the dashboard never invents a number. This guide covers each panel.</p>
 
-<h2>Top-of-page status strips</h2>
+<h2>Two pages: Overview and Pivot</h2>
+<p>The sidebar switches between two pages. <b>Overview</b> is the landing page — a whole-book read
+that doesn't depend on any pivot: a scorecard of the book's key risk numbers (Scenario VaR 99,
+Expected shortfall, max drawdown, effective bets, net/gross), each with a sparkline of its trend; a
+compact red/amber/green status line for limits / data quality / backtest; and every whole-book panel
+below as a closed drill-down (Risk · Universe · Changes &amp; Q&amp;A · Checks). <b>Pivot</b> is the
+exploration workspace — the generic grid over the cube, with its own per-view risk-analyst commentary.
+The split keeps book-level tooling off the view: nothing on Overview is tied to a specific pivot. Use
+<b>Open Pivot →</b> on the Overview header, or the sidebar switch, to move between them.</p>
+
+<h2>Overview — status strips</h2>
 
 <h3>🚦 Desk limits (RAG)</h3>
 <p>A red/amber/green read of the book against the desk limit set, shown on every view. It's

@@ -51,9 +51,13 @@ def _seed_repo():
         "hide_empty": True, "heat": True, "prec": 3})
 
 
-def _run():
+def _run(page="Pivot"):
+    # The app now lands on the Overview page; the pivot widgets only exist on the Pivot page, so
+    # default the harness there. Pass page="Overview" to exercise the landing scorecard.
     from streamlit.testing.v1 import AppTest
-    return AppTest.from_file("risk_pivot_app.py", default_timeout=90).run()
+    at = AppTest.from_file("risk_pivot_app.py", default_timeout=90)
+    at.session_state["page"] = page
+    return at.run()
 
 
 def _ss(at, k, d=None):
@@ -72,6 +76,29 @@ def t_default_mode_and_measures():
     assert _ss(at, "pv_rows") == ["Book"]
     # repository hidden in Pivot mode -> no view-load buttons
     assert not [b for b in at.button if str(b.key).startswith("load_")]
+
+
+@test
+def t_overview_landing_renders_scorecard():
+    at = _run(page="Overview")
+    assert not at.exception, list(at.exception)
+    # the landing renders without falling through to the pivot (no pivot multiselects on this page)
+    assert not [m for m in at.multiselect if str(m.key) == "pv_rows"], "pivot leaked onto Overview"
+    # scorecard hero numbers are present (markdown carries the sc-val labels)
+    blob = " ".join(m.value for m in at.markdown if isinstance(m.value, str))
+    assert "Scenario VaR 99" in blob and "Effective bets" in blob, "scorecard labels missing"
+    # and the page switch lands on Overview
+    assert _ss(at, "page") == "Overview"
+
+
+@test
+def t_overview_open_pivot_button_switches_page():
+    at = _run(page="Overview")
+    btn = [b for b in at.button if str(b.key) == "ov_to_pivot"]
+    assert btn, "Open Pivot button missing"
+    btn[0].click().run()
+    assert _ss(at, "page") == "Pivot"
+    assert not at.exception, list(at.exception)
 
 
 @test

@@ -307,6 +307,15 @@ st.markdown("""
   [data-testid="stSidebar"] [data-baseweb="tag"] {
       flex: 1 0 100% !important; max-width: 100% !important; margin: 1px 0 !important; }
   [data-testid="stSidebar"] [data-baseweb="tag"] span { max-width: none !important; }
+  /* ---- Overview landing: Tufte/Few scorecard ---- */
+  .ov-head { font-size: 1.18rem; font-weight: 600; color: #1a1a1a; margin: .1rem 0 0; }
+  .ov-asof { font-weight: 400; color: #8a8a8a; font-size: .9rem; }
+  .sc-lab { font-size: .7rem; letter-spacing: .03em; text-transform: uppercase; color: #8a8a8a;
+            white-space: nowrap; }
+  .sc-val { font-size: 1.7rem; font-weight: 500; color: #1a1a1a; line-height: 1.25; }
+  .ov-status { margin: .15rem 0; }
+  .ov-status .dot { font-size: .82rem; }
+  .ov-status .st-lab { font-size: .86rem; color: #44423d; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1119,6 +1128,132 @@ for _k in list(st.session_state.keys()):
             or _k.startswith("pv_gb_") or _k.startswith("pv_qry_")):
         st.session_state[_k] = st.session_state[_k]
 
+def _fmt_pct(v, dp=1):
+    return "—" if v is None else f"{v:.{dp}%}"
+
+
+def _fmt_num(v, dp=1):
+    return "—" if v is None else f"{v:.{dp}f}"
+
+
+def _spark(vals, color="#666"):
+    """A Tufte sparkline: thin line, no axes/grid/labels, an endpoint dot for the current value.
+    Quiet by construction — the trend's shape is the message, the scorecard number is the value."""
+    data = [{"i": i, "v": float(v)} for i, v in enumerate(vals) if v is not None]
+    if len(data) < 2:
+        return
+    spec = {
+        "height": 34, "background": "transparent",
+        "layer": [
+            {"mark": {"type": "line", "color": color, "strokeWidth": 1.3}},
+            {"mark": {"type": "point", "filled": True, "color": color, "size": 22},
+             "transform": [{"filter": f"datum.i == {data[-1]['i']}"}]},
+        ],
+        "encoding": {
+            "x": {"field": "i", "type": "quantitative", "axis": None},
+            "y": {"field": "v", "type": "quantitative", "axis": None, "scale": {"zero": False}},
+        },
+        "config": {"view": {"stroke": None}},
+    }
+    st.vega_lite_chart(spec, width="stretch")
+
+
+def render_status_line():
+    """The three health checks as small RAG dots on one line — color encodes status, nothing else.
+    The full detail tables live in the Overview's 'Checks' drill-down."""
+    parts = []
+    try:
+        lim = get("/limits")
+        if lim.get("configured"):
+            s = lim["status"]
+            parts.append(("Limits", {"breach": "red", "amber": "amber", "green": "green"}.get(s, "grey"),
+                          {"breach": "breach", "amber": "warning", "green": "OK"}.get(s, s)))
+    except Exception:
+        pass
+    try:
+        dq = get("/dq"); s = dq.get("status", "pass")
+        parts.append(("Data quality", {"fail": "red", "warn": "amber", "pass": "green"}.get(s, "grey"),
+                      {"fail": "fail", "warn": "warn", "pass": "pass"}.get(s, s)))
+    except Exception:
+        pass
+    try:
+        bt = get("/backtest")
+        if bt.get("status") == "ok":
+            z = bt["basel_zone"]
+            parts.append(("Backtest", z if z in ("red", "amber", "green") else "grey", z))
+    except Exception:
+        pass
+    if not parts:
+        return
+    dot = {"green": "#2e7d32", "amber": "#c77f00", "red": "#b03030", "grey": "#999"}
+    html = "&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;".join(
+        f"<span class='dot' style='color:{dot[c]}'>&#9679;</span> <span class='st-lab'>{lab} — {txt}</span>"
+        for lab, c, txt in parts)
+    st.markdown(f"<div class='ov-status'>{html}</div>", unsafe_allow_html=True)
+
+
+def render_overview():
+    """The landing page: overview-first per Few. A scorecard of the book's key risk numbers (each
+    with a Tufte sparkline of its trend), a compact RAG status line, then every whole-book panel as a
+    closed drill-down. Independent of the pivot — that's its own page."""
+    try:
+        recs = get("/trends").get("records", [])
+    except Exception:
+        recs = []
+    latest = recs[-1] if recs else {}
+    try:
+        dd = get("/drawdown")
+    except Exception:
+        dd = {}
+    try:
+        before = requests.post(f"{API}/whatif", json={"trades": []}, timeout=60).json().get("before", {})
+    except Exception:
+        before = {}
+
+    h1, h2 = st.columns([4, 1])
+    with h1:
+        st.markdown(f"<div class='ov-head'>Soros 13F &nbsp;·&nbsp; "
+                    f"<span class='ov-asof'>as of {latest.get('Date', '—')}</span></div>",
+                    unsafe_allow_html=True)
+    with h2:
+        if st.button("Open Pivot →", width="stretch", key="ov_to_pivot"):
+            st.session_state.page = "Pivot"; st.rerun()
+
+    hhi = latest.get("Risk HHI")
+    cards = [
+        ("Scenario VaR 99", _fmt_pct(latest.get("Scenario VaR 99")),
+         [r.get("Scenario VaR 99") for r in recs], "#7a2d2d"),
+        ("Expected shortfall 97.5", _fmt_pct(latest.get("Scenario ES 97.5")),
+         [r.get("Scenario ES 97.5") for r in recs], "#7a2d2d"),
+        ("Max drawdown", _fmt_pct(dd.get("max_drawdown")),
+         [p.get("equity") for p in dd.get("path", [])], "#555"),
+        ("Effective bets (1/HHI)", _fmt_num(1 / hhi if hhi else None),
+         [(1 / r["Risk HHI"]) if r.get("Risk HHI") else None for r in recs], "#2a4d69"),
+        ("Net / Gross", f"{_fmt_pct(before.get('net'), 0)} / {_fmt_pct(before.get('gross'), 0)}",
+         None, None),
+    ]
+    for col, (lab, val, series, color) in zip(st.columns(len(cards)), cards):
+        with col:
+            st.markdown(f"<div class='sc-lab'>{lab}</div><div class='sc-val'>{val}</div>",
+                        unsafe_allow_html=True)
+            if series:
+                _spark(series, color)
+    st.divider()
+    render_status_line()
+    st.divider()
+
+    st.caption("Details on demand")
+    t_risk, t_univ, t_chg, t_checks = st.tabs(["Risk", "Universe", "Changes & Q&A", "Checks"])
+    with t_risk:           # quantitative book-risk lenses
+        render_drawdown(); render_trends(); render_liquidity(); render_stress(); render_whatif()
+    with t_univ:           # estimation-universe diagnostics (Chris's review)
+        render_universe(); render_drift()
+    with t_chg:            # period-over-period change + the scoped-Q&A assistant
+        render_whatchanged(); render_ask()
+    with t_checks:         # the full health-check detail behind the status dots
+        render_limits_banner(); render_dq_badge(); render_backtest_badge()
+
+
 st.title("Flex Agg ++")
 
 
@@ -1157,18 +1292,23 @@ st.markdown(
     'style="border:none;font-size:14px;color:#3b5e8c">🗺 Risk-review response &amp; roadmap ↗</a>'
     + _excel_links(),
     unsafe_allow_html=True)
-render_limits_banner()
-render_dq_badge()
-render_backtest_badge()
-render_drawdown()
-render_trends()
-render_universe()
-render_drift()
-render_whatchanged()
-render_ask()
-render_liquidity()
-render_stress()
-render_whatif()
+
+# ---- Top-level page switch: Overview (the landing scorecard + all whole-book tooling) vs Pivot
+# (the view workspace). Default Overview. The nav lives at the top of the sidebar so it shows on
+# both pages; the radio is unkeyed and synced to st.session_state.page so the "Open Pivot →" button
+# can drive it too. On Overview we render and st.stop() — the pivot code below never runs.
+if "page" not in st.session_state:
+    st.session_state.page = "Overview"
+with st.sidebar:
+    _nav = st.radio("Page", ["Overview", "Pivot"], horizontal=True, label_visibility="collapsed",
+                    index=["Overview", "Pivot"].index(st.session_state.page))
+    if _nav != st.session_state.page:
+        st.session_state.page = _nav
+        st.rerun()
+
+if st.session_state.page == "Overview":
+    render_overview()
+    st.stop()
 
 
 def read_pivot_state():
