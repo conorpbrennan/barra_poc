@@ -694,6 +694,78 @@ def render_drift():
         st.caption("• " + d.get("note", ""))
 
 
+def render_whatchanged():
+    """Step 9: what changed quarter-over-quarter — positions in/out/resized, the factor-exposure
+    drift attributed (rotation vs loading drift), the book risk delta, plus an on-demand LLM
+    'what changed' read. Collapsed; silent if /whatchanged is down."""
+    with st.expander("📋 What changed (quarter-over-quarter)", expanded=False):
+        try:
+            wc = get("/whatchanged")
+        except Exception as e:
+            st.info(f"What-changed unavailable: {e}")
+            return
+        p = wc["positions"]
+        st.markdown(f"**{wc['from']} → {wc['to']}** · {p['n_before']} → {p['n_after']} names "
+                    f"({p['n_entered']} entered, {p['n_exited']} exited)")
+        c1, c2 = st.columns(2)
+        for col, items, label in [(c1, p["entered"], "Entered (new)"),
+                                  (c2, p["exited"], "Exited (dropped)")]:
+            with col:
+                if items:
+                    st.caption(f"{label}, by weight")
+                    df = pd.DataFrame(items); df["weight"] = df["weight"].map(lambda v: f"{v:.2%}")
+                    st.dataframe(df[["issuer", "ticker", "weight"]], hide_index=True,
+                                 use_container_width=True)
+        if p["resized"]:
+            with st.expander(f"Resized held names ({len(p['resized'])})", expanded=False):
+                rd = pd.DataFrame(p["resized"])
+                for c in ("w0", "w1", "delta"):
+                    rd[c] = rd[c].map(lambda v: f"{v:+.2%}")
+                st.dataframe(rd[["issuer", "ticker", "w0", "w1", "delta"]], hide_index=True,
+                             use_container_width=True)
+        ea = pd.DataFrame(wc["exposure_attribution"])
+        st.caption("Net factor-exposure drift by source (rotation = entered+exited; re-pricing = loading_drift)")
+        cols = ["factor", "before", "after", "delta", "src_entered", "src_exited",
+                "src_reweighted", "src_loading_drift"]
+        show = ea[cols].copy()
+        for c in cols[1:]:
+            show[c] = show[c].map(lambda v: "—" if v is None else f"{v:+.2f}")
+        st.dataframe(show, hide_index=True, use_container_width=True)
+        st.caption("Book risk delta (HistFull-equivalent, Market included; losses positive)")
+        rows = []
+        for k, lab, pct in [("scenario_var_99", "Scenario VaR 99", True), ("es_975", "ES 97.5", True),
+                            ("total_var_99", "Total VaR 99", True), ("specific_vol", "Specific vol", True),
+                            ("risk_hhi", "Risk HHI", False), ("gross", "Gross", True), ("net", "Net", True)]:
+            v = wc["risk"].get(k, {})
+            def fmt(x, pct=pct):
+                return "—" if x is None else (f"{x:.2%}" if pct else f"{x:.3f}")
+            d = v.get("delta")
+            rows.append({"Measure": lab, "Before": fmt(v.get("before")), "After": fmt(v.get("after")),
+                         "Δ": "—" if d is None else (f"{d:+.2%}" if pct else f"{d:+.3f}")})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption("• " + wc.get("note", ""))
+
+        st.divider()
+        _cache = st.session_state.setdefault("pv_wc_cache", {})
+        key = f"{wc['from']}->{wc['to']}"
+        notes = st.text_input("Optional context for the read", key="pv_wc_notes")
+        cached = _cache.get(key)
+        if st.button("Regenerate" if cached else "🔍 What-changed commentary", key="pv_wc_btn"):
+            try:
+                r = requests.post(f"{API}/whatchanged/analysis", json={"notes": notes or None},
+                                  stream=True, timeout=180)
+                r.raise_for_status(); r.encoding = "utf-8"
+                _cache[key] = st.write_stream(c for c in r.iter_content(chunk_size=None,
+                                              decode_unicode=True) if c)
+            except requests.HTTPError as e:
+                st.error(f"Failed: {e.response.text if e.response is not None else e}")
+            except requests.RequestException as e:
+                st.error(f"Request failed: {e}")
+        elif cached:
+            st.markdown(cached)
+            st.caption("Cached — click **Regenerate** for a fresh read.")
+
+
 def render_stress():
     """Custom & reverse stress. Custom: book P&L under user-set per-factor sigma shocks. Reverse:
     the single-factor sigma move that would breach a target loss, ranked by vulnerability."""
@@ -1024,6 +1096,7 @@ render_drawdown()
 render_trends()
 render_universe()
 render_drift()
+render_whatchanged()
 render_stress()
 render_whatif()
 

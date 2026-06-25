@@ -1470,3 +1470,149 @@ async def analysis(body: AnalysisBody):
         except anthropic.APIError as e:                              # mid-stream: 200 already sent
             yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
     return StreamingResponse(gen(), media_type="text/markdown")
+
+
+# ============================================================================ what changed (QoQ, LLM)
+# Step 9: diff this 13F filing against the prior and narrate the risk delta. The deterministic diff
+# (/whatchanged) is positions in/out/resized + the factor-exposure drift decomposed with Phase 4's
+# attribution + the book risk delta from the what-if math (cube-consistent). /whatchanged/analysis
+# hands that tidy diff to the Messages API (no tools, streamed) for a written read, like /analysis.
+
+WHATCHANGED_SYSTEM = """\
+You are a buy-side market-risk manager writing a short "what changed" note between two consecutive
+Soros 13F filings of a Barra-style equity factor-risk model. You receive only a tidy diff; reason
+ONLY from it and cite the figures. Never invent a position, issuer, date, or value.
+
+The payload has:
+- positions: names that ENTERED (new), EXITED (dropped), or were RESIZED (weight change) between the
+  `from` and `to` filings, with 13F weights (fractions of book, 0.03 = 3%).
+- exposure_attribution: the book's net factor exposure (Σ weight·loading) before/after per style
+  factor, and the drift Δ split into four sources that sum to Δ exactly — `src_entered`/`src_exited`
+  (names rotated in/out = ROTATION), `src_reweighted` (held names resized), `src_loading_drift` (held
+  names whose own loadings moved = RE-PRICING). Rotation-dominated drift is a deliberate tilt → the
+  desk may update the BENCHMARK; loading-drift-dominated is market re-pricing → update the HEDGE.
+- risk: book Scenario VaR 99/97.5, ES 97.5/99, Specific vol, Total VaR 99, Risk HHI, gross/net —
+  before vs after vs delta, computed on the full factor-return history (HistFull-equivalent, the
+  Market factor included so these read as real long-equity book risk). All are losses, positive.
+
+Hard rules:
+- LEAD with the single biggest change (a big new/dropped position, the factor that drifted most, or
+  the largest risk move). Then 3-5 bullets of what's notable. Then a short "So what" for the desk.
+- For the factor drift, say whether it looks intentional (rotation) or not (loading drift) and name
+  the implied action (benchmark vs hedge) — but only where the attribution actually supports it.
+- Cite weights and deltas. Tie risk moves back to the position/exposure changes that drove them.
+- Write plainly: direct, short sentences, tight GitHub-flavoured markdown. No preamble."""
+
+
+def _prior_filing_date(bpos: pd.DataFrame, d1: pd.Timestamp):
+    """The latest date strictly before d1 whose held-name set differs from d1's — i.e. the previous
+    distinct 13F book (the positions frame is monthly and flat between quarterly filings)."""
+    dates = sorted(d for d in pd.to_datetime(bpos["Date"].unique()) if d < d1)
+    if not dates:
+        return None
+    cur = frozenset(bpos[bpos["Date"] == d1]["Position"])
+    for d in reversed(dates):
+        if frozenset(bpos[bpos["Date"] == d]["Position"]) != cur:
+            return d
+    return dates[0]
+
+
+def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros") -> dict:
+    f = S["frames"]; exp, pos, sec = f["exposures"], f["positions"], f["securities"]
+    bpos = pos[pos["Book"] == book]
+    alldates = sorted(pd.to_datetime(bpos["Date"].unique()))
+    if not alldates:
+        raise HTTPException(404, f"no positions for book {book}")
+    d1 = max(d for d in alldates if d <= pd.Timestamp(date)) if date else alldates[-1]
+    d0 = (max(d for d in alldates if d <= pd.Timestamp(prev)) if prev
+          else _prior_filing_date(bpos, d1))
+    if d0 is None or d0 >= d1:
+        raise HTTPException(400, "no prior filing before this date")
+
+    issuer = dict(zip(sec["Position"], sec["Issuer"]))
+    ticker = dict(zip(sec["Position"], sec["Ticker"]))
+    b0 = bpos[bpos["Date"] == d0].set_index("Position")["Weight"]
+    b1 = bpos[bpos["Date"] == d1].set_index("Position")["Weight"]
+    set0, set1 = set(b0.index), set(b1.index)
+
+    def nm(p):
+        return {"issuer": issuer.get(p, ""), "ticker": ticker.get(p, "")}
+    entered = sorted(({**nm(p), "weight": float(b1[p])} for p in set1 - set0),
+                     key=lambda r: -r["weight"])
+    exited = sorted(({**nm(p), "weight": float(b0[p])} for p in set0 - set1),
+                    key=lambda r: -r["weight"])
+    resized = sorted(({**nm(p), "w0": float(b0[p]), "w1": float(b1[p]),
+                       "delta": float(b1[p] - b0[p])}
+                      for p in set0 & set1 if abs(float(b1[p] - b0[p])) > 0.005),
+                     key=lambda r: -abs(r["delta"]))
+
+    # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly
+    w0d, l0d = _ud.book_at(exp, pos, d0)
+    w1d, l1d = _ud.book_at(exp, pos, d1)
+    attr = _ud.decompose(w0d, l0d, w1d, l1d)
+    x0, x1 = _ud.book_exposure(w0d, l0d), _ud.book_exposure(w1d, l1d)
+    exposure = [{"factor": fc, "before": _clean(x0[fc]), "after": _clean(x1[fc]),
+                 "delta": _clean(attr[fc]["delta"]),
+                 **{f"src_{k}": _clean(attr[fc][k]) for k in _ud.SOURCES}}
+                for fc in sorted(_ud.STYLE, key=lambda k: abs(attr[k]["delta"]), reverse=True)]
+
+    # book risk delta — cube-consistent (the what-if math), full factor-return history
+    L0, wv0, s0, R = _book_inputs(str(d0.date()), book)
+    L1, wv1, s1, _ = _book_inputs(str(d1.date()), book)
+    r0, r1 = _risk_from_weights(wv0, L0, s0, R), _risk_from_weights(wv1, L1, s1, R)
+    risk = {k: {"before": _clean(r0[k]), "after": _clean(r1[k]),
+                "delta": _clean(r1[k] - r0[k]) if (r0[k] is not None and r1[k] is not None) else None}
+            for k in r0}
+
+    return {
+        "book": book, "from": str(d0.date()), "to": str(d1.date()),
+        "positions": {"entered": entered[:25], "exited": exited[:25], "resized": resized[:25],
+                      "n_entered": len(set1 - set0), "n_exited": len(set0 - set1),
+                      "n_before": len(set0), "n_after": len(set1)},
+        "exposure_attribution": exposure, "risk": risk,
+        "note": ("Factor drift is split into entered/exited (rotation) vs reweighted/loading_drift; "
+                 "rotation-led changes are a deliberate tilt (→ benchmark), loading-drift-led are "
+                 "re-pricing (→ hedge)."),
+    }
+
+
+@app.get("/whatchanged")
+async def whatchanged(date: str | None = Query(None, description="the 'to' filing; default latest"),
+                      prev: str | None = Query(None, description="the 'from' filing; default prior"),
+                      book: str = Query("Soros")):
+    """Deterministic quarter-over-quarter diff between two 13F filings: positions entered / exited /
+    resized, the net factor-exposure drift attributed (rotation vs loading drift, Phase 4), and the
+    book risk delta (VaR/ES/HHI/specific vol, what-if math). Grounds /whatchanged/analysis."""
+    return await run_in_threadpool(_whatchanged_result, date, prev, book)
+
+
+class WhatChangedBody(BaseModel):
+    date: str | None = None
+    prev: str | None = None
+    book: str = "Soros"
+    notes: str | None = None
+
+
+@app.post("/whatchanged/analysis")
+async def whatchanged_analysis(body: WhatChangedBody):
+    """Streamed risk-manager 'what changed' read between two filings. Computes the same deterministic
+    diff /whatchanged returns, then hands only those tidy numbers to the Messages API (no tools) for a
+    written read. Streams markdown. The model gets the diff and nothing else."""
+    _rate_limit()
+    client = _anthropic()          # 502 before the work if there's no key
+    diff = await run_in_threadpool(_whatchanged_result, body.date, body.prev, body.book)
+    payload = json.dumps({**diff, "desk_notes": body.notes or ""}, default=str)
+
+    def gen():
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-8", max_tokens=4000,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": WHATCHANGED_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": payload}],
+            ) as stream:
+                yield from stream.text_stream
+        except anthropic.APIError as e:
+            yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
+    return StreamingResponse(gen(), media_type="text/markdown")

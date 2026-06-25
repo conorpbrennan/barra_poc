@@ -58,8 +58,14 @@ and 13 → 14 once data sources are chosen.
 - [ ] **Step 8 · LLM — portfolio-level synthesis.** [S] One CRO-style narrative across several views
   at once, not per-view. Builds on `/analysis`. Touches: api, llm, test.
 
-- [ ] **Step 9 · LLM — "what changed" quarter-over-quarter.** [M] Diff this 13F filing vs the prior
-  and narrate the risk delta. Touches: api, llm, test.
+- [x] **Step 9 · LLM — "what changed" quarter-over-quarter.** [M] `GET /whatchanged?date=&prev=&book=`
+  diffs this 13F filing vs the prior: positions entered / exited / resized (by weight), the net
+  factor-exposure drift attributed with Phase 4's machinery (rotation vs loading drift), and the book
+  risk delta (VaR/ES/HHI/specific vol — cube-consistent via the what-if math). `POST
+  /whatchanged/analysis` streams a grounded "what changed" read (same plain Messages-API, no-tools
+  pattern as `/analysis`, model claude-opus-4-8). UI "📋 What changed (QoQ)" panel + on-demand
+  commentary button. Tests in `test_whatchanged.py` (unit + integ; live LLM opt-in via RUN_LLM=1).
+  Reuses Phase 4's `decompose`. Done.
 
 - [ ] **Step 10 · LLM — scoped Q&A drill-down.** [M] Give the model exactly one `query_cube` tool
   (the `/pivot` allowlist) via the Anthropic SDK tool runner, so it can pull slices itself — still

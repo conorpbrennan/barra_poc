@@ -53,6 +53,25 @@ returns a clean 502 and nothing else is affected. Model: `claude-opus-4-8`. Test
 `test_analysis.py` (unit guards always run; integration needs the backend; the one live LLM
 call is opt-in via `RUN_LLM=1`).
 
+## What changed quarter-over-quarter (`/whatchanged`)
+
+`risk_api.py` `GET /whatchanged?date=&prev=&book=` is a **deterministic** diff between two 13F
+filings: positions **entered / exited / resized** (by 13F weight), the book's net factor-exposure
+**drift attributed** with Phase 4's `barra_universe_drift.decompose` (each factor's Δ split into
+rotation = entered/exited vs re-pricing = loading_drift, summing to Δ exactly), and the **book risk
+delta** (Scenario VaR/ES, Total VaR 99, Risk HHI, specific vol, gross/net) computed at each date with
+the what-if math (`_book_inputs` + `_risk_from_weights`, so it's cube-consistent, on the full
+factor-return history). `prev` defaults to the previous *distinct* book (`_prior_filing_date` walks
+back past the flat monthly as-of months to the prior quarterly filing).
+
+`POST /whatchanged/analysis` streams a grounded "what changed" read of that diff — the **same plain
+Messages-API, no-tools pattern as `/analysis`** (model `claude-opus-4-8`, adaptive thinking, cached
+`WHATCHANGED_SYSTEM`), leading with the biggest change and flagging factor drift as intentional
+(rotation → benchmark) vs not (loading drift → hedge). UI "📋 What changed (QoQ)" panel
+(`render_whatchanged`): the diff tables + an on-demand commentary button. Tests: `test_whatchanged.py`
+(unit `_prior_filing_date`; integ shape + the four-source reconciliation; live LLM opt-in via
+`RUN_LLM=1`). Step 9 of the risk-tooling roadmap.
+
 ## Desk limits (`/limits`)
 
 `risk_api.py` has a `GET /limits?date=&set=&book=` endpoint that compares the book's numbers to a
