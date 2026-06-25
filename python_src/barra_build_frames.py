@@ -52,6 +52,13 @@ MCAP_FLOOR      = 1e7             # $10M; below this, shares data is assumed cor
 UNIVERSE_CAP    = 3500            # safety bound only; the universe is now index-seeded (see SEED_INDEX)
 UNIVERSE_EXTRA  = []             # add tickers (e.g. an index list) to broaden the estimation universe
 SEED_INDEX      = "sp500"         # seed the estimation cross-section with a market index (None to disable)
+UNCAP_COVERAGE  = True            # estimation/coverage split (Chris's DQ point): standardize on the
+                                  # estimation universe (the index seed), winsorize estimation loadings,
+                                  # leave COVERAGE (held-but-not-estimation) loadings UNCAPPED, and fit
+                                  # factor returns on estimation names only. False -> legacy (cap all).
+COVERAGE_CAP    = 10.0            # backstop clip for coverage loadings: lets a genuine large tilt (a
+                                  # tiny name's Size ~ -6) through, but clamps corrupt-data blowups
+                                  # (negative-equity Leverage, etc.). Estimation stays winsorized at ±3.
 SP500_URL       = ("https://raw.githubusercontent.com/datasets/"
                    "s-and-p-500-companies/main/data/constituents.csv")
 MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta regression
@@ -477,6 +484,35 @@ def _winsor_z(s: pd.Series) -> pd.Series:
     z = ((s - med) / scale).clip(-3, 3)
     return (z - z.mean()) / (z.std() + 1e-12)
 
+
+def _split_z(s: pd.Series, is_est: pd.Series) -> pd.Series:
+    """Estimation/coverage standardization (Chris's data-quality point). Centre/scale by the
+    ESTIMATION sub-cross-section's median/MAD, winsorise the estimation rows at ±3 (so a corrupt or
+    extreme descriptor can't blow up the factor-return regression) — but leave the COVERAGE rows
+    UNCAPPED. A held name far below anything in the estimation universe then reads its true large
+    loading (e.g. a tiny name's Size at −6), which is the correct statement, not a clip to −3. Both
+    sets are re-centred on the estimation post-clip mean/std so they share one scale. Falls back to the
+    full cross-section when the estimation subset is too thin to standardise against (or when
+    UNCAP_COVERAGE is off, since then every row is flagged estimation)."""
+    s = s.astype(float).replace([np.inf, -np.inf], np.nan)
+    if is_est.sum() < 10:                               # too few estimation names: use all as reference
+        is_est = pd.Series(True, index=s.index)
+    est = s[is_est]
+    med = est.median()
+    scale = 1.4826 * (est - med).abs().median()          # MAD -> sigma, estimation-only
+    if not scale > 1e-12:
+        return pd.Series(np.nan, index=s.index)
+    z = (s - med) / scale
+    # estimation rows winsorized at ±3; coverage rows clipped only at the loose COVERAGE_CAP backstop
+    # (genuine large tilts survive, corrupt-data blowups don't).
+    z_out = z.clip(-3, 3).where(is_est, z.clip(-COVERAGE_CAP, COVERAGE_CAP))
+    ref = z.clip(-3, 3)[is_est]                          # estimation post-clip -> the common scale
+    mu, sd = ref.mean(), ref.std()
+    if not sd > 1e-12:
+        return pd.Series(np.nan, index=s.index)
+    return (z_out - mu) / sd
+
+
 def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
                     cal: pd.DatetimeIndex, mkt: pd.DataFrame) -> pd.DataFrame:
     pdsc = price_descriptors(prices, cal, mkt)
@@ -509,17 +545,24 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
     raw = pdsc.merge(fund, on=["ticker", "Date"], how="outer")
-    raw = raw.merge(sec[["ticker", "figi"]], on="ticker", how="left").dropna(subset=["figi"])
+    est_col = sec[["ticker", "figi"]].copy()
+    est_col["is_estimation"] = sec["is_estimation"] if "is_estimation" in sec else True
+    raw = raw.merge(est_col, on="ticker", how="left").dropna(subset=["figi"])
+    raw["is_estimation"] = raw["is_estimation"].fillna(False).astype(bool)
 
-    # cross-sectional winsorize + z-score each date; orthogonalize NonLinSize to Size
+    # cross-sectional standardize each date AGAINST THE ESTIMATION UNIVERSE (estimation rows capped,
+    # coverage rows uncapped); orthogonalize NonLinSize to Size on the estimation fit.
     out = []
     for d, g in raw.groupby("Date"):
         g = g.copy()
+        em = g["is_estimation"]
         for f in [c for c in STYLE_FACTORS if c in g]:
-            g[f] = _winsor_z(g[f].astype(float))
+            g[f] = _split_z(g[f].astype(float), em)
         if {"NonLinSize", "Size"}.issubset(g):           # remove the part explained by Size
-            b = np.polyfit(g["Size"].fillna(0), g["NonLinSize"].fillna(0), 1)
-            g["NonLinSize"] = _winsor_z(g["NonLinSize"] - (b[0] * g["Size"] + b[1]))
+            ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
+            sz, nls = g["Size"].fillna(0.0), g["NonLinSize"].fillna(0.0)
+            b = np.polyfit(sz[ref], nls[ref], 1)
+            g["NonLinSize"] = _split_z(g["NonLinSize"] - (b[0] * g["Size"] + b[1]), em)
         out.append(g)
     panel = pd.concat(out, ignore_index=True)
     long = panel.melt(id_vars=["figi", "Date"], value_vars=STYLE_FACTORS,
@@ -537,6 +580,11 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     All risk numbers downstream are therefore 1-DAY horizon.
     """
     fig2tkr = sec.set_index("figi")["ticker"].to_dict()
+    # ESTIMATION/COVERAGE split: factor returns are fit on the ESTIMATION universe only (clean,
+    # capped names), but specific residuals are formed for EVERY coverage name against those fitted
+    # returns (a held-but-not-estimation name still needs a specific-risk forecast). Falls back to
+    # the full cross-section when no estimation flag is present (legacy / UNCAP_COVERAGE off).
+    est_pos = set(sec.loc[sec["is_estimation"], "figi"]) if "is_estimation" in sec else set(sec["figi"])
     # Daily return matrix (days x tickers). One-day moves beyond ±50% are treated as data
     # errors (Yahoo adjclose split/glitch artifacts) and masked, not clipped: a fake -90%
     # would otherwise land in one day's regression and contaminate every factor return.
@@ -547,41 +595,42 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     dates = sorted(exp_long["Date"].unique())
     # Barra timing: exposures update monthly; factor returns are estimated DAILY by
     # regressing each day's stock returns on the latest *prior* month-end exposures.
-    # Daily granularity is what makes the scenario tails real (~2,200 obs vs 89 months).
     for d0, d1 in zip(dates, dates[1:] + [pd.Timestamp(END)]):
         # Missing standardized exposure = 0 (the market-average tilt; Barra convention).
-        # Requiring complete 10-factor rows here (the old .dropna()) shrank thin months
-        # below the 30-name minimum and silently dropped 15 whole months of factor
-        # returns. Keep names carrying at least 6 of 10 loadings (the full price block
-        # plus some fundamentals) and zero-fill the rest; columns left without real
-        # cross-sectional spread are removed by the degeneracy guard below.
+        # Keep names carrying at least 6 of 10 loadings and zero-fill the rest.
         Xd = X.loc[d0]
         Xd = Xd[Xd.notna().sum(axis=1) >= 6].fillna(0.0)
-        # Drop factor columns with (near-)zero cross-sectional spread on this date: a
-        # ~constant regressor is collinear with the intercept and lstsq answers with
-        # huge offsetting coefficients (the historical Value/EarnYield blowups). The
-        # robust z-scoring upstream should prevent this; the guard keeps the solver
-        # safe regardless of how exposures were produced.
-        Xd = Xd.loc[:, Xd.std() > 0.05]
-        if len(Xd) < 30 or "Size" not in Xd:            # Size also needed for WLS weights
+        # restrict to names with a daily return series (needed for fit AND residuals)
+        tk_all = pd.Series({fig: fig2tkr.get(fig) for fig in Xd.index})
+        Xd = Xd[tk_all.reindex(Xd.index).isin(R.columns).values]
+        # the FIT cross-section is estimation names only; pick the regressor columns and the
+        # degeneracy guard on that sub-cross-section (a ~constant regressor is collinear with the
+        # intercept and lets lstsq answer with huge offsetting coefficients).
+        em = Xd.index.isin(est_pos)
+        Xe = Xd[em].loc[:, Xd[em].std() > 0.05]
+        if len(Xe) < 30 or "Size" not in Xe:            # Size also needed for WLS weights
             continue
-        tk = pd.Series({fig: fig2tkr.get(fig) for fig in Xd.index})
-        Xd = Xd[tk.reindex(Xd.index).isin(R.columns).values]
-        figs = Xd.index
-        Xm = np.column_stack([np.ones(len(figs)), Xd.values])        # intercept = Market factor
-        W = np.sqrt(np.exp(Xd["Size"].values) ** 0.5)                # Barra: weight ~ sqrt(mktcap)
+        cols = list(Xe.columns)
+        figs_all = Xd.index
+        tk_all = tk_all[figs_all].values
+        Xm_all = np.column_stack([np.ones(len(figs_all)), Xd[cols].values])   # all coverage names
+        Xm_est = Xm_all[em]                                                   # estimation subset
+        W = np.sqrt(np.exp(Xe["Size"].values) ** 0.5)                        # Barra: weight ~ sqrt(mktcap)
         days = R.index[(R.index > d0) & (R.index <= d1)]
-        Rsub = R.loc[days, tk[figs].values]
+        Rsub = R.loc[days, tk_all]
         for d in days:
-            y = Rsub.loc[d].values
-            ok = ~np.isnan(y)
-            if ok.sum() < 30:
+            y_all = Rsub.loc[d].values
+            y_est = y_all[em]
+            ok_e = ~np.isnan(y_est)
+            if ok_e.sum() < 30:                          # not enough estimation names to fit
                 continue
-            beta, *_ = np.linalg.lstsq(Xm[ok] * W[ok, None], y[ok] * W[ok], rcond=None)
-            for name, b in zip(["Market"] + list(Xd.columns), beta):
+            beta, *_ = np.linalg.lstsq(Xm_est[ok_e] * W[ok_e, None], y_est[ok_e] * W[ok_e], rcond=None)
+            for name, b in zip(["Market"] + cols, beta):
                 fac_rows.append({"Date": d, "Factor": name, "Return": b})
-            resid = y[ok] - Xm[ok] @ beta
-            for fig, u in zip(figs[ok], resid):
+            # specific residual for EVERY coverage name with a return that day (estimation + held)
+            resid_all = y_all - Xm_all @ beta
+            ok_a = ~np.isnan(y_all)
+            for fig, u in zip(figs_all[ok_a], resid_all[ok_a]):
                 spec_rows.append({"Date": d, "Position": fig, "u2": u * u})
     factor_returns = pd.DataFrame(fac_rows)
     spec = pd.DataFrame(spec_rows).sort_values(["Position", "Date"])
@@ -624,6 +673,16 @@ def build_frames():
         sec = pd.concat([sec, extra], ignore_index=True).drop_duplicates("figi")
     sec = sec.head(UNIVERSE_CAP).reset_index(drop=True)
     sec["cik"] = sec["cik"].astype(int)
+    # Estimation/coverage split: the ESTIMATION universe is the clean market-index seed (the S&P 500),
+    # the names the factor returns are fit on and whose loadings are winsorized. COVERAGE = estimation
+    # ∪ every held name; coverage-only names (held but not in the seed) get UNCAPPED loadings + their
+    # own specific risk, but never enter the factor-return regression. With the split off (or no seed)
+    # every name is estimation, reproducing the legacy single-universe behaviour.
+    seed_set = set(index_constituents()) if (SEED_INDEX and UNCAP_COVERAGE) else set()
+    sec["is_estimation"] = sec["ticker"].isin(seed_set) if seed_set else True
+    n_est = int(sec["is_estimation"].sum())
+    print(f"universe: {len(sec)} coverage names; estimation (seed ∩ data) = {n_est}, "
+          f"coverage-only (uncapped) = {len(sec) - n_est}", flush=True)
 
     # --- raw market + fundamentals pulls (parallel, cached, with progress) --
     print(f"data pull: {len(sec)} names ({_HTTP['hit']} cache hits so far)", flush=True)
