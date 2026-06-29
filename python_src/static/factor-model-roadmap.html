@@ -139,11 +139,12 @@ choose the FHS backtest estimator.</p>
 required liquidity / market-cap screen, and is a point-in-time membership source available to us?</p>
 </div>
 
-<h2><span class="n">3</span>Cap the estimation universe, not the coverage universe <span class="status">&nbsp; <span class="dot d-designed"></span>Designed</span></h2>
+<h2><span class="n">3</span>Cap the estimation universe, not the coverage universe <span class="status">&nbsp; <span class="dot d-done"></span>Done — shipped</span></h2>
 <p class="mn quote"><b>Chris:</b> “If your estimation universe is SPX and your coverage universe is Russell 3000, the small names will have very negative size loadings, and that is correct.”</p>
-<p><b>Today we do the opposite of his last point:</b> the standardiser <code>_winsor_z</code> clips every
-loading at ±3σ for every name — estimation and coverage alike. A genuinely tiny holding's Size loading
-is clipped to −3 instead of reading its true, larger-magnitude value.</p>
+<p><b>This is now exactly his last point.</b> Previously the standardiser <code>_winsor_z</code> clipped
+every loading at ±3σ for every name — estimation and coverage alike — so a genuinely tiny holding's Size
+loading was clipped to −3 instead of reading its true, larger-magnitude value. The standardiser is now
+<code>_split_z</code>, which keys off the §2 estimation flag and clips only estimation names.</p>
 <h3>Methodology — the standardisation</h3>
 <p>A descriptor <code>x</code> is turned into a loading by a robust z-score against the cross-section's
 median and MAD (median absolute deviation, scaled to a normal σ):</p>
@@ -151,14 +152,15 @@ median and MAD (median absolute deviation, scaled to a normal σ):</p>
 MAD   = 1.4826 · median(|x − med|)
 z     = (x − med) / MAD
 load  = (z − mean(z)) / std(z)        ← re-standardised to mean 0, std 1</span>
-<p>The fix splits this in two, keyed off §2:</p>
+<p><code>_split_z</code> splits this in two, keyed off §2:</p>
 <ul class="tight">
 <li><b>Estimation names:</b> compute med/MAD here, and <em>winsorise</em> — clip <code>z</code> to ±3 —
   before regressing. This protects the regression from a corrupt or extreme descriptor blowing up
   every factor return (the historical condition-number failures).</li>
-<li><b>Coverage names:</b> standardise against the <em>estimation</em> universe's med/MAD, and <b>do not
-  clip</b>. A held name far smaller than anything in SPX correctly reads, say, −6 — six estimation-MADs
-  below the median. That is a real exposure; capping it understates the book's size tilt.</li>
+<li><b>Coverage names:</b> standardise against the <em>estimation</em> universe's med/MAD, and leave the
+  loading <b>uncapped</b> — only a loose ±10 backstop (<code>COVERAGE_CAP</code>) clamps a corrupt XBRL
+  value. A held name far smaller than anything in SPX correctly reads, say, −6 — six estimation-MADs
+  below the median. That is a real exposure; capping it would understate the book's size tilt.</li>
 </ul>
 <p>Capping belongs in estimation (clean fit), not in coverage (faithful exposure). Exactly his point.</p>
 
