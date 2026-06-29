@@ -254,6 +254,93 @@ risk and a concentration measure treats them as two independent bets when they a
 <p class="small">This touches the model's core “diagonal specific block, no full specific covariance”
 assumption, so it needs a short design pass before code — flagged, not hidden.</p>
 
+<h2><span class="n">9</span>PnL attribution — projected vs. realised, by factor and residual <span class="status">&nbsp; <span class="dot d-designed"></span>Designed</span></h2>
+<p class="mn quote"><b>Chris:</b> “Show the projected PnL from the factor model over a period versus the actual realised PnL, broken down by factor and by residual. Check whether the residuals are large, and if they are, whether they're correlated — ideally uncorrelated, which shows the PM is doing a good job.”</p>
+<p class="mn quote"><b>Chris, 29 Jun (endorsed):</b> “It's really the connection between the PnL attribution and the risk decomposition at the start of the period that tells you how good the risk management of the portfolio is.”</p>
+<p class="lede">A performance-attribution report: split the book's realised PnL into what the factor
+model explains and what it doesn't, then test the residual.</p>
+<p><b>Get one thing straight first.</b> A factor risk model explains return after the fact — it does not
+forecast it. So “projected PnL” is not a return forecast; it is the factor-explained part of the
+<em>realised</em> return:</p>
+<span class="eq">R_p(t) = Σ_k x_k(t)·f_k(t)  +  u_p(t)
+x_k = Σ_i w_i·loading_i,k     ← book net exposure to factor k
+u_p = Σ_i w_i·ε_i             ← residual (specific) return
+ε_i = R_i − Σ_k loading_i,k·f_k   ← the WLS residual the fit already computes</span>
+<p>The factor PnL is <code>Σ_k x_k·f_k</code>; the residual is <code>u_p</code>. They sum to realised by
+construction, because <code>ε_i</code> is the same residual <code>regress_factors</code> already produces
+and currently discards (only its square is kept, as <code>SpecificVar</code>). We keep that residual as a
+new <code>specific_returns</code> frame so the cube can carry it as a measure — it is the model's own
+number, not an approximation.</p>
+<h3>Methodology — the realised engine</h3>
+<p>Realised PnL is built bottom-up from the ~1,000 name price series, <em>not</em> from the cube (which
+has no realised-PnL measure, only hypothetical scenarios):</p>
+<ul class="tight">
+<li><b>Unit NAV per name</b> — daily close → daily return → cumulative product, an index base 1.0.</li>
+<li><b>Drifting (buy-and-hold) weights</b> — anchor at each 13F filing, then let each name's NAV compound
+  so the book weights drift with the market until the next filing. That is what actually happened to the
+  book between filings; it is more honest than the constant-portfolio assumption the drawdown and
+  backtest lenses use.</li>
+<li><b>Price-only</b>, both sides — the factor model is price-only, so the realised return fed in is the
+  same return the regression saw. Mixing in a dividend-adjusted series would make the residual absorb
+  every dividend as fake alpha. Dividends are excluded both sides, disclosed.</li>
+</ul>
+<p>The decomposition then ties out three ways — realised (bottom-up) = Σ factor contribution + specific,
+to machine precision daily — and is Carino-linked over the period so the by-factor contributions sum
+exactly to the compounded book return with no plug.</p>
+<h3>Methodology — the residual diagnostics</h3>
+<p>The residual <code>u_p</code> is the part the model can't explain — the PM's stock-specific bets. Chris's
+question is whether it is large and whether it is correlated.</p>
+<ul class="tight">
+<li><b>Large?</b> — specific return as % of total; realised vs. model-predicted specific vol (calibration
+  of the diagonal block); information ratio <code>mean(u_p)/std(u_p)</code> (the stock-picking number).</li>
+<li><b>Correlated? — three tests.</b> (1) <em>Serial</em>: autocorrelation of <code>u_p</code> over time
+  (AR1 + Ljung-Box) — persistent residual means a slow unhedged systematic bet dressed up as skill.
+  (2) <em>Vs. factors</em>: regress <code>u_p</code> on the factor returns — a loading means beta is
+  leaking into “alpha”. (3) <em>Cross-sectional</em>: PCA on the name-level residual panel — a dominant
+  component means a common factor the model misses (a theme or crowded bet).</li>
+<li><b>Bias statistics</b> — the standard Barra/MSCI check: standardise realised by predicted vol,
+  <code>B = std(z)</code> over a rolling window, for the book, each factor, and the specific block.
+  <code>B ≈ 1</code> calibrated.</li>
+</ul>
+<p><b>The read for Chris:</b> low autocorrelation, low residual PC1 share, positive IR → genuine
+diversified stock-picking, the PM is doing well. High autocorrelation or a dominant residual component →
+the “alpha” is really an unmodelled common bet → tell the PM, add the missing factor, or hedge it. Also
+surfaced: by-sector / by-name attribution, residual concentration (HHI), hit rate, and factor-timing vs.
+static tilt.</p>
+<h3>Linkage to the risk decomposition (Chris's follow-up)</h3>
+<p>Reviewing this, Chris's main point was that a PnL attribution is most useful <em>connected to the risk
+decomposition at the start of the period</em>, not on its own. The loop: (1) decompose risk at date T —
+which factors and positions drive total risk; (2) check the exposures are within limits and are the
+intended bets; (3) exit or hedge what isn't; (4) attribute the PnL over T→T+1 and check it matches what
+the risk decomposition led you to expect.</p>
+<p>The test is whether the realised return sits in the range of outcomes the risk decomposition implied.
+A bet that paid in proportion to its risk is understood; a loss on something the risk decomposition
+called low-risk is a <b>surprise</b> — a sign the risk wasn't fully understood up front. The ex-ante side
+already exists: marginal contribution to VaR by factor and position, the limits check, and the VaR
+backtest (Chris's own analogy — too many exceptions means the VaR model is missing something). So the
+linkage reuses it: the <b>same pivot grid carries two columns</b> — contribution to risk at T next to
+realised PnL over T→T+1 — and a <b>surprise ranking</b> leads with the biggest loss relative to its
+ex-ante risk. That connection, more than the standalone attribution, is what shows how well the book is
+being risk-managed.</p>
+
+<h3>Drill-through — parent to child</h3>
+<p>The factor breakdown is the parent; clicking a factor expands to the names beneath it — <em>which
+positions made that factor bet</em> — and the column still sums to the factor row above. It foots
+because the parent value is itself a sum over names (<code>x_k·f_k = Σ_i w_i·loading_i,k·f_k</code>), and
+the same data drills both ways: factor → name, or name → factor (why a position made money, its factor
+mix plus specific). This is built <b>cube-native</b>: three additive measures (<code>Factor
+contribution</code>, <code>Specific PnL</code>, <code>Realised PnL</code>) in the existing pivot grid, so
+the drill, the slicing and the re-pivot are native — and the written commentary and Q&amp;A inherit them.</p>
+<p class="small">The cube measures are additive (the same class as net exposure — no heavy scenario
+vectors, so no performance penalty). Persisting the residual adds a seventh data frame
+(<code>specific_returns</code>), a deliberate, contained change that needs a rebuild — the price of a
+live reconciling drill rather than a static table. The statistics the cube can't express (period
+linking, the residual correlation tests, bias stats) sit in a thin Python layer:
+<code>barra_pnl_attribution.py</code>, the <code>/attribution</code> + <code>/attribution/residual</code>
+endpoints, and a dashboard panel. A by-product is a true realised track record, which upgrades the
+constant-portfolio inputs the drawdown and backtest lenses use today. Full spec in the companion note
+<code>docs/pnl-attribution-plan.md</code>.</p>
+
 <hr>
 
 <h2>Roadmap at a glance</h2>
@@ -267,13 +354,15 @@ assumption, so it needs a short design pass before code — flagged, not hidden.
 <tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-designed"></span>Partial</td><td class="small">evidence shipped</td><td class="small">style-drift attribution panel: rotation vs loading drift; final call needs desk intent</td></tr>
 <tr><td>7</td><td>Full orthogonalisation + diagnostics</td><td><span class="dot d-designed"></span>Partial</td><td class="small">moderate</td><td class="small">builder change</td></tr>
 <tr><td>8</td><td>Linked securities</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">design first</td><td class="small">block-diagonal specific risk</td></tr>
+<tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-designed"></span>Designed — endorsed</td><td class="small">~1.5–2 wk</td><td class="small">projected vs. realised by factor + residual; residual correlation tests; linked to the risk decomposition at T</td></tr>
 </tbody>
 </table>
 <p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (done — the keystone, now
 live and the basis for the span and style-drift panels; it unblocked the uncapped coverage loadings) →
 the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel; <b>active
 risk</b> remains blocked on a benchmark source → orthogonalisation diagnostics and linked securities as
-they fit.</p>
+they fit. <b>PnL attribution</b> (§9) is specced and ready to build — independent of the blocked items,
+so it can go next.</p>
 
 <p class="foot">Generated for the factor-model risk review. Methodology cross-refers to
 <code>barra_build_frames.py</code> (estimation), <code>barra_factor_risk_cube.py</code> (risk engine),
