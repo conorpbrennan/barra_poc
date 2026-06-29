@@ -316,6 +316,11 @@ st.markdown("""
   .ov-status { margin: .15rem 0; }
   .ov-status .dot { font-size: .82rem; }
   .ov-status .st-lab { font-size: .86rem; color: #44423d; }
+  /* the Pivot page's "← Overview" back link: quiet, link-styled (not a heavy button) */
+  .st-key-pv_to_overview button { border: none !important; background: transparent !important;
+       color: #3b5e8c !important; padding: 0 !important; min-height: 0 !important;
+       font-size: 14px !important; font-weight: 400 !important; box-shadow: none !important; }
+  .st-key-pv_to_overview button:hover { color: #1a1a1a !important; text-decoration: underline; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1218,6 +1223,7 @@ def render_overview():
     with h2:
         if st.button("Open Pivot →", width="stretch", key="ov_to_pivot"):
             st.session_state.page = "Pivot"; st.rerun()
+    _doc_links()
 
     hhi = latest.get("Risk HHI")
     cards = [
@@ -1281,17 +1287,20 @@ def _excel_links() -> str:
     return ('&nbsp;&nbsp;·&nbsp;&nbsp;' + '&nbsp;&nbsp;·&nbsp;&nbsp;'.join(out)) if out else ""
 
 
-st.markdown(
-    '<a href="app/static/guide.html" target="_blank" rel="noopener" '
-    'style="border:none;font-size:14px;color:#3b5e8c">📖 Dashboard guide / docs ↗</a>'
-    '&nbsp;&nbsp;·&nbsp;&nbsp;'
-    '<a href="app/static/barra_model_reference.html" target="_blank" rel="noopener" '
-    'style="border:none;font-size:14px;color:#3b5e8c">📐 Model &amp; data reference ↗</a>'
-    '&nbsp;&nbsp;·&nbsp;&nbsp;'
-    '<a href="app/static/factor-model-roadmap.html" target="_blank" rel="noopener" '
-    'style="border:none;font-size:14px;color:#3b5e8c">🗺 Risk-review response &amp; roadmap ↗</a>'
-    + _excel_links(),
-    unsafe_allow_html=True)
+def _doc_links():
+    """The doc / reference links — rendered on the Overview landing only (the Pivot page keeps just a
+    quiet link back to Overview)."""
+    st.markdown(
+        '<a href="app/static/guide.html" target="_blank" rel="noopener" '
+        'style="border:none;font-size:14px;color:#3b5e8c">📖 Dashboard guide / docs ↗</a>'
+        '&nbsp;&nbsp;·&nbsp;&nbsp;'
+        '<a href="app/static/barra_model_reference.html" target="_blank" rel="noopener" '
+        'style="border:none;font-size:14px;color:#3b5e8c">📐 Model &amp; data reference ↗</a>'
+        '&nbsp;&nbsp;·&nbsp;&nbsp;'
+        '<a href="app/static/factor-model-roadmap.html" target="_blank" rel="noopener" '
+        'style="border:none;font-size:14px;color:#3b5e8c">🗺 Risk-review response &amp; roadmap ↗</a>'
+        + _excel_links(),
+        unsafe_allow_html=True)
 
 # ---- Top-level page switch: Overview (the landing scorecard + all whole-book tooling) vs Pivot
 # (the view workspace). Default Overview. The nav lives at the top of the sidebar so it shows on
@@ -1309,6 +1318,11 @@ with st.sidebar:
 if st.session_state.page == "Overview":
     render_overview()
     st.stop()
+
+# Pivot page: a quiet link back to the Overview landing (the doc links live on Overview only).
+if st.button("← Overview", key="pv_to_overview"):
+    st.session_state.page = "Overview"
+    st.rerun()
 
 
 def read_pivot_state():
