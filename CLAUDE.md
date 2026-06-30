@@ -47,9 +47,13 @@ lives in `ANALYST_SYSTEM`. The Streamlit UI calls it from an on-demand "🔍 Ris
 commentary" button under the grid (no token spend unless clicked; cached per view+slice).
 
 `ANTHROPIC_API_KEY` is required for `/analysis` only. The process env wins; otherwise the key
-is read **only** from the repo `.env` (`_anthropic_key`) — the rest of `.env` is never sourced
-because its `ATOTI_LICENSE` path is broken and would break the cube. Without a key, `/analysis`
-returns a clean 502 and nothing else is affected. Model: `claude-opus-4-8`. Tests:
+is read **only** from the repo `.env` (`_anthropic_key`) — the API still does **not** source the
+whole `.env` (it extracts just the key) to keep the service env minimal. The Atoti license is
+supplied out-of-band by the `flexagg-api.service` systemd unit
+(`Environment=ATOTI_LICENSE=…/ActivePivot.lic.43457`), which disables telemetry; the `.env`
+`ATOTI_LICENSE` path typo (`barra-_poc` → `barra_poc`) was fixed 2026-06-30, so it now resolves
+too. Without a key, `/analysis` returns a clean 502 and nothing else is affected. Model:
+`claude-opus-4-8`. Tests:
 `test_analysis.py` (unit guards always run; integration needs the backend; the one live LLM
 call is opt-in via `RUN_LLM=1`).
 
@@ -311,10 +315,16 @@ Total VaR ≈ 3.6%, unchanged headline). See `docs/estimation-coverage-design.md
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data
 reference). Streamlit static serving is enabled (`.streamlit/config.toml` → `enableStaticServing`),
-so files in `python_src/static/` are served at `<baseUrlPath>/app/static/...` (behind the same gate).
-`static/guide.html` is hand-written (the feature guide). `static/barra_model_reference.html` is
-**generated** by `barra_cro_report.py`, which now writes to both `tmp/` (the CLI artifact) and
-`python_src/static/`; rerun it to refresh. Tests: `test_docs.py`.
+served at `<baseUrlPath>/app/static/...` (behind the same gate). **The files live in repo-root
+`docs/static/`; `python_src/static` is a symlink to `../docs/static`** — Streamlit requires the served
+folder be named `static` beside the entrypoint, so the symlink keeps serving working while the docs sit
+with the rest of `docs/`. So a filesystem path like `python_src/static/<f>` still resolves (through the
+symlink) and the served URL `app/static/<f>` is unchanged. `guide.html` is hand-written (the feature
+guide). `barra_model_reference.html` is **generated** by `barra_cro_report.py`, which writes to both
+`tmp/` (the CLI artifact) and `python_src/static/` (→ `docs/static/`); rerun it to refresh. The
+client-facing review docs also live here: `factor-model-roadmap.html` + `factor-model-roadmap-summary.html`
+and their PDFs (`Factor-Model-Roadmap.pdf`, `Factor-Model-Summary.pdf`, rendered with weasyprint).
+Tests: `test_docs.py`.
 
 ## New UI (Vite) — layout & design (Tufte & Few)
 
@@ -341,6 +351,34 @@ charts and tables follow Edward Tufte and Stephen Few — a hard requirement, no
 Palette/typography match the static docs (`python_src/static/*.html`): `--bg:#fffff8`, `--ink:#111`,
 grey `--faint:#6b6b63`, one accent `#3b5e8c`; RAG green/amber/red for status only. Full plan:
 `docs/vite-ui-plan.md`.
+
+**Implemented** under `frontend/` (Vite + React + TS; `npm run dev|build|test`). It is a pure client
+of the existing endpoints — the **only** backend change is the saved-views CRUD wrapper `views_api.py`
+(a FastAPI `APIRouter` over `views_repo`, mounted in `risk_api.py`; no cube dependency, tested by
+`test_views_api.py`). Lenses: Overview (hero + sparklines + limits bullet graphs + RAG strip + top
+exposures + QoQ), Pivot (dnd-kit field list → server-side `/pivot` drill in AG Grid as a pure
+renderer, grand-total only since VaR is non-additive; react-vega chart mode; `/views` Repository;
+on-demand `/analysis`), Trends/Drawdown, Stress, What-if, Liquidity, Universe (membership/funnel/span
++ live scatter), Drift, Attribution, Changes, Ask, Checks. Global context bar (book/date/scenario,
+§9). Streamed LLM panels consume raw `text/markdown` via `ReadableStream`. Served at `/flexagg2++/`
+same-origin under `/flexagg2++/api` — **alongside** the unchanged `flexagg++` Streamlit app; ops in
+`docs/vite-ui-serving.md` (build → nginx alias + proxy with `proxy_buffering off`; restart the cube
+once for `/views`). The PnL-attribution tab is stubbed pending the Step-15 `/pnl_attribution` endpoint.
+
+## Reading email (Gmail over IMAP — NOT the MCP connector)
+
+To read the project email threads (Chris / Soros), connect to Gmail **over IMAP with the app password
+in the repo `.env`**. Do **not** reach for the claude.ai Gmail MCP connector — it needs an interactive
+`/mcp` browser OAuth that isn't available in a headless/CLI session, so it dead-ends.
+
+- Account `conorpbrennan@gmail.com`; app password is `GMAIL_PWD` in `.env` (read it from the file,
+  never print it; 2FA + app password are already set up).
+- `imaplib.IMAP4_SSL("imap.gmail.com")` → `login(user, GMAIL_PWD)` → `select("INBOX", readonly=True)`
+  → `search(None, "FROM", "chris")`. Reliable mailbox is `INBOX` (`"[Gmail]/All Mail"` select can fail
+  on quoting). The latest message in a thread quotes the whole chain, so fetching it (`RFC822`, take the
+  `text/plain` part) gives the conversation in one go.
+- The main correspondent is **Chris Haltiner `<Chris.Haltiner@soros.com>`** (Soros Fund Management) —
+  the "Chris" whose model feedback the docs cite.
 
 ## The two model versions (v1 vs v2)
 

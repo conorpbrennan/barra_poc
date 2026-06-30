@@ -197,10 +197,11 @@ Market beta the one-day VaR cell underprices. It surfaces three ways — a <code
 endpoint, an equity-curve + underwater panel in the dashboard, and folded into the written risk
 commentary so it leads with a deep drawdown when present.</p>
 
-<h2><span class="n">5</span>Active risk &amp; active return vs. a benchmark <span class="status">&nbsp; <span class="dot d-proposed"></span>Proposed</span></h2>
+<h2><span class="n">5</span>Active risk &amp; active return vs. a benchmark <span class="status">&nbsp; <span class="dot d-designed"></span>Agreed — next</span></h2>
 <p class="mn quote"><b>Chris:</b> “‘Active risk’ and ‘active return’, where you measure your performance against a benchmark portfolio, can be more important than stand-alone risk/return.”</p>
-<p><b>Today the model is entirely absolute</b> — stand-alone risk of the Soros book. There is no
-benchmark and no active view.</p>
+<p><b>Today the model is entirely absolute</b> — stand-alone risk of the Soros book, with no active view
+yet. <b>The benchmark is now agreed: MSCI Large Cap</b>, so this moves from an open question to the next
+build.</p>
 <h3>Methodology — what we'd add</h3>
 <p>Once the coverage universe (§2) is explicit, a benchmark is just another coverage portfolio. Active
 risk falls straight out of the same factor machinery on the <em>active weights</em>:</p>
@@ -209,7 +210,8 @@ x_active,k = Σ_i w_active,i · loading_i,k     ← active factor exposures
 tracking error² = x_activeᵀ · F · x_active  +  Σ_i w_active,i² · σ²_spec,i</span>
 <p>That gives tracking error, active VaR/ES, and a by-factor decomposition of active risk — the same
 marginal/incremental contribution views we already compute for absolute risk, but relative to the
-benchmark. <b>Depends on §2</b> (the benchmark's names must be in coverage). Pairs naturally with §6.</p>
+benchmark. <b>Depends on §2</b> — the MSCI Large Cap constituents must sit in the coverage universe.
+Pairs naturally with §6.</p>
 
 <h2><span class="n">6</span>Intentional vs. unwanted loadings — hedging <span class="status">&nbsp; <span class="dot d-proposed"></span>Proposed</span></h2>
 <p class="mn quote"><b>Chris:</b> “Some factor loadings are wanted/intentional positioning, some are unwanted/accidental and can/should be hedged out.” &nbsp;Also: “Market/factor risk can be hedged at the portfolio level or at the firm level.”</p>
@@ -539,7 +541,7 @@ constant-portfolio inputs the drawdown and backtest lenses use today. Full spec 
 <tr><td>1</td><td>Point-in-time data</td><td><span class="dot d-inplace"></span>In place</td><td class="small">—</td><td class="small">bias-free estimation</td></tr>
 <tr><td>4</td><td>Drawdown lens</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">path risk VaR/ES miss</td></tr>
 <tr><td>2&nbsp;·&nbsp;3</td><td>Estimation/coverage split + uncapped coverage</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">correct off-index loadings; clean fit; foundation for §5–6</td></tr>
-<tr><td>5</td><td>Active risk vs. benchmark</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">project</td><td class="small">needs a benchmark source (blocked)</td></tr>
+<tr><td>5</td><td>Active risk vs. benchmark</td><td><span class="dot d-designed"></span>Agreed — next</td><td class="small">project</td><td class="small">benchmark agreed: MSCI Large Cap</td></tr>
 <tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-designed"></span>Partial</td><td class="small">evidence shipped</td><td class="small">style-drift attribution panel: rotation vs loading drift; final call needs desk intent</td></tr>
 <tr><td>7</td><td>Full orthogonalisation + diagnostics</td><td><span class="dot d-designed"></span>Partial</td><td class="small">moderate</td><td class="small">builder change</td></tr>
 <tr><td>8</td><td>Linked securities</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">design first</td><td class="small">block-diagonal specific risk</td></tr>
@@ -548,10 +550,10 @@ constant-portfolio inputs the drawdown and backtest lenses use today. Full spec 
 </table>
 <p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (done — the keystone, now
 live and the basis for the span and style-drift panels; it unblocked the uncapped coverage loadings) →
-the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel; <b>active
-risk</b> remains blocked on a benchmark source → orthogonalisation diagnostics and linked securities as
-they fit. <b>PnL attribution</b> (§9) is specced and ready to build — independent of the blocked items,
-so it can go next.</p>
+the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel. <b>PnL
+attribution</b> (§9) is specced and endorsed — the natural next build → then <b>active risk</b>, whose
+benchmark is now agreed (MSCI Large Cap), with orthogonalisation diagnostics and linked securities as
+they fit.</p>
 
 <p class="foot">Generated for the factor-model risk review. Methodology cross-refers to
 <code>barra_build_frames.py</code> (estimation), <code>barra_factor_risk_cube.py</code> (risk engine),

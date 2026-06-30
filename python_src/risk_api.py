@@ -61,6 +61,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import barra_dq_checks
+from views_api import router as views_router
 import barra_universe_membership as _um
 import barra_universe_funnel as _uf
 import barra_universe_span as _us
@@ -149,6 +150,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Barra Factor Risk API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(views_router)   # saved-view CRUD over views_repo (no cube dep) — see views_api.py
 
 
 # ----------------------------------------------------------------------------- endpoints

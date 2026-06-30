@@ -1,0 +1,144 @@
+/* flexagg2++ — Tufte & Few. Grey + one accent; colour encodes status/data, never decoration.
+   Whitespace and hairline rules separate, not boxes. Numbers are the hero (tabular-nums).
+   Palette matches the static docs (python_src/static/*.html) and CLAUDE.md "New UI (Vite)". */
+:root {
+  --bg: #fffff8;          /* the warm paper of the static docs */
+  --ink: #111;            /* primary text */
+  --faint: #6b6b63;       /* secondary / labels */
+  --line: #d8d5cd;        /* hairline rules */
+  --line-soft: #eceae2;   /* faintest separators / row hover */
+  --accent: #3b5e8c;      /* the ONE accent */
+  --accent-dk: #2a4d69;
+  --ok: #3f7d4e;          /* RAG green — status only */
+  --warn: #b5651d;        /* RAG amber */
+  --bad: #a3322b;         /* RAG red */
+  --panel: #faf9f1;       /* faint inset for dock panels */
+  --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --rail-w: 9.5rem;
+  --bar-h: 2.9rem;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+button {
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover:not(:disabled) { background: var(--accent-dk); color: #fff; }
+
+select, input[type="text"], input[type="number"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.15rem 0.35rem;
+}
+select:focus, input:focus, button:focus-visible { outline: 1.5px solid var(--accent); outline-offset: 0; }
+
+/* tabular figures everywhere a number reads as data */
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* ---- layout shell ---- */
+.app { display: grid; grid-template-rows: var(--bar-h) 1fr; height: 100%; }
+.contextbar {
+  display: flex; align-items: center; gap: 1.1rem;
+  padding: 0 1rem; border-bottom: 1px solid var(--line);
+  background: var(--bg); white-space: nowrap;
+}
+.contextbar .title { font-weight: 600; font-size: 15px; letter-spacing: -0.01em; }
+.contextbar .field { display: flex; align-items: baseline; gap: 0.3rem; }
+.contextbar .field label { color: var(--faint); font-size: 12px; }
+.contextbar .spacer { flex: 1; }
+
+.body { display: grid; grid-template-columns: var(--rail-w) 1fr; min-height: 0; }
+.rail {
+  border-right: 1px solid var(--line);
+  padding: 0.6rem 0; overflow-y: auto;
+}
+.rail a {
+  display: block; padding: 0.28rem 1rem; color: var(--ink);
+  font-size: 13px; border-left: 2px solid transparent;
+}
+.rail a:hover { background: var(--line-soft); text-decoration: none; }
+.rail a.active { border-left-color: var(--accent); color: var(--accent); font-weight: 600; }
+.rail .group { color: var(--faint); font-size: 10.5px; text-transform: uppercase;
+  letter-spacing: 0.06em; padding: 0.7rem 1rem 0.2rem; }
+
+.lens { padding: 1.1rem 1.4rem 3rem; overflow-y: auto; min-width: 0; }
+.lens h1 { font-size: 17px; font-weight: 600; margin: 0 0 0.15rem; letter-spacing: -0.01em; }
+.lens .sub { color: var(--faint); font-size: 12.5px; margin: 0 0 1rem; }
+.lens h2 { font-size: 13px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--faint); margin: 1.6rem 0 0.6rem; }
+
+/* ---- Tufte table: horizontal hairlines only, right-aligned tnum, no zebra ---- */
+table.tufte { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.tufte th, table.tufte td { padding: 0.28rem 0.7rem 0.28rem 0; text-align: right;
+  font-variant-numeric: tabular-nums; }
+table.tufte th { color: var(--faint); font-weight: 600; border-bottom: 1px solid var(--ink);
+  white-space: nowrap; }
+table.tufte td { border-bottom: 1px solid var(--line-soft); }
+table.tufte th:first-child, table.tufte td:first-child { text-align: left; }
+table.tufte tr.total td { border-top: 1px solid var(--ink); border-bottom: none; font-weight: 600; }
+table.tufte td.label, table.tufte th.label { text-align: left; }
+
+/* ---- RAG ---- */
+.rag-green { color: var(--ok); }
+.rag-amber { color: var(--warn); }
+.rag-red, .rag-breach { color: var(--bad); }
+.dot { display: inline-block; width: 0.62em; height: 0.62em; border-radius: 50%;
+  background: currentColor; vertical-align: baseline; }
+
+/* ---- reading column for prose / LLM commentary (~46rem, et-book serif) ---- */
+.reading { max-width: 46rem; font-family: var(--serif); font-size: 15.5px; line-height: 1.55; }
+.reading h1, .reading h2, .reading h3 { font-family: var(--sans); }
+.reading h1 { font-size: 18px; } .reading h2 { font-size: 15px; text-transform: none;
+  letter-spacing: 0; color: var(--ink); }
+.reading p { margin: 0.5rem 0; }
+.reading code { font-family: var(--mono); font-size: 0.85em; background: var(--panel);
+  padding: 0.05rem 0.25rem; border-radius: 2px; }
+.reading blockquote { border-left: 2px solid var(--line); margin: 0.5rem 0; padding-left: 0.8rem;
+  color: var(--faint); }
+.reading table { border-collapse: collapse; font-family: var(--sans); font-size: 13px; }
+.reading th, .reading td { border-bottom: 1px solid var(--line-soft); padding: 0.2rem 0.6rem;
+  text-align: left; }
+
+/* ---- generic bits ---- */
+.muted { color: var(--faint); }
+.small { font-size: 12px; }
+.err { color: var(--bad); }
+.spin { color: var(--faint); font-size: 12.5px; }
+.hgroup { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1.2rem 2rem; align-items: start; }
+.hero { font-variant-numeric: tabular-nums; }
+.hero .v { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05; }
+.hero .k { color: var(--faint); font-size: 12px; }
+.row { display: flex; align-items: center; gap: 0.5rem; }
+.wrap { display: flex; flex-wrap: wrap; gap: 0.5rem 1.2rem; align-items: center; }
+hr.rule { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
+.tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 2px;
+  padding: 0 0.3rem; }

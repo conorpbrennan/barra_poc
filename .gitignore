@@ -6,6 +6,7 @@ tmp/
 
 # secrets
 .env
+.env.bak*
 *.lic
 
 # python bytecode
