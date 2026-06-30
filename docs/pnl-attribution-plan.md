@@ -1,11 +1,12 @@
-# Plan — PnL attribution & factor-model validation (projected vs realized, residual diagnostics)
+# Plan — PnL attribution & factor-model validation (realized PnL by factor and residual, diagnostics)
 
 Status: SPEC — endorsed by Chris (2026-06-29: "that looks reasonable"), with one addition: link the
-attribution to the **risk decomposition at the start of the period** (§4). New risk-tooling step for
-Chris's request (Soros risk review): a report showing the factor
-model's projected PnL over a period vs the book's actual realized PnL, broken down by factor and by
-residual, then a check on whether the residual is large and whether it's correlated. Uncorrelated
-residual means the PM's specific bets are genuine and diversified, not a hidden systematic bet.
+attribution to the **risk decomposition at the start of the period** (§4); refined per his 2026-06-30
+feedback (drop "projected", the known-vs-unknown-risk framing, keep the stats cheap). New risk-tooling
+step for Chris's request (Soros risk review): a report that splits the book's realized PnL over a period
+into a factor-explained part and a residual, broken down by factor, then a check on whether the residual
+is large and whether it's correlated. Uncorrelated residual means the PM's specific bets are genuine and
+diversified, not a hidden systematic bet.
 
 Built cube-native from the outset (Chris's call): the attribution is a set of additive cube measures
 that drill parent→child in the existing pivot grid — click a factor, see the names under it — and the
@@ -22,8 +23,8 @@ constant-portfolio factor-PnL proxy they use now.
 
 Chris's asks, mapped to the deliverable:
 
-1. Projected PnL from the factor model vs actual realized PnL, over a period → the core attribution:
-   realized book PnL split into a factor-explained part and a residual, reconciling exactly. §1.
+1. How the factor model explains the realized PnL over a period (the factor + residual split) → the core
+   attribution: realized book PnL split into a factor-explained part and a residual, reconciling exactly. §1.
 2. Break it down by factor and by residual → the by-factor contribution table plus the specific line,
    pivotable by factor group / sector / name. §1.
 3. Are the residuals large, and if so are they correlated (uncorrelated = the PM is doing a good job) →
@@ -36,8 +37,9 @@ Chris's asks, mapped to the deliverable:
 ## Get this straight first
 
 A factor risk model explains return after the fact. It doesn't forecast it. It has no view on where a
-stock will go. So "projected PnL" isn't a return forecast — it's the factor-explained part of the
-realized return:
+stock will go. So the factor component below isn't a forecast of anything — it's the part of the realized
+return the factors explain (we avoid the word "projected" per Chris's 2026-06-30 note, since there's no
+forward PnL forecast):
 
 > realized book return `R_p(t) = Σ_k x_k(t)·f_k(t)  +  u_p(t)`
 
@@ -150,49 +152,73 @@ object, two reports, delivered through the existing pivot grid so the drill and 
 
 ## §2 — Residual diagnostics
 
-The residual `u_p` is the part the model can't explain — the PM's stock-specific bets. Chris
-wants to know if it's large and if it's correlated.
+The residual is the part the model can't explain. For name `i` in month `t`, `R_i(t) = Σ_k
+L_{i,k}(t)·f_k(t) + ε_i(t)` — `ε_i` is the **specific (idiosyncratic) return**, the stock-specific move
+the factors miss; at book level `u_p(t) = Σ_i w_i·ε_i`. The build leaves two objects: a monthly time
+series `u_p(t)` (~108 months) and a names×months panel `ε_i(t)`. The model also *predicted* the specific
+risk (`SpecificVar` → a specific vol), so realized can be checked against predicted.
+
+The premise: if the residual is genuine, diversified stock-picking, the specific returns behave like
+independent coin-flips — no pattern over time, no link to the factors, no common thread across names,
+sized about as predicted. Each test checks one of those.
 
 ### Is it large?
 
-- Size — specific return as % of total realized; cumulative specific PnL.
-- Realized vs predicted specific vol — realized `std(u_p)` against the model's predicted specific vol
-  from `SpecificVar`. Ratio near 1 means the diagonal risk block is calibrated; well above 1 means the
-  model under-forecasts idiosyncratic risk.
-- Explained share — `1 − var(u_p)/var(R_p)`. Low isn't automatically bad: it's either diversified
-  stock-picking or a missing factor, which the correlation tests sort out.
-- Information ratio — annualized `mean(u_p)/std(u_p)`, the stock-picking number. Positive and high means
-  the residual is a source of return, not just noise.
+- **Specific share** — cumulative specific PnL ÷ cumulative total. How much of the book's return came
+  from stock-picking vs factor bets.
+- **Information ratio** — `IR = mean(u_p)/std(u_p) · √12` (annualized monthly). A Sharpe ratio for the
+  idiosyncratic slice — the stock-picking skill number. `> 0.5` = reliable alpha; `~0` = noise, no edge;
+  `< 0` = stock-picking destroys value. *(e.g. +0.2%/m at 1.0% std → IR ≈ 0.69.)*
+- **Realized vs predicted specific vol** — predicted `σ_pred = √(Σ_i w_i²·σ_spec,i²)` (diagonal, no
+  cross-terms) vs realized `std(u_p)`. **Ratio** ≈ 1 = sized right; `> 1` = model under-states specific
+  risk; `< 1` = over-states. Mis-sized specific risk → wrong total VaR.
+- **Explained share** — `R² = 1 − var(u_p)/var(R_p)`, the fraction of book-return variance the factors
+  explain. Low isn't automatically bad (diversified stock-picking *or* a missing factor) — the
+  correlation tests tell those apart.
 
 ### Is it correlated? — three tests
 
-This is what "are the residuals correlated" actually means, and "uncorrelated = good PM" reads onto all
-three:
+Three places a hidden pattern can hide: across **time**, against the **factors**, across **names**.
+"Uncorrelated = good PM" reads onto all three. **Scope (Chris, 2026-06-30):** keep these cheap — the desk
+quants already know the formal tests, so build the simple correlation / regression versions and treat
+Ljung-Box and PCA as optional.
 
-1. Serial autocorrelation of `u_p` over time — AR(1) coefficient plus Ljung-Box (`_ljung_box`, pure).
-   Significant positive autocorrelation means the alpha is a persistent trend, i.e. a slow unhedged
-   systematic bet dressed up as skill, not independent stock-picking. This is the most direct read of
-   Chris's question.
-2. Residual vs factors — correlate / regress `u_p` on the factor returns `f_k`, and on the book's own
-   factor bets `x_k`. Should be near zero. A persistent loading means exposures are stale or
-   mis-estimated (the 13F lag), or a factor is leaking into "alpha" — the PM is being paid for beta and
-   calling it skill.
-3. Cross-sectional — PCA on the name-level residual panel `ε_i(t)` (`_resid_pca_share`, pure). If the
-   top principal component explains a large share, the names' specific returns move together, which
-   means a common factor the model misses (a theme, sector, or crowded bet). Small PC1 share means the
-   bets are genuinely independent.
+1. **Serial autocorrelation (across time)** — does this month's `u_p` predict next month's? The cheap read
+   Chris wants: `corr(u_p(t), u_p(t−1))` and `corr(u_p(t), u_p(t−2))` — the lag-1 and lag-2
+   autocorrelations. `≈ 0` = memoryless independent draws (good — what re-underwritten stock bets look
+   like); clearly `> 0` = the specific return *trends*, i.e. a slow, persistent, unhedged systematic bet
+   dressed up as alpha. *(Optional formal version: the **Ljung-Box** white-noise test across many lags,
+   `_ljung_box`, pure — skip unless quick.)*
+2. **Residual vs factors** — regress `u_p(t)` on the factor returns `f_k(t)` (and correlate with the
+   book's own factor bets `x_k`). **Chris flagged this regression as a worthwhile one to build.**
+   Orthogonal within one month's regression by construction, but over time — and because the 13F exposures
+   are stale/lagged up to 45 days — `u_p` can still co-move with a factor. A significant loading means
+   part of the "alpha" is that factor's beta mis-measured: the PM is paid for systematic risk and calling
+   it skill. Near zero = clean, orthogonal alpha.
+3. **Cross-sectional (across names)** — the model **assumes specific returns are uncorrelated across
+   names** (the diagonal specific block). If, in practice, many names' residuals move together, that is
+   **most likely a missing factor** (Chris's correction) — a common driver the model has no factor for; a
+   small linked group (share classes, ADRs) is only the narrow special case. A shared residual factor
+   means the diagonal block **under-states risk** — what looks like many independent bets is one bet
+   repeated, VaR too low. *(Optional formal version: PCA on the residual panel, `_resid_pca_share`, pure —
+   the first principal component's explained-variance share measures the common direction; deferred per
+   Chris unless quick.)*
 
-The read for Chris: low autocorrelation, low residual PC1 share, positive IR → genuine
-diversified stock-picking, the PM is doing well. High autocorrelation or a dominant residual PC → the
-"alpha" is really an unmodelled common bet → tell the PM, add the missing factor, or hedge it.
+The read for Chris: positive IR, no lag-1/2 autocorrelation, `~0` factor correlation, no common residual
+component across names → genuine, diversified, orthogonal stock-picking, the PM is doing well.
+Autocorrelation (persistent unhedged bet), factor correlation (hidden beta), or a common residual factor
+(a missing factor) each name a specific problem → tell the PM, add the factor, or hedge it.
 
-### Bias statistics
+### Bias statistics — did the model size the risk right?
 
-The standard Barra/MSCI check. Standardize each realized return by its predicted vol, `z_t =
-realized/predicted-vol`; the bias statistic is `B = std(z)` over a rolling 12m window (`_bias_stat`,
-pure). `B ≈ 1` calibrated, `B > 1` risk under-forecast, `B < 1` over-forecast. Run it for the total
-book, each factor, and the specific block. The specific-block bias stat is the formal version of "are
-the residuals bigger than the model said", next to the eyeball size check above.
+The tests above ask *what* the residual is; bias stats ask whether the **risk forecast** was correct —
+the canonical Barra/MSCI validation. Standardize each realized return by its *predicted* vol, `z_t =
+realized_t / predicted-vol_t`; if the forecast is right, `z` has std ≈ 1. The bias statistic is `B =
+std(z)` over a rolling 12–24m window (`_bias_stat`, pure): **B ≈ 1** calibrated, **B > 1** risk
+under-forecast (the dangerous direction, VaR too low), **B < 1** over-forecast. A calibrated `B` sits
+within `1 ± √(2/N)` for `N` observations; outside is significant bias. Run it three ways — the **whole
+book**, **each factor**, and the **specific block** (`realized specific / predicted specific vol`, the
+rigorous version of the calibration ratio above).
 
 ## §3 — Other ways to look at it
 
@@ -231,6 +257,34 @@ decomposition implied, and did the contributions line up with the risk actually 
 in proportion to its risk is understood; a loss on something the risk decomposition called low-risk is a
 **surprise** — Chris's flag that the risk wasn't fully understood at step 1.
 
+Two checks close the loop. **Within band** — does each factor's realized contribution sit inside the band
+its start-of-period risk implied? This is *not* "big-risk factors should drive the PnL" (Chris's
+correction): if the big-risk factor doesn't move and a small-risk one falls off a cliff, the small one
+rightly dominates — what matters is each contribution against its *own* risk-implied range, which already
+folds in the move. **The surprise** — a realized contribution outside that band, an outcome the risk
+decomposition didn't see coming. The interpretation grid — note the axis is **known vs unknown risk, not
+made vs lost**:
+
+| | PnL: made money | PnL: lost money |
+|---|---|---|
+| **Risk you knew you had** | bet paid — fine, you chose it | bet lost — fine, you chose it |
+| **Risk the decomposition missed** | **investigate** — a win you can't explain | **investigate** — a loss you can't explain |
+
+Chris's correction: an unexpected *gain* is as much a risk-process failure as an unexpected loss — "in
+one case the investors are happy, the other angry, but both show the same failure." Both bottom cells are
+the work. The principle: **the primary function of the risk team is not to avoid losses but to understand
+all the risks the fund is taking.** Some bets pay, some don't — that's the business, not on the risk
+manager. Making *or* losing money on a bet you didn't know you took is fully on the risk manager: the
+direction was luck, the failure was not seeing the risk. So good risk management is **how well the PnL is
+explained by the risk you knew you had**, not the sign. (Secondary function: keep those bets from
+threatening the fund — limits/mandates, capital & liquidity reserves, hedging.)
+
+Chris frames it as a universal pattern — the same loop in two other languages. **Sensitivities:** the
+Greeks report at the start vs the PnL-explain over the period; if they don't line up, there are
+second-order / non-linear effects the sensitivities missed. **VaR:** the realized PnL distribution vs the
+VaR; too many exceptions means the VaR model is missing something (our `/backtest` is exactly this). Form
+an ex-ante expectation, measure ex-post reality, treat the unexplained part as the signal.
+
 ### What we already have
 
 The ex-ante side is mostly built. Contribution to total risk by factor and position is the cube's
@@ -257,6 +311,33 @@ machinery — it isn't a new engine.
 The verdict the pack delivers: did the book's PnL come from the risks it meant to take (good risk
 management), or from places the risk decomposition didn't flag (a gap to dig into)?
 
+### The reconcile chart + the stressed band
+
+The headline visual is a **band/dot plot**: one row per factor (plus specific and the book total), each
+row showing the **expected distribution as a band centred at zero** with the **realized contribution as
+a dot**. The band half-width is the row's start-of-period σ (`|x_k|·σ_k`), centred at zero because the
+model forecasts dispersion, not direction — so the dot's position *is* the surprise z-score, and a dot
+outside the band is a breach you can see. This one figure subsumes three checks: the **book-total** band
+breach = the per-period `/backtest` exception; the **specific** row = the specific-block bias stat; the
+**per-factor** rows = the surprise z-scores.
+
+Draw **two bands per row** — a **base** band (today's vols and correlations) and a **stressed** band
+(vols shocked up, correlations pushed toward 1). The reading sharpens: realized inside base = benign;
+outside base, inside stressed = a stress regime (the calm estimate was too benign, the shocked one
+covers it); outside even stressed = a genuine gap to investigate. The band width is nothing but the
+covariance applied to the exposures (`σ² = xᵀFx`), so **the band is the vols-and-correlations made
+visible, and the stressed band is exactly Chris's "shock the vols and correlations."** Correlations only
+enter the *aggregate* rows, so the **book band widens under a correlation shock even when no single
+factor's does** — that gap is the diversification the book is leaning on, and it's where correlation risk
+shows up.
+
+**One gap to close.** `/stress` today shocks factor **sigmas** (`dPnL = Σ x_k·σ_k·vol_k`), not
+**correlations**. Full fidelity to Chris's ask needs a **correlation-stress mode** — blend `F` toward an
+all-ρ matrix, or toward a crisis-window empirical correlation — so the stressed band reflects
+correlations → 1, not just wider vols. Small addition to the existing stress engine; the reconcile chart
+is where it shows. A mock of the chart is embedded in §9 of the factor-model roadmap page (the
+client-facing review doc), built to share with Chris for sign-off.
+
 ## §5 — Architecture (cube-native)
 
 Split where each half belongs: the additive decomposition + drill goes in the cube (that's what it's
@@ -281,8 +362,9 @@ for); the statistics the cube can't express (linking, autocorrelation, PCA, bias
    - Add the three to the `/pivot` measure allowlist (`MEASURE_NAMES`) so the pivot grid, `/ask` and
      `/analysis` inherit attribution behind the same `_validate_pivot` guard.
 3. **`barra_pnl_attribution.py` — the parts the cube can't do.** The daily drifting-weight realized NAV,
-   the Carino-linked period return, and the residual diagnostics (IR, AR1 + Ljung-Box, PCA share, bias
-   stats, concentration HHI, hit rate). Writes `data/pnl_attribution.parquet`. Pure stats split into
+   the Carino-linked period return, and the residual diagnostics (IR + var-ratio measures,
+   residual-vs-factor regression, lag-1/2 autocorrelation, bias stats, concentration HHI, hit rate;
+   Ljung-Box / PCA optional). Writes `data/pnl_attribution.parquet`. Pure stats split into
    importable functions (`_carino_link`, `_bias_stat`, `_ljung_box`, `_resid_pca_share`,
    `_concentration_hhi`, `_info_ratio`) for unit tests, same as `_kupiec_lr` / `_max_drawdown`.
 4. **API.** `GET /attribution?from=&to=&book=&by=factor|group|sector|name` — the period headline +
@@ -295,8 +377,9 @@ for); the statistics the cube can't express (linking, autocorrelation, PCA, bias
 5. **UI — the pivot grid is the drill-through.** The attribution measures slot into the existing pivot
    panel, so click-to-expand parent→child is native, no bespoke widget. The §4 linkage is the same grid
    with two columns (risk at T, PnL over T→T+1). `render_attribution` adds the hero stacked-area chart,
-   the period selector, the residual-diagnostics sub-panel, and the surprise ranking + within-band book
-   check. Tufte/Few throughout.
+   the period selector, the residual-diagnostics sub-panel, the **reconcile band chart** (realized dot vs
+   the base/stressed band per factor), the surprise ranking, and the within-band book check. Tufte/Few
+   throughout.
 6. **LLM fold-in** — `/analysis` (and `/ask`'s grounding) lead with the headline: "X% factor, Y%
    specific; specific IR Z; residuals show [no] significant autocorrelation; residual PC1 explains W%."
 7. **Tests** — `test_attribution.py` (pure stats + the period reconciliation + the §4 surprise z-score
@@ -304,11 +387,36 @@ for); the statistics the cube can't express (linking, autocorrelation, PCA, bias
    `test_pivot_app.py`): the new measures foot (Σ children = parent), `Realized PnL = Σ factor
    contributions + Specific PnL` ties out, and the allowlist accepts them.
 
+**Measures live in the cube — slice, drill, and what-if for free.** This is the general principle, not
+just for attribution: additional measures, including the more complex ones the quants define, are
+implemented as cube measures by default rather than one-off scripts, whenever it makes sense to apply them
+to *sliced, drilled, or modified* data. A cube measure composes with everything the cube already gives —
+slice by any dimension (factor, sector, name, date, scenario set), drill parent→child, and recompute under
+**what-if** (modified weights, added/dropped names) and **stress** (shocked vols/correlations) — so a
+measure defined once is immediately available across every view and every hypothetical, not re-coded per
+context. The exception is the genuinely non-cube statistics (period linking, autocorrelation, regression,
+bias) — time-series reductions the cube can't express — which stay in the Python layer. Everything else
+that benefits from slice / what-if belongs in the cube.
+
 **Granularity, stated so it isn't a hidden inconsistency.** The cube attribution is **monthly, on the
 as-of weights** the `positions` frame carries — additive, drillable, foots at every level. The **daily
 drifting-weight realized NAV + Carino linking** is the API headline (the realistic period *return*). Two
 consistent views doing different jobs: the cube is the reconciling P&L-contribution drill; the API is
 the period-return headline plus the skill statistics.
+
+## Have vs build — the whole request
+
+Most of the ex-ante half already exists in the model; the new work is the attribution measures and the
+connection.
+
+| Part of the request | Already in place | To build |
+|---|---|---|
+| **PnL attribution** by factor + residual (ex-post, T→T+1) | factor returns, exposures, positions, prices; the identity `R_p = Σ x_k·f_k + u_p` | realized engine (unit NAVs, drifting weights); cube measures `Factor contribution` / `Specific PnL` / `Realized PnL`; the `specific_returns` frame; `/attribution` + panel |
+| **"Are residuals large / correlated?"** | predicted specific vol (`SpecificVar`); the residual itself (the model's own number) | IR + var-ratio stats, residual-vs-factor regression, lag-1/2 autocorrelation, bias stats (Ljung-Box / PCA optional); `/attribution/residual` |
+| **Risk decomposition at T** (factor & position contribution to total risk) | the cube already computes it — marginal / incremental contribution to Total VaR; Risk HHI is built from these shares | surface it as a tidy "contribution to risk at T" table aligned to the attribution buckets |
+| **Expected forward distribution** (vols + correlations; stress / replay) | Scenario VaR/ES over full history (empirical), event-replay sets, hypothetical shocks, `/stress` (vol shocks) | the ±σ base band per row; a **correlation-stress mode** for the stressed band — `/stress` shocks vols only today |
+| **The linkage / reconcile** (risk at T vs PnL T→T+1; within-range; surprise) | `/backtest` (realized-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math | the temporal pairing; per-factor / position surprise z-score; surprise ranking; the reconcile band chart; `/attribution/linkage` |
+| **The daily loop** (decompose → check limits/intended → hedge → attribute) | `/limits`; style-drift & what-changed (intended vs not); what-if & stress (the hedge step) | no new engine — the linkage report closes the loop end to end |
 
 ## Caveats
 
@@ -331,9 +439,17 @@ the period-return headline plus the skill statistics.
 
 - Cube-native from the outset (Chris's call): additive attribution measures + parent/child drill in the
   pivot grid, not a static table.
+- Measures live in the cube by default — additional / quant-defined measures are implemented as cube
+  measures whenever they should apply to sliced, drilled, or modified (what-if / stress) data, so they
+  compose with every view and hypothetical; only non-cube statistics (linking, autocorrelation,
+  regression, bias) stay in Python.
 - Linkage to the ex-ante risk decomposition is in scope (Chris's 2026-06-29 addition): pair the risk
   decomposition at T with the PnL attribution over T→T+1, and flag the surprises (§4). Reuses the
   existing marginal-VaR / `/backtest` / `/limits` machinery, not a new engine.
+- The linkage's headline visual is a band/dot reconcile chart (realized contribution vs its
+  start-of-period ±σ band, base + stressed). Full fidelity needs a **correlation-stress mode** added to
+  `/stress` (today it shocks vols only) so the stressed band reflects correlations → 1. A mock is
+  embedded in §9 of the roadmap page for Chris's sign-off.
 - Residual persisted as a 7th frame `specific_returns` (the un-squared `:640` value). Rebuild required;
   six-frame contract → seven.
 - Realized-return headline: bottom-up unit NAVs from the name series, computed in the API (the cube has
@@ -346,15 +462,15 @@ the period-return headline plus the skill statistics.
 
 ## Questions to Chris
 
-He endorsed the approach (2026-06-29) and added the §4 linkage. These four are still open — he didn't
-address them:
+He endorsed the approach (2026-06-29) and refined it (2026-06-30 — folded in: drop "projected", the
+known-vs-unknown framing, keep the stats cheap). These four are still open:
 
 1. Default reporting period — trailing-12m + since-inception proposed. Want a fixed quarterly grid too?
 2. Factor grouping in the hero chart — Market / Style(grouped) / Specific, or break out the top style
    factors individually?
 3. Residual large/correlated thresholds — the green/amber/red bars for the specific-vol ratio, the
-   Ljung-Box p-value, and the residual PC1 share, so the verdict is a clean RAG like `/limits`. Suggest
-   starting loose and tightening once we see the book's distribution.
+   lag-1/2 autocorrelation, and the residual-vs-factor R², so the verdict is a clean RAG like `/limits`.
+   Suggest starting loose and tightening once we see the book's distribution.
 4. Dividends — is price-only fine for the POC, or do you need a total-return headline? That needs a
    dividend source, which we don't have on free data today.
 
