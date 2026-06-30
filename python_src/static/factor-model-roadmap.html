@@ -511,11 +511,11 @@ measures that are new.</p>
 <table>
 <thead><tr><th>Part of the request</th><th>Already in place</th><th>To build</th></tr></thead>
 <tbody>
-<tr><td><b>PnL attribution</b> by factor + residual (ex-post, T→T+1)</td><td>factor returns, exposures, positions, prices; the decomposition identity <code>R_p = Σ x_k·f_k + u_p</code></td><td>the realised engine (unit NAVs, drifting weights); cube measures <code>Factor contribution</code> / <code>Specific PnL</code> / <code>Realised PnL</code>; the <code>specific_returns</code> frame; <code>/attribution</code> + panel</td></tr>
-<tr><td><b>“Are the residuals large / correlated?”</b></td><td>predicted specific vol (<code>SpecificVar</code>); the residual itself (the model's own number)</td><td>information ratio + the var-ratio measures; the residual-vs-factor regression; lag-1/2 autocorrelation; bias statistics. Ljung-Box / PCA optional (the quants know them); <code>/attribution/residual</code></td></tr>
+<tr><td><b>PnL attribution</b> by factor + residual (ex-post, T→T+1)</td><td>factor returns, exposures, positions, prices; the decomposition identity <code>R_p = Σ x_k·f_k + u_p</code></td><td>the realised engine (unit NAVs, drifting weights); cube measures <code>Factor contribution</code> / <code>Specific PnL</code> / <code>Realised PnL</code>; the <code>specific_returns</code> frame; <code>/pnl_attribution</code> + panel</td></tr>
+<tr><td><b>“Are the residuals large / correlated?”</b></td><td>predicted specific vol (<code>SpecificVar</code>); the residual itself (the model's own number)</td><td>information ratio + the var-ratio measures; the residual-vs-factor regression; lag-1/2 autocorrelation; bias statistics. Ljung-Box / PCA optional (the quants know them); <code>/pnl_attribution/residual</code></td></tr>
 <tr><td><b>Risk decomposition at T</b> — factor &amp; position contribution to total risk</td><td><b>the cube already computes this</b> — marginal / incremental contribution to Total VaR; the Risk-HHI concentration measure is built from these shares</td><td>surface it as a tidy “contribution to risk at T” table aligned to the same factor / position buckets as the attribution</td></tr>
 <tr><td><b>Expected forward distribution</b> — vols + correlations, stress / replay</td><td>scenario VaR / ES over full history (empirical), event-replay sets, hypothetical shocks, <code>/stress</code> (per-factor vol shocks)</td><td>the ±σ <b>base band</b> per row; a <b>correlation-stress mode</b> for the stressed band — today <code>/stress</code> shocks vols only, not correlations</td></tr>
-<tr><td><b>The linkage / reconcile</b> — risk at T vs. PnL T→T+1, within-range, surprise</td><td><code>/backtest</code> (realised-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math (book risk recomputed from weights)</td><td>the temporal pairing; the per-factor / position surprise z-score; the surprise ranking; the reconcile band chart above; <code>/attribution/linkage</code></td></tr>
+<tr><td><b>The linkage / reconcile</b> — risk at T vs. PnL T→T+1, within-range, surprise</td><td><code>/backtest</code> (realised-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math (book risk recomputed from weights)</td><td>the temporal pairing; the per-factor / position surprise z-score; the surprise ranking; the reconcile band chart above; <code>/pnl_attribution/linkage</code></td></tr>
 <tr><td><b>The daily loop</b> — decompose → check limits / intended → hedge → attribute</td><td><code>/limits</code> (the limits check); style-drift &amp; what-changed (intended vs. unintended); what-if &amp; stress (the hedge step)</td><td>no new engine — the linkage report is what closes the loop end to end</td></tr>
 </tbody>
 </table>
@@ -525,7 +525,7 @@ vectors, so no performance penalty). Persisting the residual adds a seventh data
 (<code>specific_returns</code>), a deliberate, contained change that needs a rebuild — the price of a
 live reconciling drill rather than a static table. The statistics the cube can't express (period
 linking, the residual correlation tests, bias stats) sit in a thin Python layer:
-<code>barra_pnl_attribution.py</code>, the <code>/attribution</code> + <code>/attribution/residual</code>
+<code>barra_pnl_attribution.py</code>, the <code>/pnl_attribution</code> + <code>/pnl_attribution/residual</code>
 endpoints, and a dashboard panel. A by-product is a true realised track record, which upgrades the
 constant-portfolio inputs the drawdown and backtest lenses use today. Full spec in the companion note
 <code>docs/pnl-attribution-plan.md</code>.</p>

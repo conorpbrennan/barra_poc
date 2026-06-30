@@ -367,10 +367,11 @@ for); the statistics the cube can't express (linking, autocorrelation, PCA, bias
    Ljung-Box / PCA optional). Writes `data/pnl_attribution.parquet`. Pure stats split into
    importable functions (`_carino_link`, `_bias_stat`, `_ljung_box`, `_resid_pca_share`,
    `_concentration_hhi`, `_info_ratio`) for unit tests, same as `_kupiec_lr` / `_max_drawdown`.
-4. **API.** `GET /attribution?from=&to=&book=&by=factor|group|sector|name` — the period headline +
+4. **API.** (named `/pnl_attribution`, not `/attribution`, to avoid the existing risk-attribution endpoint
+   at `risk_api.py:203` — decided 2026-06-30.) `GET /pnl_attribution?from=&to=&book=&by=factor|group|sector|name` — the period headline +
    reconciliation + the cumulative series for the chart (Carino-linked, from the precompute). `GET
-   /attribution/residual?from=&to=&book=` — the §2 diagnostics with plain verdicts. `GET
-   /attribution/linkage?T=&horizon=&book=&set=` — the §4 pairing: the risk decomposition at T (marginal
+   /pnl_attribution/residual?from=&to=&book=` — the §2 diagnostics with plain verdicts. `GET
+   /pnl_attribution/linkage?T=&horizon=&book=&set=` — the §4 pairing: the risk decomposition at T (marginal
    Total VaR by factor/position, from `_book_inputs` / `_risk_from_weights` — the same what-if math the
    cube reports) next to the realized PnL over T→T+1, the per-factor/position surprise z-scores, the
    surprise ranking, and the book-level within-band check (reusing the `/backtest` exception logic).
@@ -411,11 +412,11 @@ connection.
 
 | Part of the request | Already in place | To build |
 |---|---|---|
-| **PnL attribution** by factor + residual (ex-post, T→T+1) | factor returns, exposures, positions, prices; the identity `R_p = Σ x_k·f_k + u_p` | realized engine (unit NAVs, drifting weights); cube measures `Factor contribution` / `Specific PnL` / `Realized PnL`; the `specific_returns` frame; `/attribution` + panel |
-| **"Are residuals large / correlated?"** | predicted specific vol (`SpecificVar`); the residual itself (the model's own number) | IR + var-ratio stats, residual-vs-factor regression, lag-1/2 autocorrelation, bias stats (Ljung-Box / PCA optional); `/attribution/residual` |
+| **PnL attribution** by factor + residual (ex-post, T→T+1) | factor returns, exposures, positions, prices; the identity `R_p = Σ x_k·f_k + u_p` | realized engine (unit NAVs, drifting weights); cube measures `Factor contribution` / `Specific PnL` / `Realized PnL`; the `specific_returns` frame; `/pnl_attribution` + panel |
+| **"Are residuals large / correlated?"** | predicted specific vol (`SpecificVar`); the residual itself (the model's own number) | IR + var-ratio stats, residual-vs-factor regression, lag-1/2 autocorrelation, bias stats (Ljung-Box / PCA optional); `/pnl_attribution/residual` |
 | **Risk decomposition at T** (factor & position contribution to total risk) | the cube already computes it — marginal / incremental contribution to Total VaR; Risk HHI is built from these shares | surface it as a tidy "contribution to risk at T" table aligned to the attribution buckets |
 | **Expected forward distribution** (vols + correlations; stress / replay) | Scenario VaR/ES over full history (empirical), event-replay sets, hypothetical shocks, `/stress` (vol shocks) | the ±σ base band per row; a **correlation-stress mode** for the stressed band — `/stress` shocks vols only today |
-| **The linkage / reconcile** (risk at T vs PnL T→T+1; within-range; surprise) | `/backtest` (realized-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math | the temporal pairing; per-factor / position surprise z-score; surprise ranking; the reconcile band chart; `/attribution/linkage` |
+| **The linkage / reconcile** (risk at T vs PnL T→T+1; within-range; surprise) | `/backtest` (realized-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math | the temporal pairing; per-factor / position surprise z-score; surprise ranking; the reconcile band chart; `/pnl_attribution/linkage` |
 | **The daily loop** (decompose → check limits/intended → hedge → attribute) | `/limits`; style-drift & what-changed (intended vs not); what-if & stress (the hedge step) | no new engine — the linkage report closes the loop end to end |
 
 ## Caveats

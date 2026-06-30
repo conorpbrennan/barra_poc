@@ -316,6 +316,32 @@ so files in `python_src/static/` are served at `<baseUrlPath>/app/static/...` (b
 **generated** by `barra_cro_report.py`, which now writes to both `tmp/` (the CLI artifact) and
 `python_src/static/`; rerun it to refresh. Tests: `test_docs.py`.
 
+## New UI (Vite) — layout & design (Tufte & Few)
+
+A Vite SPA is being built to **replace** the Streamlit `risk_pivot_app.py`, served at base path
+`flexagg2++` (alongside the current `flexagg++` Streamlit app during the transition). It **replicates
+all existing functionality against the same `risk_api.py` endpoints** — no API changes. **All layout,
+charts and tables follow Edward Tufte and Stephen Few — a hard requirement, not a preference:**
+
+- **Overview-first monitor screen.** A single at-a-glance Overview (Few's dashboard sense): hero numbers
+  (Total VaR 99, ES, max drawdown, gross/net, Risk HHI) + the limits/DQ RAG strip + top exposures, no
+  scrolling for the summary. Everything else is a lens reached on demand.
+- **Details on demand.** One route per lens (Pivot, Trends, Stress, What-if, Liquidity, Universe, Drift,
+  Attribution, the LLM panels). Drill-downs stay hidden until asked for.
+- **Data-ink.** Grey + one accent; colour encodes status (RAG) or data only, never decoration; no
+  cards/shadows/gratuitous borders — whitespace and hairline rules separate. Numbers are the hero
+  (large, tabular-nums). Direct labelling on charts, not legends.
+- **Few idioms:** bullet graphs for limits (actual vs warn/limit bands, not gauges); sparklines inline
+  with each scorecard number; small-multiples for the trends grid (shared axes).
+- **Tufte table for the pivot:** horizontal hairlines only, right-aligned tabular numerals, no zebra,
+  drill shown by indentation.
+- **Prose (LLM commentary) in a ~46rem reading column**, matching the static docs' et-book serif;
+  on-demand/streamed, no token spend until requested.
+
+Palette/typography match the static docs (`python_src/static/*.html`): `--bg:#fffff8`, `--ink:#111`,
+grey `--faint:#6b6b63`, one accent `#3b5e8c`; RAG green/amber/red for status only. Full plan:
+`docs/vite-ui-plan.md`.
+
 ## The two model versions (v1 vs v2)
 
 Both produce the **identical six-frame schema** and feed the same unchanged cube. They differ

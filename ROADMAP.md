@@ -93,7 +93,7 @@ and 13 → 14 once data sources are chosen.
   optional per Chris's 2026-06-30 steer); bias stats (book/factor/specific). Plus residual concentration HHI, hit rate, factor-timing vs static tilt. The
   stats the cube can't express stay in Python: precompute `barra_pnl_attribution.py` →
   `data/pnl_attribution.parquet` (daily drifting-weight realized NAV + Carino-linked period return +
-  diagnostics); `GET /attribution` + `/attribution/residual`; UI `render_attribution` (Tufte
+  diagnostics); `GET /pnl_attribution` + `/pnl_attribution/residual`; UI `render_attribution` (Tufte
   stacked-area "where the money came from" + the pivot drill + residual sub-panel); headline folded into
   `/analysis`. Cube attribution is monthly on as-of weights (additive, foots); the daily drifting-weight
   return + linking is the API headline. Price-only both sides (dividends disclosed). By-product: a true
@@ -102,7 +102,7 @@ and 13 → 14 once data sources are chosen.
   the start of the period**: pair the risk decomposition at T (marginal Total VaR by factor/position)
   with the PnL attribution over T→T+1 in the same pivot grid (two columns), a per-factor/position
   surprise z-score (`realized contribution / ex-ante risk-implied sd`), and a surprise ranking leading
-  with the biggest loss relative to its ex-ante risk (`GET /attribution/linkage?T=&horizon=`). Reuses the
+  with the biggest loss relative to its ex-ante risk (`GET /pnl_attribution/linkage?T=&horizon=`). Reuses the
   marginal-VaR / `/backtest` / `/limits` machinery, not a new engine — it's the connection, more than the
   standalone attribution, that shows how well the book is risk-managed. The linkage's headline visual is
   a **band/dot reconcile chart** — each factor's realized contribution (dot) vs its start-of-period ±σ
