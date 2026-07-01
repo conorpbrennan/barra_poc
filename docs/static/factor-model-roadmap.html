@@ -68,6 +68,93 @@
 <h1>Factor Risk Model — Response to the Risk Review</h1>
 <p class="sub">Mapping Chris's notes to what's in place, what we've built, what's designed, and what we propose — with methodology where it matters.</p>
 
+<h2>Summary</h2>
+<p class="lede">This is a proof-of-concept Barra-style equity factor-risk model. It runs on free, public
+data and is demoed against the Soros 13F book. I've built it from scratch, ahead of joining — building
+each piece myself is how I'm learning the model, and how I'll be useful sooner once I start.</p>
+<p>Chris's input has been pivotal. He's course-corrected the parts where I don't yet have the depth, and
+much of what's here came from his steers. The quality is in the details: how loadings are built, how the
+estimation universe is chosen, how descriptors are standardised, and how missing data is handled. That's
+where the work has gone.</p>
+
+<h3>How it's put together</h3>
+<p>Two halves that talk only through a small set of data files:</p>
+<ul class="tight">
+  <li><b>Builders</b> pull the raw inputs (SEC 13F, EDGAR fundamentals, public prices) and write the
+    data frames — loadings, factor returns, specific risk, positions.</li>
+  <li>An <b>Atoti cube</b> reads those and exposes the exposures plus one scenario / stress engine —
+    historical simulation, event replay, hypothetical shocks.</li>
+  <li>On top sits a <b>risk-tooling layer</b> (limits, data-quality checks, VaR backtest, trends,
+    stress, pre-trade what-if, liquidity, universe diagnostics) and a small layer that reads a view's
+    numbers back in plain English.</li>
+</ul>
+<p class="small">A good part of that risk-tooling layer is already live — VaR, ES, stress, backtesting,
+liquidity. One caveat: these are the standard measures. They're where I learned the mechanics, but I'd
+guess they're not central to how you manage risk at Soros. The review with Chris has been about moving
+past them — getting the factor model itself right, and validating it against realised PnL.</p>
+
+<h3>The factors, and where the loadings come from</h3>
+<p>Eleven factors: <b>Market</b> — a loading of 1.0 on every name, so the book carries ~unit market
+exposure — plus ten style factors: Size, Value, Momentum, Beta, Residual Vol, Earnings Yield, Growth,
+Leverage, Liquidity and Non-Linear Size. Each name's style loading is a <b>cross-sectional z-score of a
+characteristic</b>, all from free public data:</p>
+<ul class="tight">
+  <li><b>From SEC fundamentals</b> (EDGAR XBRL): Size = log market cap, Value = book / price, Earnings
+    Yield = net income / price, Leverage = assets / equity, Growth = asset growth.</li>
+  <li><b>From daily prices</b>: Beta and Residual Vol (regression against the market), Momentum (trailing
+    return), Liquidity (log dollar volume).</li>
+</ul>
+<p>Each descriptor is standardised across the cross-section by median and MAD — robust to outliers — on
+the estimation universe (the S&amp;P 500 seed). Estimation loadings are winsorised at ±3; coverage names
+are left uncapped, so a genuinely small off-index name reads its true large-negative Size loading instead
+of being clipped to −3. Factor returns then come from a monthly cross-sectional regression of next-period
+returns on these loadings, market-cap weighted — the loadings, factor returns and specific risk are duals
+of one regression.</p>
+<p>The cadence matters and is easy to misread. Three different clocks: <b>quarterly</b> 13F holdings set
+the book; each <b>month-end</b> the exposure loadings are rebuilt from as-of fundamentals and prices; the
+daily stock returns then regress on those month-old loadings to give <b>daily</b> factor returns, which
+drive every risk number. Quarterly → monthly → daily.</p>
+<p class="small">One sizing note: the estimation universe is capped at 250 names so the demo runs
+quickly — widening it improves the factor fit. A demo constraint, not a limit of the approach.</p>
+
+<h3>Where it stands — the review items</h3>
+<table>
+  <thead><tr><th>#</th><th>Item</th><th>Status</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Point-in-time data</td><td><span class="dot d-inplace"></span><span class="status">In place</span></td><td>survivorship-free; bias-free estimation</td></tr>
+    <tr><td>2·3</td><td>Estimation vs. coverage universe; cap estimation, not coverage</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>the keystone — off-index names now read their true loadings; clean factor fit</td></tr>
+    <tr><td>4</td><td>Drawdown lens</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>the path risk VaR/ES miss</td></tr>
+    <tr><td>5</td><td>Active risk &amp; return vs. a benchmark</td><td><span class="dot d-designed"></span><span class="status">Agreed — next</span></td><td>benchmark agreed: MSCI Large Cap; unblocks tracking error &amp; active return</td></tr>
+    <tr><td>6</td><td>Intentional vs. unwanted loadings (hedging)</td><td><span class="dot d-designed"></span><span class="status">Evidence shipped</span></td><td>style-drift attribution — rotation vs. re-pricing; final call needs desk intent</td></tr>
+    <tr><td>7</td><td>Orthogonalisation &amp; multicollinearity</td><td><span class="dot d-designed"></span><span class="status">Partial</span></td><td>builder change</td></tr>
+    <tr><td>8</td><td>Linked securities (share classes / ADRs)</td><td><span class="dot d-proposed"></span><span class="status">Proposed</span></td><td>block-diagonal specific risk</td></tr>
+    <tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-designed"></span><span class="status">Designed — endorsed</span></td><td>realised PnL by factor + residual; residual-correlation tests; linked to the ex-ante risk decomposition</td></tr>
+  </tbody>
+</table>
+
+<h3>What's next</h3>
+<p>The foundations are mostly in. The open points:</p>
+<ul class="tight">
+  <li><b>PnL attribution &amp; factor-model validation (§9)</b> — the natural next build, and more
+    relevant than the standalone measures. It splits realised PnL into a factor part and a residual,
+    checks whether the residual is large and correlated, and reads each result against the risk expected
+    at the start of the period. Designed and endorsed by Chris.</li>
+  <li><b>Active risk vs. a benchmark (§5)</b> — benchmark agreed (MSCI Large Cap), so this is ready to
+    build: tracking error and active return.</li>
+  <li><b>What's most useful to the desk</b> — I'd value your view on which of these answers a real
+    question, so I build for that.</li>
+</ul>
+
+<div class="ask">
+  <p class="h">In one line</p>
+  <p>Building this from scratch is how I'm learning the model ahead of joining, and Chris's steers have
+  been pivotal. The standard risk measures are live but probably not central to how Soros runs risk — the
+  real work is getting the factor model right and validating it against realised PnL. The benchmark for
+  active risk is agreed: MSCI Large Cap.</p>
+</div>
+
+<hr>
+<h2>Full response — point by point</h2>
 <p class="lede">This is a proof-of-concept Barra-style equity factor-risk model, built on free/public
 data and demoed against the Soros 13F book. Chris's notes from the walkthrough are the agenda below.
 Each point is classified by status and answered with the methodology, not just an intention. The

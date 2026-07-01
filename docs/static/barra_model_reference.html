@@ -27,6 +27,47 @@
 
 <h1>Factor Risk Model — Data &amp; Transformation Reference</h1>
 
+<h2>Summary</h2>
+<ul>
+<li><strong>What.</strong> A two-block linear factor model — 10 style factors + a market
+    intercept (the systematic block) and a diagonal name-specific block — over Soros Fund Management's
+    13F US-equity book (792 names across the sample, 105 held at 2024-12-31).</li>
+<li><strong>Data, all free / public.</strong> SEC EDGAR 13F (positions), SEC XBRL company facts
+    (fundamentals, point-in-time), OpenFIGI (CUSIP→FIGI identity), Stooq / Yahoo (daily prices). One
+    builder writes six parquet frames; the Atoti cube reads those and nothing else. No factor-return
+    series is bought or downloaded — they are estimated in-house (§3).</li>
+<li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
+    — Size / Value / Earnings Yield / Leverage / Growth from fundamentals, Beta / Residual Vol / Momentum
+    / Liquidity from prices — standardised by median / MAD on the estimation universe (winsorised ±3
+    there, left uncapped on coverage so off-index names read their true loadings).</li>
+<li><strong>Risk.</strong> Every scenario is the same calculation
+    <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
+    shock vector changes (historical simulation, event replay, or a hypothetical stress). All figures are
+    1-day, 99%; book specific vol is currently 0.38%.</li>
+<li><strong>Descriptors, not factors.</strong> Sector (SIC→GICS) and Country (SEC state of incorporation;
+    ~21% of the book reads non-US) are tags only — there is <strong>no country or industry factor</strong>,
+    so that exposure is carried by the style / market / specific loadings, not a country bet.</li>
+<li><strong>Cadence.</strong> Three different clocks. <strong>Quarterly</strong> 13F holdings set the
+    book. Each <strong>month-end</strong> the exposure loadings are rebuilt — from as-of fundamentals and
+    prices (§3a–b). The daily stock returns then regress on those month-old loadings to give
+    <strong>daily</strong> factor returns (§3c), which drive every risk number. Quarterly → monthly → daily.</li>
+<li><strong>Watch-outs.</strong> Monthly loadings drive daily returns (intra-month drift); the estimation
+    cross-section is US-large-cap-tilted; 13F is quarterly, lagged and long-only; specific-risk coverage is
+    partial. Full list in §9.</li>
+</ul>
+<div class="flow">
+  <span class="box">13F holdings<br><span class="small">quarterly · stock</span></span>
+  <span class="arr">⟶</span>
+  <span class="box">Exposure loadings<br><span class="small">monthly · stock × factor</span></span>
+  <span class="arr">⟶</span>
+  <span class="box">Factor returns<br><span class="small">daily · factor</span></span>
+  <span class="arr">⟶</span>
+  <span class="box">Risk numbers<br><span class="small">VaR / ES / stress, 1-day 99%</span></span>
+</div>
+<p class="small">Fundamentals (per filing, as-of) and daily prices feed the monthly loadings step.
+The rest of this document is the audit trail behind each line above — every input, every transformation,
+every check.</p>
+
 <p>This document is the audit trail for every number the model produces: where each input comes
 from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
@@ -80,7 +121,7 @@ market factor are <em>built here, from scratch</em>, in three parts:
     cross-sectional approach. The factor returns are an output of our regression, not a bought or
     downloaded series. The monthly-to-daily step is in §3c.</li>
 </ol>
-The only raw data we buy (all free) are 13F holdings, identity mappings, company fundamentals and
+The only raw data we use (all free) are 13F holdings, identity mappings, company fundamentals and
 daily prices. The factor structure is built from those, which is why §3 is the substance of the
 model.</div>
 
@@ -89,23 +130,35 @@ and do not hit rate-limited APIs again. The four raw feeds below go into the bui
 row, factor returns, is the estimated output from the callout above, listed here so all six frames
 sit in one place.</p>
 <table>
-<tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>What we rely on it for</th><th>Known caveats</th></tr>
+<tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>Grain</th><th>What we rely on it for</th><th>Known caveats</th></tr>
 <tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK 1029160)</td><td>Quarterly, ~45d lag</td>
-    <td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; shorts and intra-quarter trades invisible; public by construction</td></tr>
+    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; shorts and intra-quarter trades invisible; public by construction</td></tr>
 <tr><td>Identity</td><td>OpenFIGI v3 mapping API (CUSIP→FIGI→ticker) + SEC <code>company_tickers.json</code> (ticker→CIK)</td>
-    <td>On rebuild</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
+    <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
 <tr><td>Fundamentals</td><td>SEC XBRL company-facts API, CIK-keyed; tags: Assets, Liabilities,
     StockholdersEquity, NetIncomeLoss, shares from <code>dei:EntityCommonStockSharesOutstanding</code></td>
-    <td>Per filing (point-in-time, as-of joined on <code>filed</code> date)</td><td>Size, Value, EarnYield, Leverage, Growth descriptors</td>
+    <td>Per filing (point-in-time, as-of joined on <code>filed</code> date)</td><td>Stock</td><td>Size, Value, EarnYield, Leverage, Growth descriptors</td>
     <td>Tag coverage varies by filer; ~no look-ahead by construction; see incident note in §5</td></tr>
 <tr><td>Prices</td><td>Stooq daily CSV (ticker-keyed) with Yahoo chart-API fallback (split-adjusted close, volume); market proxy = <code>SPY</code></td>
-    <td>Daily</td><td>Stock returns (the regression's left-hand side), Beta, ResidVol, Momentum, Liquidity, market cap</td>
+    <td>Daily</td><td>Stock</td><td>Stock returns (the regression's left-hand side), Beta, ResidVol, Momentum, Liquidity, market cap</td>
     <td>Free, not redistributable; Stooq serves a JS anti-bot page to some hosts (fallback handles this transparently)</td></tr>
+<tr><td>Exposure loadings</td><td><strong>Not sourced, computed.</strong> Cross-sectional z-scores of the
+    fundamental + price descriptors, standardised on the estimation universe (§3a–b)</td>
+    <td><strong>Monthly</strong> (rebuilt each month-end)</td><td><strong>Stock × Factor</strong></td><td>The book's net factor exposure, and the right-hand
+    side of the daily factor-return regression</td>
+    <td>Month-old when the daily returns regress on them — intra-month drift (§9)</td></tr>
 <tr><td>Factor returns</td><td><strong>Not sourced, estimated.</strong> Daily cross-sectional WLS regression of stock
     returns on the latest monthly exposures (§3). 10 style factors + 1 market intercept.</td>
-    <td>Daily, 2,203 trading days (2016–2024)</td><td>The entire systematic block and scenario engine</td>
+    <td>Daily, 2,203 trading days (2016–2024)</td><td><strong>Factor</strong></td><td>The entire systematic block and scenario engine</td>
     <td>Quality scales with universe breadth; no vendor benchmark to validate against</td></tr>
 </table>
+<p class="small"><strong>A note on cadence and grain.</strong> The feeds arrive at different rhythms —
+positions quarterly, fundamentals per filing, prices daily — but the model runs on a
+<strong>monthly</strong> calendar: <strong>exposure loadings are rebuilt each month-end</strong> (§3a–b),
+and the factor returns are estimated <strong>daily</strong> off those month-old loadings (§3c). The
+<em>Grain</em> column is the other axis — every input is per-<strong>stock</strong>, the loadings are
+per-<strong>stock&nbsp;×&nbsp;factor</strong>, and the daily regression collapses them to
+per-<strong>factor</strong>. That collapse is §3, the substance of the model.</p>
 
 <h2>2 · Transformation register — positions &amp; identity</h2>
 <ol>
@@ -417,7 +470,7 @@ VaR-backtest badge.</p>
 <li><strong>Desk limits (RAG)</strong> — book VaR / ES / Risk HHI and single-name / sector weight vs a
     desk limit set, red/amber/green with breach flags.</li>
 <li><strong>Data-quality panel</strong> — the §5 checks surfaced live against the served frames, plus the
-    known stubs (Country, Unknown sector).</li>
+    "Unknown" sector fallback for the few names without an SEC SIC.</li>
 <li><strong>Risk-analyst commentary</strong> — an on-demand written read of any view's numbers (LLM,
     grounded strictly on the figures shown, no tool or data access), leading with any limit breach.</li>
 <li><strong>Scoped Q&amp;A (Ask the risk model)</strong> — a free-text question answered by the LLM with
@@ -462,10 +515,14 @@ VaR-backtest badge.</p>
     plus the S&amp;P 500 (§2·b). That is a real market, but it is US large-cap-tilted, so
     small-caps and non-US names outside the book are absent. Point <code>SEED_INDEX</code> at a
     broader benchmark (S&amp;P 1500 or Russell 3000) for a fuller market.</li>
-<li><strong>Sector is a free SIC→GICS proxy, Country is stubbed.</strong> Sector comes from each
-    filer's SEC SIC code crosswalked to the 11 GICS sectors (CIK-keyed), so sector drill-downs
-    work. A handful of BDCs and closed-end funds have no SEC SIC and fall back to "Unknown".
-    Country is still a constant "US", pending a real domicile source.</li>
+<li><strong>Sector and Country are free SEC-derived descriptors — neither is a factor.</strong> Sector
+    comes from each filer's SEC SIC code crosswalked to the 11 GICS sectors (CIK-keyed); a handful of
+    BDCs and closed-end funds have no SEC SIC and fall back to "Unknown". Country is the state of
+    incorporation from the same SEC submissions JSON (US state codes → US, foreign codes → the country),
+    so ~21% of the book reads non-US (Alibaba/JD, Canadian energy/industrials, Sanofi). Both are tags
+    only: the model has <strong>no country or industry factor</strong>, so that exposure is carried by
+    the style/market/specific loadings, not a country bet. A residual few ADRs that file a US address
+    with a blank domicile (e.g. Grifols) still read US.</li>
 <li><strong>Exposures update monthly.</strong> Daily factor returns are regressed on month-old
     loadings. This is standard Barra timing, but the loadings drift inside the month.</li>
 <li><strong>Specific-risk coverage is partial.</strong> Names outside the regression cross-section
