@@ -23,3 +23,6 @@ ActivePivot.lic*
 
 # generated parquet frames
 data/
+
+# transient app screenshots (debug artifacts)
+screenshots/
