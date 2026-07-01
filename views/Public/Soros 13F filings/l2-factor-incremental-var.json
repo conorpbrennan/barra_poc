@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Per factor: marginal VaR (its additive share of the current tail) alongside incremental VaR (the risk released if that exposure were removed). Marginal splits today's tail; incremental is diversification-aware and answers 'what would cutting this actually save?'."
   }
 }

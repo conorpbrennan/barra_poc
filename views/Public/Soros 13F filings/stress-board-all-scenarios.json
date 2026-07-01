@@ -172,6 +172,7 @@
           ]
         }
       }
-    ]
+    ],
+    "description": "Scenario VaR 99, worst loss and Total VaR 99 side by side across every scenario set \u2014 historical simulation, the event replays, and the hypothetical style shocks \u2014 on the latest filing. The one-screen stress comparison. Chart view."
   }
 }

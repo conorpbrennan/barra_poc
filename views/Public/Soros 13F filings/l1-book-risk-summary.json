@@ -35,6 +35,7 @@
     "as_pct": true,
     "hide_empty": true,
     "heat": true,
-    "prec": 3
+    "prec": 3,
+    "description": "The book's headline risk on the latest filing under HistFull: Total VaR 99 (factor tail and the idiosyncratic tail combined in quadrature), Scenario (factor) VaR 99, and Specific vol (the diagonal idiosyncratic block). The one-line 'how much can we lose in a day' read."
   }
 }

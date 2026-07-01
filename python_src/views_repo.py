@@ -20,7 +20,7 @@ SCHEMA_VERSION = 1
 # the state fields that define a view (order is the canonical capture order)
 STATE_FIELDS = ["rows", "cols", "measures", "slice_dims", "filters",
                 "row_tot", "col_tot", "as_pct", "hide_empty", "heat", "prec", "sort",
-                "date_fmt", "render", "queries", "chart"]
+                "date_fmt", "render", "queries", "chart", "description"]
 RENDERS = ["grid", "chart"]   # how a view draws: ag-grid table | an embedded Vega-Lite `chart` spec
 # A "chart" view is fully self-describing: `queries` is a list of named, self-contained PIVOT
 # queries (each `{name, rows, cols, measures, filters}` — the same tabular query the L1 grid runs)

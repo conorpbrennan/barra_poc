@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Each GICS sector's additive contribution to book Total VaR 99 and % share \u2014 where the tail sits by sector. (Sector is a free SIC\u2192GICS proxy; a few names fall back to 'Unknown'.)"
   }
 }

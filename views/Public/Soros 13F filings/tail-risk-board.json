@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Tail risk board — VaR ladder & ES",
+  "name": "Tail risk board \u2014 VaR ladder & ES",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-20T19:30:00Z",
   "updated": "2026-06-20T19:30:00Z",
@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "The full tail profile per scenario set: the VaR ladder (95 / 97.5 / 99), Expected Shortfall (97.5 / 99) and scenario P&L vol. The 95\u219299 spread reads tail fatness; ES reads the mean loss beyond VaR."
   }
 }

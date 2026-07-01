@@ -396,6 +396,7 @@
           ]
         }
       }
-    ]
+    ],
+    "description": "Factor VaR 99 by factor under the COVID-2020 event replay (Evt:COVID2020) \u2014 the book's factor tail if that window's returns recurred against today's exposures. Chart view."
   }
 }
