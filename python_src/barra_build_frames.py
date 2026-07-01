@@ -273,6 +273,49 @@ def sectors_for_ciks(ciks) -> pd.DataFrame:
     return pd.DataFrame([res[c] for c in uniq])
 
 
+# SEC 2-letter codes that denote a US state / territory; anything else in stateOfIncorporation is a
+# foreign domicile (e.g. K3 Hong Kong, E9 Cayman, A6 Ontario, I0 France).
+US_STATE_CODES = frozenset(
+    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ "
+    "NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY PR GU VI AS MP".split())
+
+
+def _norm_country(desc) -> str:
+    """Collapse an SEC domicile description to a country: Canadian provinces / federal -> Canada;
+    everything else kept as the SEC description (e.g. 'France', 'Hong Kong', 'Cayman Islands')."""
+    d = (desc or "").strip()
+    if not d:
+        return ""
+    return "Canada" if "Canada" in d else d
+
+
+def countries_for_ciks(ciks) -> pd.DataFrame:
+    """Country of incorporation per CIK, from the SAME SEC submissions JSON sectors_for_ciks reads
+    (disk-cached, no extra network on a warm cache). A US state code -> 'US'; a foreign
+    stateOfIncorporation -> that country; a blank field falls back to the business-address country.
+    Network failure / no domicile -> 'US' (the safe default for a US-listed 13F). Residual mislabels
+    are ADRs that file a US business address with a blank domicile (e.g. Grifols) — all tiny weights."""
+    def _one(cik):
+        cik = int(cik)
+        try:
+            j = _get_json(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
+            soi = (j.get("stateOfIncorporation") or "").strip()
+            if soi in US_STATE_CODES:
+                country = "US"
+            elif soi:                                   # non-blank, non-US state -> foreign
+                country = _norm_country(j.get("stateOfIncorporationDescription")) or "US"
+            else:                                       # blank domicile -> business address
+                biz = (j.get("addresses") or {}).get("business") or {}
+                country = ("US" if (biz.get("stateOrCountry") or "").strip() in US_STATE_CODES
+                           else _norm_country(biz.get("stateOrCountryDescription")) or "US")
+        except Exception:
+            country = "US"
+        return {"CIK": cik, "Country": country}
+    uniq = [int(c) for c in pd.unique(pd.Series(list(ciks)).dropna())]
+    res = _pull_map(_one, uniq, "countries")
+    return pd.DataFrame([res[c] for c in uniq])
+
+
 # --------------------------------------------------------------------------- 1. Soros 13F positions
 def positions_from_13f(cik: int) -> pd.DataFrame:
     """Parse every 13F-HR information table for `cik` into (report_date, cusip, issuer, shares, value)."""
@@ -745,7 +788,12 @@ def build_frames():
     gics = sectors_for_ciks(securities["CIK"])
     securities = securities.merge(gics[["CIK", "Sector"]], on="CIK", how="left")
     securities["Sector"] = securities["Sector"].fillna("Unknown")
-    securities["Country"] = "US"
+    # Country of incorporation from the same SEC submissions JSON (US state -> 'US', foreign -> country);
+    # names with no CIK keep the US default. See countries_for_ciks. ~21% of the Soros book by weight is
+    # genuinely non-US (Alibaba/JD China, Canadian energy/industrials, Sanofi), so this is not cosmetic.
+    ctry = countries_for_ciks(securities["CIK"])
+    securities = securities.merge(ctry[["CIK", "Country"]], on="CIK", how="left")
+    securities["Country"] = securities["Country"].fillna("US")
     factor_meta = pd.DataFrame({"Factor": ["Market"] + STYLE_FACTORS,
                                 "FactorGroup": ["Market"] + ["Style"] * len(STYLE_FACTORS)})
 
