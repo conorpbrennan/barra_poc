@@ -114,9 +114,16 @@ export function PivotGrid({
     return [tr];
   }, [cfg.totals, grand, colMembers, measures]);
 
+  // Remount the grid when the COLUMN structure changes (loading a different view: new rows/measures/
+  // col members). AG Grid can otherwise keep stale columns when both columnDefs and rowData swap at
+  // once — the "first click shows the old report, second click is right" symptom. The key excludes the
+  // expanded/drill state (flat), so drilling within a view does NOT remount and keeps scroll/expansion.
+  const gridKey = `${cfg.rows.join(",")}|${measures.join(",")}|${colMembers.join(",")}`;
+
   return (
     <div className="ag-theme-balham" style={{ height: "70vh", width: "100%" }}>
       <AgGridReact<GridRow>
+        key={gridKey}
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}

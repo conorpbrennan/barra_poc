@@ -209,4 +209,5 @@ export interface ViewState {
   heat?: boolean; prec?: number; sort?: unknown;
   date_fmt?: string; render?: "grid" | "chart";
   queries?: PivotQuery[]; chart?: Record<string, unknown> | null;
+  description?: string;   // human note: what the view captures (shown in the Pivot description pane)
 }

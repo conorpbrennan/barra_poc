@@ -11,6 +11,7 @@ export function Repository({
   const [sections, setSections] = useState<Record<string, ViewTree>>({});
   const [name, setName] = useState("");
   const [folder, setFolder] = useState("Public");
+  const [description, setDescription] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -23,7 +24,9 @@ export function Repository({
   async function save() {
     if (!name.trim()) { setErr("name the view"); return; }
     setBusy(true); setErr(null);
-    try { await saveView(name.trim(), folder, currentState); await refresh(); }
+    // description from the form wins; otherwise keep whatever the current state already carries
+    const state = { ...currentState, description: description.trim() || currentState.description };
+    try { await saveView(name.trim(), folder, state); await refresh(); }
     catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
 
@@ -42,6 +45,10 @@ export function Repository({
       <div style={{ margin: "0.5rem 0" }}>
         <input type="text" placeholder="view name" value={name} onChange={(e) => setName(e.target.value)}
           style={{ width: "100%", marginBottom: "0.3rem" }} />
+        <textarea placeholder="description — what this view captures (optional)" value={description}
+          onChange={(e) => setDescription(e.target.value)} rows={2}
+          style={{ width: "100%", marginBottom: "0.3rem", font: "inherit", fontSize: 12,
+            border: "1px solid var(--line)", borderRadius: 2, padding: "0.25rem", resize: "vertical" }} />
         <div className="row">
           <select value={folder} onChange={(e) => setFolder(e.target.value)} style={{ flex: 1 }}>
             <option value="Public">Public</option>

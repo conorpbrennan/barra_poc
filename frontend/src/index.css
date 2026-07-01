@@ -142,3 +142,13 @@ table.tufte td.label, table.tufte th.label { text-align: left; }
 hr.rule { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
 .tag { font-size: 11px; color: var(--faint); border: 1px solid var(--line); border-radius: 2px;
   padding: 0 0.3rem; }
+
+/* Field-list source rows (Dimensions / Measures): highlight fields in use, toggle buttons show state */
+.fieldrow { display: flex; justify-content: space-between; align-items: center; font-size: 12.5px;
+  padding: 0.06rem 0.2rem; border-radius: 2px; }
+.fieldrow.active { color: var(--accent); font-weight: 600; background: rgba(59, 94, 140, 0.07); }
+.fieldbtn { border: 1px solid var(--line); border-radius: 2px; padding: 0 0.32rem; font-size: 11px;
+  line-height: 1.5; cursor: pointer; background: transparent; color: var(--faint); }
+.fieldbtn:hover { border-color: var(--accent); color: var(--accent); }
+.fieldbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.fieldbtn.on:hover { background: var(--accent-dk); color: #fff; }

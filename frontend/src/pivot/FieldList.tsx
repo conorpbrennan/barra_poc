@@ -46,7 +46,10 @@ export function FieldList({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [filterDim, setFilterDim] = useState<string>("");
 
-  const scenCtx = cfg.cols.includes("ScenarioSet") || "ScenarioSet" in cfg.filters;
+  // ScenarioSet on ANY axis (rows or cols) or as a filter gives scenario context — mirror the
+  // backend rule (_pivot_result checks rows+cols), so a view with ScenarioSet on rows doesn't warn.
+  const scenCtx = cfg.rows.includes("ScenarioSet") || cfg.cols.includes("ScenarioSet")
+    || "ScenarioSet" in cfg.filters;
   const scenMeasureNoCtx = cfg.measures.some((m) => dims.scenario_dependent.includes(m)) && !scenCtx;
 
   const addRow = (d: string) => setCfg((c) => (c.rows.includes(d) ? c : { ...c, rows: [...c.rows, d] }));
@@ -103,7 +106,7 @@ export function FieldList({
 
       {scenMeasureNoCtx && (
         <div className="small rag-amber" style={{ marginBottom: "0.5rem" }}>
-          ⚠ scenario measure needs a ScenarioSet — add it to Filters or Columns, else cells are blank.
+          ⚠ scenario measure needs a ScenarioSet — put it on Rows/Columns or filter to one set, else cells are blank.
         </div>
       )}
 
@@ -111,16 +114,26 @@ export function FieldList({
 
       <div style={{ maxHeight: "12rem", overflowY: "auto" }}>
         <div className="muted small" style={{ marginBottom: "0.2rem" }}>Dimensions</div>
-        {dims.dimensions.map((d) => (
-          <div key={d} className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
-            <span>{d}</span>
-            <span className="row" style={{ gap: "0.15rem" }}>
-              <button onClick={() => addRow(d)} title="to rows" style={{ padding: "0 0.3rem" }}>R</button>
-              <button onClick={() => addCol(d)} title="to columns" style={{ padding: "0 0.3rem" }}>C</button>
-              <button onClick={() => setFilterDim(d)} title="filter" style={{ padding: "0 0.3rem" }}>F</button>
-            </span>
-          </div>
-        ))}
+        {dims.dimensions.map((d) => {
+          // reflect the CURRENT view: R/C/F light up for the axis this dim sits on; clicking toggles.
+          const inRows = cfg.rows.includes(d);
+          const inCols = cfg.cols.includes(d);
+          const inFilters = d in cfg.filters;
+          const active = inRows || inCols || inFilters;
+          return (
+            <div key={d} className={`fieldrow${active ? " active" : ""}`}>
+              <span>{d}</span>
+              <span className="row" style={{ gap: "0.15rem" }}>
+                <button className={`fieldbtn${inRows ? " on" : ""}`} title={inRows ? "remove from rows" : "to rows"}
+                  onClick={() => (inRows ? remRow(d) : addRow(d))}>R</button>
+                <button className={`fieldbtn${inCols ? " on" : ""}`} title={inCols ? "remove from columns" : "to columns"}
+                  onClick={() => (inCols ? remCol(d) : addCol(d))}>C</button>
+                <button className={`fieldbtn${inFilters ? " on" : ""}`} title={inFilters ? "clear filter" : "filter"}
+                  onClick={() => (inFilters ? setFilter(d, []) : setFilterDim(d))}>F</button>
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {filterDim && (
@@ -132,12 +145,16 @@ export function FieldList({
 
       <div className="muted small" style={{ margin: "0.5rem 0 0.2rem" }}>Measures</div>
       <div style={{ maxHeight: "12rem", overflowY: "auto" }}>
-        {dims.measures.map((m) => (
-          <div key={m} className="row" style={{ justifyContent: "space-between", fontSize: 12.5 }}>
-            <span className={dims.scenario_dependent.includes(m) ? "" : ""}>{m}</span>
-            <button onClick={() => addMeasure(m)} title="to values" style={{ padding: "0 0.3rem" }}>+</button>
-          </div>
-        ))}
+        {dims.measures.map((m) => {
+          const inVals = cfg.measures.includes(m);   // selected measures are highlighted; +/− toggles
+          return (
+            <div key={m} className={`fieldrow${inVals ? " active" : ""}`}>
+              <span>{m}</span>
+              <button className={`fieldbtn${inVals ? " on" : ""}`} title={inVals ? "remove from values" : "to values"}
+                onClick={() => (inVals ? remMeasure(m) : addMeasure(m))}>{inVals ? "−" : "+"}</button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

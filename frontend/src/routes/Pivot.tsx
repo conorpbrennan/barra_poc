@@ -4,7 +4,7 @@
 import { Suspense, lazy, useEffect, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { useDims } from "../api/hooks";
-import { usePivot } from "../pivot/usePivot";
+import { usePivot, type PivotConfig } from "../pivot/usePivot";
 import { FieldList } from "../pivot/FieldList";
 import { PivotGrid } from "../pivot/PivotGrid";
 // Vega is ~heavy; only load it when the user switches to chart mode.
@@ -20,6 +20,8 @@ export function Pivot() {
   const [mode, setMode] = useState<"grid" | "chart">("grid");
   const [showRepo, setShowRepo] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  // the currently-loaded saved view (name + its description), shown in the bottom description pane
+  const [loadedView, setLoadedView] = useState<{ name: string; description?: string } | null>(null);
 
   // seed the pivot filters from the global context bar (§9): Date + ScenarioSet, overridable.
   const pivot = usePivot({
@@ -29,34 +31,45 @@ export function Pivot() {
   });
   const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, warning, loading, error } = pivot;
 
-  // keep Date/ScenarioSet in sync when the context bar changes (unless the user overrode them away)
+  // Reload whenever the cube is ready or the global context (date / scenario) changes, folding them
+  // into the pivot filters AND re-querying — so changing the scenario dropdown updates the numbers
+  // immediately (previously it updated the filter chip but not the grid). ScenarioSet is only sliced
+  // when it is NOT already on an axis: a view may put ScenarioSet on Rows/Columns to COMPARE across
+  // sets (e.g. Concentration — Risk HHI), and those must not be collapsed to the single global set.
   useEffect(() => {
-    setCfg((c) => ({ ...c, filters: { ...c.filters, Date: [date], ScenarioSet: [scenario] } }));
+    if (!dimsQ.data || !date) return;
+    const onAxis = cfg.rows.includes("ScenarioSet") || cfg.cols.includes("ScenarioSet");
+    const filters: Record<string, string[]> = { ...cfg.filters, Date: [date] };
+    if (onAxis) delete filters.ScenarioSet;
+    else filters.ScenarioSet = [scenario];
+    const next = { ...cfg, filters };
+    setCfg(next);
+    reload(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, scenario]);
-
-  // first load
-  useEffect(() => {
-    if (dimsQ.data) reload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimsQ.data]);
+  }, [dimsQ.data, date, scenario]);
 
   const loadViewState = (s: ViewState, name: string) => {
-    setCfg((c) => ({
-      ...c,
-      rows: s.rows ?? c.rows, cols: s.cols ?? [], measures: s.measures ?? c.measures,
-      filters: s.filters ?? c.filters, totals: s.row_tot ?? c.totals,
-      heat: s.heat ?? c.heat, asPct: s.as_pct ?? c.asPct, prec: s.prec ?? c.prec,
-    }));
+    // Build the next config explicitly and hand it straight to reload(). Do NOT rely on setCfg +
+    // a deferred reload() — reload closes over the CURRENT-render cfg, so a bare reload() fired
+    // before React re-renders would query with the *previous* view's config (the "first click shows
+    // the wrong report, second click is right" bug). Passing `next` bypasses that stale closure.
+    const next: PivotConfig = {
+      ...cfg,
+      rows: s.rows ?? cfg.rows, cols: s.cols ?? [], measures: s.measures ?? cfg.measures,
+      filters: s.filters ?? cfg.filters, totals: s.row_tot ?? cfg.totals,
+      heat: s.heat ?? cfg.heat, asPct: s.as_pct ?? cfg.asPct, prec: s.prec ?? cfg.prec,
+    };
+    setCfg(next);
     setMode(s.render === "chart" ? "chart" : "grid");
-    setTimeout(() => reload(), 0);
+    reload(next);
+    setLoadedView({ name, description: s.description });
     document.title = `${name} · pivot`;
   };
 
   const currentState: ViewState = {
     rows: cfg.rows, cols: cfg.cols, measures: cfg.measures, filters: cfg.filters,
     row_tot: cfg.totals, as_pct: cfg.asPct, heat: cfg.heat, prec: cfg.prec,
-    render: mode,
+    render: mode, description: loadedView?.description,
   };
 
   const analysisBody = {
@@ -103,6 +116,19 @@ export function Pivot() {
           </div>
         )}
       </QueryState>
+
+      {/* description pane — what the loaded view captures (reading column, et-book serif) */}
+      {loadedView && (
+        <div style={{ marginTop: "1rem", borderTop: "1px solid var(--line)", paddingTop: "0.7rem" }}>
+          <div className="row" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
+            <h2 style={{ margin: 0 }}>About this view · {loadedView.name}</h2>
+            <button className="small" onClick={() => setLoadedView(null)} title="dismiss">×</button>
+          </div>
+          {loadedView.description
+            ? <p className="reading" style={{ margin: "0.4rem 0 0" }}>{loadedView.description}</p>
+            : <p className="muted small" style={{ margin: "0.4rem 0 0" }}>No description saved for this view.</p>}
+        </div>
+      )}
 
       <hr className="rule" />
       <div className="row" style={{ justifyContent: "space-between" }}>
