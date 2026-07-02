@@ -90,7 +90,10 @@ export function PivotGrid({
         const key = `${cm}${COL_SEP}${m}`;
         valueCols.push({
           headerName: cm ? `${cm} · ${m}` : m,
-          field: key,
+          // measure names contain dots (e.g. "Scenario VaR 97.5"); AG Grid reads a dotted `field` as a
+          // nested path and renders blank, so read the literal key via valueGetter (colId keeps identity).
+          colId: key,
+          valueGetter: (p) => (p.data ? (p.data as GridRow)[key] as number | null : null),
           type: "rightAligned",
           width: 140,
           valueFormatter: (p) => fmt(p.value, cfg),

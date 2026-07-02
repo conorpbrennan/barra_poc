@@ -22,6 +22,8 @@ export function Pivot() {
   const [showAnalysis, setShowAnalysis] = useState(false);
   // the currently-loaded saved view (name + its description), shown in the bottom description pane
   const [loadedView, setLoadedView] = useState<{ name: string; description?: string } | null>(null);
+  // a charted view is self-describing: its named queries + Vega-Lite spec(s), rendered verbatim
+  const [chartView, setChartView] = useState<Pick<ViewState, "queries" | "chart"> | null>(null);
 
   // seed the pivot filters from the global context bar (§9): Date + ScenarioSet, overridable.
   const pivot = usePivot({
@@ -63,6 +65,8 @@ export function Pivot() {
     setMode(s.render === "chart" ? "chart" : "grid");
     reload(next);
     setLoadedView({ name, description: s.description });
+    // capture the self-describing chart (queries + spec) so chart mode renders it verbatim
+    setChartView(s.render === "chart" && s.chart ? { queries: s.queries, chart: s.chart } : null);
     document.title = `${name} · pivot`;
   };
 
@@ -108,7 +112,7 @@ export function Pivot() {
                   cfg={cfg} grand={grand} onToggle={toggleExpand} />
               ) : (
                 <Suspense fallback={<div className="spin">loading chart…</div>}>
-                  <ChartMode cfg={cfg} />
+                  <ChartMode cfg={cfg} savedQueries={chartView?.queries} savedChart={chartView?.chart} />
                 </Suspense>
               )}
             </div>
