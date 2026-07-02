@@ -188,6 +188,49 @@ export interface WhatChangedResult {
 // accessed by bracket, so a plain tidy record is the right shape.
 export type AttributionRow = Rec;
 
+// ---- PnL attribution (Step 15: /pnl_attribution, /pnl_attribution/residual, .../linkage) ----
+export interface PnlSeriesPoint { date: string; market: number; style: number; specific: number; realized: number }
+export interface PnlFactorRow {
+  factor: string; avg_exposure: number | null; cum_factor_return: number;
+  contribution: number; pct_of_total: number | null; t_stat: number | null;
+}
+export interface PnlAttributionResult {
+  from: string; to: string; book: string; n_days: number;
+  calendar: { min: string; max: string };
+  headline: { realized_geometric: number; factor: number; specific: number; specific_share: number | null };
+  linked: Record<string, number>;
+  series: PnlSeriesPoint[];
+  factors: PnlFactorRow[];
+  coverage: { mean_priced_share: number | null; min_priced_share: number | null;
+              unpriced: { name: string; weight: number }[] };
+  by?: Rec[];
+  note: string;
+}
+export interface PnlCheck { name: string; value: number; status: string; verdict: string; fmt: string }
+export interface PnlResidualResult {
+  from: string; to: string; book: string; n_months: number; status: string;
+  checks: PnlCheck[];
+  specific_share: number | null; explained_share: number | null;
+  factor_regression: { r2: number | null; loadings: { factor: string; beta: number; t_stat: number }[] };
+  factor_bias: { factor: string; bias: number; band: number | null }[];
+  concentration: { hhi: number | null; top5_share: number | null; n: number };
+  hit_rate: { names: number | null; months: number | null };
+  note: string;
+}
+export interface PnlLinkageRow {
+  name: string; kind: string; exposure: number | null; risk_share: number | null;
+  realized: number; sd_base: number; sd_stressed: number; z: number | null; verdict: string;
+}
+export interface PnlLinkageResult {
+  T: string; to: string; horizon_months: number; n_days: number; book: string;
+  stress: { vol_mult: number; rho_blend: number };
+  book_total: PnlLinkageRow; rows: PnlLinkageRow[];
+  positions: { name: string; position: string; weight: number; realized: number;
+               sd_base: number; z: number; verdict: string }[];
+  surprises: PnlLinkageRow[];
+  note: string;
+}
+
 // ---- saved views (views_api.py) ----
 export interface ViewLeaf {
   name: string; slug: string; path: string; file: string;

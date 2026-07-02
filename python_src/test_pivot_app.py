@@ -92,6 +92,18 @@ def t_overview_landing_renders_scorecard():
 
 
 @test
+def t_overview_attribution_panel_renders():
+    """Step 15: the PnL-attribution panel renders on the Overview Risk tab with no exception —
+    headline, RAG diagnostics and the reconcile band SVG all present (they need the backend's
+    /pnl_attribution* endpoints + the precompute artifact)."""
+    at = _run(page="Overview")
+    assert not at.exception, list(at.exception)
+    blob = " ".join(m.value for m in at.markdown if isinstance(m.value, str))
+    assert "Realized" in blob and "factor" in blob, "attribution headline missing"
+    assert "<svg" in blob and "stress regime" in blob, "reconcile band chart missing"
+
+
+@test
 def t_overview_open_pivot_button_switches_page():
     at = _run(page="Overview")
     btn = [b for b in at.button if str(b.key) == "ov_to_pivot"]

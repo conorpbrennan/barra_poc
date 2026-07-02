@@ -7,11 +7,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A proof-of-concept Barra-style equity factor-risk model built entirely on free/public data,
 demoed against the Soros Fund Management 13F book. It splits cleanly into two halves:
 
-1. **Frame builders** pull raw data and emit six canonical parquet frames.
-2. **The Atoti cube** consumes those six frames and exposes exposures + a unified
+1. **Frame builders** pull raw data and emit seven canonical parquet frames.
+2. **The Atoti cube** consumes those frames and exposes exposures + a unified
    scenario/stress engine (historical sim, event replay, hypothetical shocks).
 
-The two halves communicate *only* through the six parquet files written to the repo-local
+The two halves communicate *only* through the seven parquet files written to the repo-local
 `data/` dir (gitignored). Run a builder, then run the cube — they share no in-process state.
 
 ## Running
@@ -198,6 +198,44 @@ each name's ADV you'll trade per day; `horizon` (default 5) is the cutoff. No cu
 (participation/horizon sliders). Tests: `test_liquidity.py`. NB on the Soros book at 20%
 participation: ~87% of weight liquidatable within 5 days, wavg ≈ 2.2d, worst ≈ 13.4d (GFL), no-ADV 0.
 
+## PnL attribution & factor-model validation (`/pnl_attribution`)
+
+Step 15 (spec: `docs/pnl-attribution-plan.md`, roadmap §9 — shipped 2026-07-02). Splits the book's
+**realized** PnL into a factor-explained part + a residual, tests the residual, and links both back
+to the ex-ante risk decomposition. Three layers:
+
+- **Builder/cube (the drill).** The 7th frame `specific_returns` persists the un-squared WLS
+  residual `u` daily. The cube derives three **additive** measures — `Factor contribution`
+  (= WLoading × fwd-month factor return, a physical leaf column), `Specific PnL` (as-of weight ×
+  fwd-month residual, OriginScope like `Specific variance` — fans out by Factor, read it by
+  name/book), `Realized PnL` (their sum, an identity) — all on the **forward-month convention**:
+  the value at Date d0 is the PnL over the month after d0 (the month d0's exposures explain).
+  They're on the `/pivot` allowlist (pruned at startup on v1 data), so the grid, `/ask` and
+  `/analysis` inherit the factor→name drill.
+- **Precompute `barra_pnl_attribution.py`** → `data/pnl_attribution.parquet` (tidy daily
+  Date/Kind/Source/Value). Reconstructs each name's daily return **from the frames alone**
+  (`R_i = L_i·f + ε_i` — exact, ε is the model's own residual, so realized = factor + specific ties
+  out at machine precision; that identity is unit-tested), compounds **drifting buy-and-hold
+  weights** re-anchored at each 13F filing, and discloses coverage (priced share + unpriced names).
+  Pure stats importable for tests: `_carino_link`, `_info_ratio`, `_autocorr`, `_bias_stat`,
+  `_concentration_hhi`, `_hit_rate`, `_resid_factor_regression`, `_stressed_cov`. Rerun after a
+  rebuild.
+- **API + UI.** `GET /pnl_attribution?from=&to=&by=` — Carino-linked period headline (linked
+  contributions sum to the geometric return exactly), the cumulative hero series, the by-factor
+  table (avg exposure, cum factor return, contribution, t-stat), coverage. `GET
+  /pnl_attribution/residual` — the §2 diagnostics with **RAG verdicts** (IR, realized/predicted
+  specific vol, lag-1/2 autocorr, residual-vs-factor regression at **daily** resolution, Barra bias
+  stats book/specific/per-factor, residual HHI, hit rate; thresholds start loose). `GET
+  /pnl_attribution/linkage?T=&horizon=` — the §4 reconcile: per factor + Specific + book total, the
+  start-of-period ±2σ **base band** and a **stressed band** (vols ×`vol_mult` 1.25, correlations
+  blended toward 1 by `rho` 0.75 via `_stressed_cov`), the realized dot, surprise z, and a
+  within / stress-regime / investigate verdict, plus per-position surprises. `/stress` gained the
+  same correlation-stress mode (optional `vol_mult`/`rho` → `correlation_stress` block).
+  `/analysis` folds in a trailing-12m headline. UI: Streamlit `render_attribution` (Risk tab —
+  period presets, vega-lite stacked hero, RAG table, reconcile SVG) and the Vite Attribution lens
+  "PnL attribution" tab (same views, hand-rolled SVG). Tests: `test_attribution.py` (+ a panel
+  test in `test_pivot_app.py`, React tests in `Attribution.test.tsx`).
+
 ## Estimation universe — index membership (`/universe`)
 
 `barra_universe_membership.py` is a **precompute step** (like a builder): for every Soros 13F filing it
@@ -363,7 +401,9 @@ on-demand `/analysis`), Trends/Drawdown, Stress, What-if, Liquidity, Universe (m
 §9). Streamed LLM panels consume raw `text/markdown` via `ReadableStream`. Served at `/flexagg2++/`
 same-origin under `/flexagg2++/api` — **alongside** the unchanged `flexagg++` Streamlit app; ops in
 `docs/vite-ui-serving.md` (build → nginx alias + proxy with `proxy_buffering off`; restart the cube
-once for `/views`). The PnL-attribution tab is stubbed pending the Step-15 `/pnl_attribution` endpoint.
+once for `/views`). The Attribution lens's "PnL attribution" tab is live against the Step-15
+`/pnl_attribution*` endpoints (stacked hero, by-factor table, RAG residual diagnostics, reconcile
+band chart).
 
 ## Reading email (Gmail over IMAP — NOT the MCP connector)
 
@@ -382,8 +422,9 @@ in the repo `.env`**. Do **not** reach for the claude.ai Gmail MCP connector —
 
 ## The two model versions (v1 vs v2)
 
-Both produce the **identical six-frame schema** and feed the same unchanged cube. They differ
-only in how `exposures`, `factor_returns`, and `specific_var` are computed:
+Both produce the **same core six-frame schema** and feed the same unchanged cube (v2 also emits
+the optional 7th `specific_returns` frame — v1 doesn't, so v1 data has no PnL attribution). They
+differ only in how `exposures`, `factor_returns`, and `specific_var` are computed:
 
 - **v2 — `barra_build_frames.py`** (the primary/canonical builder). Exposures are
   cross-sectional characteristic **z-scores** (Size, Value, Momentum, etc.). Factor returns
@@ -424,7 +465,7 @@ that cache dir to force a fresh pull.
 cube only ever joins on `Position`. CUSIP/ticker/CIK exist only inside the builders to bridge the
 different source APIs; they are resolved to a single FIGI before frames are emitted.
 
-## The six frames (contract between builders and cube)
+## The seven frames (contract between builders and cube)
 
 | Frame | Key | Payload | Role |
 |---|---|---|---|
@@ -434,6 +475,7 @@ different source APIs; they are resolved to a single FIGI before frames are emit
 | `factor_meta` | (Factor) | FactorGroup | dimension |
 | `factor_returns` | (Date, Factor) | Return | the shared scenario cache |
 | `specific_var` | (Date, Position) | SpecificVar | diagonal idiosyncratic block |
+| `specific_returns` | (Date, Position) | SpecificReturn | daily WLS residual `u` (PnL attribution); **v2-only, optional** — v1 doesn't emit it and the cube/API degrade gracefully (attribution measures/endpoints absent) |
 
 Two risk blocks only: a linear **factor P&L** block (driven by `factor_returns`) and a
 **diagonal specific-risk** block (`specific_var`). No full specific covariance matrix.

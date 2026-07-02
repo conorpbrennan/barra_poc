@@ -128,17 +128,18 @@ quickly — widening it improves the factor fit. A demo constraint, not a limit 
     <tr><td>6</td><td>Intentional vs. unwanted loadings (hedging)</td><td><span class="dot d-designed"></span><span class="status">Evidence shipped</span></td><td>style-drift attribution — rotation vs. re-pricing; final call needs desk intent</td></tr>
     <tr><td>7</td><td>Orthogonalisation &amp; multicollinearity</td><td><span class="dot d-designed"></span><span class="status">Partial</span></td><td>builder change</td></tr>
     <tr><td>8</td><td>Linked securities (share classes / ADRs)</td><td><span class="dot d-proposed"></span><span class="status">Proposed</span></td><td>block-diagonal specific risk</td></tr>
-    <tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-designed"></span><span class="status">Designed — endorsed</span></td><td>realised PnL by factor + residual; residual-correlation tests; linked to the ex-ante risk decomposition</td></tr>
+    <tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>realised PnL by factor + residual; residual-correlation tests with RAG verdicts; the risk↔PnL reconcile band chart (base + correlation-stressed band); cube-native drill</td></tr>
   </tbody>
 </table>
 
 <h3>What's next</h3>
 <p>The foundations are mostly in. The open points:</p>
 <ul class="tight">
-  <li><b>PnL attribution &amp; factor-model validation (§9)</b> — the natural next build, and more
-    relevant than the standalone measures. It splits realised PnL into a factor part and a residual,
-    checks whether the residual is large and correlated, and reads each result against the risk expected
-    at the start of the period. Designed and endorsed by Chris.</li>
+  <li><b>PnL attribution &amp; factor-model validation (§9)</b> — <b>now shipped</b>. Realised PnL
+    split into factor + residual (Carino-linked, drilling factor→name in the pivot), the residual
+    diagnostics with plain RAG verdicts, and the risk↔PnL reconcile chart — each factor's realised
+    contribution read against its start-of-period band, base and correlation-stressed. The residual
+    is persisted as a seventh frame and the attribution measures live in the cube.</li>
   <li><b>Active risk vs. a benchmark (§5)</b> — benchmark agreed (MSCI Large Cap), so this is ready to
     build: tracking error and active return.</li>
   <li><b>What's most useful to the desk</b> — I'd value your view on which of these answers a real
@@ -343,7 +344,7 @@ risk and a concentration measure treats them as two independent bets when they a
 <p class="small">This touches the model's core “diagonal specific block, no full specific covariance”
 assumption, so it needs a short design pass before code — flagged, not hidden.</p>
 
-<h2><span class="n">9</span>PnL attribution — realised PnL by factor and residual <span class="status">&nbsp; <span class="dot d-designed"></span>Designed</span></h2>
+<h2><span class="n">9</span>PnL attribution — realised PnL by factor and residual <span class="status">&nbsp; <span class="dot d-done"></span>Done — shipped</span></h2>
 <p class="mn quote"><b>Chris:</b> “Show how the factor model explains the realised PnL over a period — broken down by factor and by residual — and check whether the residuals are large, and if they are, whether they're correlated; ideally uncorrelated, which shows the PM is doing a good job.”</p>
 <p class="mn quote"><b>Chris, 29 Jun (endorsed):</b> “It's really the connection between the PnL attribution and the risk decomposition at the start of the period that tells you how good the risk management of the portfolio is.”</p>
 <p class="lede">A performance-attribution report: split the book's realised PnL into what the factor
@@ -632,15 +633,15 @@ constant-portfolio inputs the drawdown and backtest lenses use today. Full spec 
 <tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-designed"></span>Partial</td><td class="small">evidence shipped</td><td class="small">style-drift attribution panel: rotation vs loading drift; final call needs desk intent</td></tr>
 <tr><td>7</td><td>Full orthogonalisation + diagnostics</td><td><span class="dot d-designed"></span>Partial</td><td class="small">moderate</td><td class="small">builder change</td></tr>
 <tr><td>8</td><td>Linked securities</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">design first</td><td class="small">block-diagonal specific risk</td></tr>
-<tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-designed"></span>Designed — endorsed</td><td class="small">~1.5–2 wk</td><td class="small">realised PnL by factor + residual; residual correlation tests; linked to the risk decomposition at T</td></tr>
+<tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-done"></span>Done — shipped</td><td class="small">shipped</td><td class="small">realised PnL by factor + residual; residual correlation tests; risk↔PnL reconcile vs the decomposition at T</td></tr>
 </tbody>
 </table>
 <p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (done — the keystone, now
 live and the basis for the span and style-drift panels; it unblocked the uncapped coverage loadings) →
 the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel. <b>PnL
-attribution</b> (§9) is specced and endorsed — the natural next build → then <b>active risk</b>, whose
-benchmark is now agreed (MSCI Large Cap), with orthogonalisation diagnostics and linked securities as
-they fit.</p>
+attribution</b> (§9) is now shipped too — realised attribution, residual diagnostics and the reconcile
+chart, in both dashboards → next is <b>active risk</b>, whose benchmark is agreed (MSCI Large Cap),
+with orthogonalisation diagnostics and linked securities as they fit.</p>
 
 <p class="foot">Generated for the factor-model risk review. Methodology cross-refers to
 <code>barra_build_frames.py</code> (estimation), <code>barra_factor_risk_cube.py</code> (risk engine),

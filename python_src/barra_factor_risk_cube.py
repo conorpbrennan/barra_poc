@@ -3,13 +3,14 @@ barra_factor_risk_cube.py
 =========================
 Atoti factor-risk cube (two-block historical model) + unified scenario/stress layer.
 
-Pairs with barra_build_frames.py. Six input frames:
-  exposures      (Date, Position, Factor) -> Loading        <-- GRANULAR LEAF
-  positions      (Date, Book, Position)   -> Weight, MV      <-- Soros overlay
-  securities     (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
-  factor_meta    (Factor)                 -> FactorGroup
-  factor_returns (Date, Factor)           -> Return          <-- source of every scenario set
-  specific_var   (Date, Position)         -> SpecificVar     <-- diagonal block
+Pairs with barra_build_frames.py. Seven input frames (the 7th is optional — v1 doesn't emit it):
+  exposures        (Date, Position, Factor) -> Loading        <-- GRANULAR LEAF
+  positions        (Date, Book, Position)   -> Weight, MV      <-- Soros overlay
+  securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
+  factor_meta      (Factor)                 -> FactorGroup
+  factor_returns   (Date, Factor)           -> Return          <-- source of every scenario set
+  specific_var     (Date, Position)         -> SpecificVar     <-- diagonal block
+  specific_returns (Date, Position)         -> SpecificReturn  <-- daily WLS residual (attribution)
 
 ALL THREE SCENARIO MODES ARE ONE OPERATION:  dPnL = sum_k x_k * df_k
   x_k = aggregated factor exposure (the cube's "Net exposure" at the Factor level)
@@ -27,6 +28,7 @@ import atoti as tt
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 FRAME_NAMES = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var"]
+OPTIONAL_FRAMES = ["specific_returns"]   # v2-only (PnL attribution); v1 data degrades gracefully
 
 # Historical event windows to replay (must fall inside the loaded sample; pre-2016 events need a
 # longer factor-return history -- splice published style-factor returns for those windows).
@@ -47,7 +49,11 @@ def load_frames(folder: pathlib.Path = OUT) -> dict[str, pd.DataFrame]:
     miss = [n for n in FRAME_NAMES if not (folder / f"{n}.parquet").exists()]
     if miss:
         raise FileNotFoundError(f"Run barra_build_frames.py first; missing: {miss}")
-    return {n: pd.read_parquet(folder / f"{n}.parquet") for n in FRAME_NAMES}
+    frames = {n: pd.read_parquet(folder / f"{n}.parquet") for n in FRAME_NAMES}
+    for n in OPTIONAL_FRAMES:
+        if (folder / f"{n}.parquet").exists():
+            frames[n] = pd.read_parquet(folder / f"{n}.parquet")
+    return frames
 
 
 def build_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
@@ -118,6 +124,38 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     w = positions[["Date", "Position", "Weight"]]
     exposures = exposures.merge(w, on=["Date", "Position"], how="left")
     exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
+
+    # ---- PnL attribution (Step 15, v2-only): forward-month realized contributions -------------
+    # Convention: the row at month-end d0 carries the PnL over the FOLLOWING month (d0, d1] — the
+    # month the d0 exposures/weights explain (the regression fits days d0 < t <= d1 on the d0
+    # loadings). Daily factor/specific returns are summed arithmetically into that window, so
+    # `Factor contribution` is a plain additive column (WLoading x fwd-month factor return) that
+    # foots at every level of Factor x Sector x Position, and `Specific PnL` is the as-of weight x
+    # fwd-month residual per (Date, Position). Realized PnL = the two summed — an identity.
+    spec_ret = frames.get("specific_returns")
+    has_attribution = spec_ret is not None and len(spec_ret) > 0
+    spec_pnl = None
+    if has_attribution:
+        exp_dates = np.sort(pd.to_datetime(pd.Series(exposures["Date"].unique())).values)
+
+        def _stamp_d0(s: pd.Series) -> pd.Series:
+            """Largest exposure month-end STRICTLY BEFORE each daily date (the window owner)."""
+            i = np.searchsorted(exp_dates, pd.to_datetime(s).values, side="left") - 1
+            return pd.Series(np.where(i >= 0, exp_dates[np.clip(i, 0, None)], np.datetime64("NaT")),
+                             index=s.index)
+
+        fr_m = factor_ret.assign(D0=_stamp_d0(factor_ret["Date"])).dropna(subset=["D0"])
+        fr_m = (fr_m.groupby(["D0", "Factor"], as_index=False)["Return"].sum()
+                    .rename(columns={"D0": "Date", "Return": "FwdRet"}))
+        exposures = exposures.merge(fr_m, on=["Date", "Factor"], how="left")
+        exposures["FactorPnL"] = exposures["WLoading"] * exposures["FwdRet"].fillna(0.0)
+        exposures = exposures.drop(columns="FwdRet")
+        sr_m = spec_ret.assign(D0=_stamp_d0(spec_ret["Date"])).dropna(subset=["D0"])
+        sr_m = (sr_m.groupby(["D0", "Position"], as_index=False)["SpecificReturn"].sum()
+                    .rename(columns={"D0": "Date"}))
+        spec_pnl = sr_m.merge(w, on=["Date", "Position"], how="inner")
+        spec_pnl["SpecPnL"] = spec_pnl["Weight"] * spec_pnl["SpecificReturn"]
+        spec_pnl = spec_pnl.loc[spec_pnl["SpecPnL"] != 0.0, ["Date", "Position", "SpecPnL"]]
     exposures = exposures.drop(columns="Weight")
     # NB: the same trick must NOT be applied to specific_var — it is a *joined* table, and a
     # plain SUM over a joined column fans out by fact-row multiplicity (each (Date, Position)
@@ -132,11 +170,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     t_sv  = session.read_pandas(specific,   keys={"Date", "Position"},           table_name="SpecificVar")
     t_scn = session.read_pandas(scenarios,  keys={"ScenarioSet", "Factor"},      table_name="Scenarios")
     t_axis = session.read_pandas(scn_axis,  keys={"ScenarioSet"},                table_name="ScenarioAxis")
+    t_sr = (session.read_pandas(spec_pnl, keys={"Date", "Position"}, table_name="SpecificPnL")
+            if has_attribution else None)
 
     t_exp.join(t_pos, (t_exp["Date"] == t_pos["Date"]) & (t_exp["Position"] == t_pos["Position"]))
     t_exp.join(t_sec, t_exp["Position"] == t_sec["Position"])
     t_exp.join(t_fm,  t_exp["Factor"] == t_fm["Factor"])
     t_exp.join(t_sv,  (t_exp["Date"] == t_sv["Date"]) & (t_exp["Position"] == t_sv["Position"]))
+    if t_sr is not None:
+        t_exp.join(t_sr, (t_exp["Date"] == t_sr["Date"]) & (t_exp["Position"] == t_sr["Position"]))
     # PARTIAL join: map Factor only -> ScenarioSet becomes a hierarchy (the "switch"). One ShockVec
     # is selected per (ScenarioSet, Factor); exposures fan across sets but Net exposure is unaffected.
     t_exp.join(t_scn, t_exp["Factor"] == t_scn["Factor"])
@@ -268,6 +310,26 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Total ES 97.5"] = tt.math.sqrt(m["Scenario ES 97.5"] * m["Scenario ES 97.5"]
                                       + (2.338 * m["Specific vol"]) ** 2)
     m["Total ES 97.5"].formatter = "DOUBLE[0.00%]"
+
+    # ---- PnL attribution measures (Step 15; only when the 7th frame was built) ----------------
+    # All three are ADDITIVE scalars (same class as Net exposure — no ragged vectors), reading the
+    # forward-month convention set at load: the value at Date d0 is the PnL over (d0, d1].
+    #   Factor contribution — a plain columnar SUM of the precomputed leaf product
+    #                         w_i·L_ik·f_k(fwd month); Σ over names = x_k·f_k, so Factor→Name
+    #                         drills foot exactly.
+    #   Specific PnL        — w_i·ε_i(fwd month) per (Date, Position) via OriginScope+single_value
+    #                         (a joined table: a plain SUM would fan out per factor leaf, the same
+    #                         trap the SpecificVar note above flags). By FACTOR it fans out —
+    #                         specific risk has no factor — use it in by-name/book views.
+    #   Realized PnL        — the identity Factor contribution + Specific PnL.
+    if t_sr is not None:
+        m["Factor contribution"] = tt.agg.sum(t_exp["FactorPnL"])
+        m["Specific PnL"] = tt.agg.sum(
+            tt.agg.single_value(t_sr["SpecPnL"]),
+            scope=tt.OriginScope({l["Date"], l["Position"]}))
+        m["Realized PnL"] = m["Factor contribution"] + m["Specific PnL"]
+        for _mn in ("Factor contribution", "Specific PnL", "Realized PnL"):
+            m[_mn].formatter = "DOUBLE[0.00%]"
 
     # ---- Level-2 risk decomposition: additive contributions to Scenario VaR 99 ---------------
     # The factor-VaR is the book loss on the tail scenario t* (the 1%-quantile day of the BOOK

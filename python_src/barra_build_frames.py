@@ -17,13 +17,14 @@ Design (settled with the desk):
     monthly-updated exposures, not downloaded -- so exposures, factor returns and specific
     risk are duals of one regression, and all scenario VaR numbers are 1-day horizon.
 
-Emits six frames:
-  exposures      (Date, Position, Factor) -> Loading      <-- GRANULAR LEAF
-  positions      (Date, Book, Position)   -> Weight, MV, ADV <-- Soros overlay (ADV = days-to-liquidate)
-  securities     (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
-  factor_meta    (Factor)                 -> FactorGroup
-  factor_returns (Date, Factor)           -> Return        <-- the shared cache
-  specific_var   (Date, Position)         -> SpecificVar   <-- diagonal block
+Emits seven frames:
+  exposures        (Date, Position, Factor) -> Loading      <-- GRANULAR LEAF
+  positions        (Date, Book, Position)   -> Weight, MV, ADV <-- Soros overlay (ADV = days-to-liquidate)
+  securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
+  factor_meta      (Factor)                 -> FactorGroup
+  factor_returns   (Date, Factor)           -> Return        <-- the shared cache
+  specific_var     (Date, Position)         -> SpecificVar   <-- diagonal block
+  specific_returns (Date, Position)         -> SpecificReturn <-- daily WLS residual u (PnL attribution)
 
 NB Position == canonical SecId == FIGI (resolved up front so the cube only joins on SecId).
 
@@ -615,11 +616,14 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
 
 # --------------------------------------------------------------------------- 6. cross-sectional regression
 def regress_factors(exp_long: pd.DataFrame, prices: dict,
-                    sec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+                    sec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Daily WLS of stock returns on the latest prior month-end exposures.
 
     -> DAILY factor returns (the scenario cache: real 99% tails need ~2,200 obs, not 89)
     -> daily specific variance (EWMA), snapshotted at month-ends for the cube join.
+    -> daily specific RETURNS (the un-squared residual u), the 7th frame: the PnL-attribution
+       leaf. R_i(t) = L_i·[1;f(t)] + u_i(t) reconstructs the exact return the regression saw,
+       so realized = factor + specific ties out to machine precision downstream.
     All risk numbers downstream are therefore 1-DAY horizon.
     """
     fig2tkr = sec.set_index("figi")["ticker"].to_dict()
@@ -674,9 +678,13 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
             resid_all = y_all - Xm_all @ beta
             ok_a = ~np.isnan(y_all)
             for fig, u in zip(figs_all[ok_a], resid_all[ok_a]):
-                spec_rows.append({"Date": d, "Position": fig, "u2": u * u})
+                spec_rows.append({"Date": d, "Position": fig, "u": u, "u2": u * u})
     factor_returns = pd.DataFrame(fac_rows)
     spec = pd.DataFrame(spec_rows).sort_values(["Position", "Date"])
+    # 7th frame: the residual VALUE, kept daily (not just its square). Taken before the
+    # month-end restamp below so Date stays the trade day.
+    specific_returns = (spec[["Date", "Position", "u"]]
+                        .rename(columns={"u": "SpecificReturn"}).reset_index(drop=True))
     # EWMA of squared DAILY specific returns -> daily specific variance per name
     # (transform keeps row alignment; the old reset_index/paste-Date-column approach
     #  reordered rows by Position while pasting dates in Date order -> misaligned keys)
@@ -688,7 +696,7 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     # variance — consistent with the daily scenario VaR horizon.
     spec["Date"] = spec["Date"] + pd.offsets.MonthEnd(0)
     spec = spec.sort_values("Date").groupby(["Position", "Date"], as_index=False).last()
-    return factor_returns, spec[["Date", "Position", "SpecificVar"]]
+    return factor_returns, spec[["Date", "Position", "SpecificVar"]], specific_returns
 
 
 # --------------------------------------------------------------------------- 7. orchestrator
@@ -737,7 +745,7 @@ def build_frames():
 
     # --- exposures (leaf) + factor cache + specific risk -------------------
     exposures = build_exposures(sec, prices, funda, cal, mkt)
-    factor_returns, specific_var = regress_factors(exposures, prices, sec)
+    factor_returns, specific_var, specific_returns = regress_factors(exposures, prices, sec)
     # Add Market as a LEAF loading of 1.0 for every (Date, Position). In v2 Market is the
     # cross-sectional regression intercept, so each name loads exactly 1.0 on it and a
     # fully-invested book (weights sum to 1) has unit market exposure. Done AFTER regress_factors
@@ -797,12 +805,13 @@ def build_frames():
     factor_meta = pd.DataFrame({"Factor": ["Market"] + STYLE_FACTORS,
                                 "FactorGroup": ["Market"] + ["Style"] * len(STYLE_FACTORS)})
 
-    return exposures, positions, securities, factor_meta, factor_returns, specific_var
+    return exposures, positions, securities, factor_meta, factor_returns, specific_var, specific_returns
 
 
 if __name__ == "__main__":
     frames = build_frames()
-    names = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var"]
+    names = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var",
+             "specific_returns"]
     out = pathlib.Path(__file__).resolve().parent.parent / "data"
     out.mkdir(exist_ok=True)
     for nm, df in zip(names, frames):

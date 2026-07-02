@@ -1,6 +1,7 @@
 # Plan — PnL attribution & factor-model validation (realized PnL by factor and residual, diagnostics)
 
-Status: SPEC — endorsed by Chris (2026-06-29: "that looks reasonable"), with one addition: link the
+Status: BUILT 2026-07-02 (all of §1–§5 below; both dashboards). Endorsed by Chris
+(2026-06-29: "that looks reasonable"), with one addition: link the
 attribution to the **risk decomposition at the start of the period** (§4); refined per his 2026-06-30
 feedback (drop "projected", the known-vs-unknown-risk framing, keep the stats cheap). New risk-tooling
 step for Chris's request (Soros risk review): a report that splits the book's realized PnL over a period

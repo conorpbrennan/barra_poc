@@ -7,6 +7,7 @@ import type {
   Meta, Dims, PivotResult, TrendsResult, LimitsResult, DqResult, BacktestResult,
   DrawdownResult, LiquidityResult, ReverseStressResult, UniverseResult, FunnelResult,
   SpanResult, DriftResult, WhatChangedResult, AttributionRow, WhatIfResult, Rec,
+  PnlAttributionResult, PnlResidualResult, PnlLinkageResult,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -143,6 +144,29 @@ export function useWhatif(date: string, book: string, trades: Trade[]) {
     queryKey: ["whatif", date, book, JSON.stringify(trades)],
     queryFn: () => apiSend<WhatIfResult>("POST", "/whatif", { date, book, trades }),
     enabled: !!date,
+    ...common,
+  });
+}
+
+// PnL attribution (Step 15). `from`/`to` empty strings mean the API default (trailing 12m).
+export function usePnlAttribution(from?: string, to?: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["pnl_attribution", from ?? "", to ?? "", book],
+    queryFn: () => apiGet<PnlAttributionResult>("/pnl_attribution", { from, to, book }),
+    ...common,
+  });
+}
+export function usePnlResidual(from?: string, to?: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["pnl_residual", from ?? "", to ?? "", book],
+    queryFn: () => apiGet<PnlResidualResult>("/pnl_attribution/residual", { from, to, book }),
+    ...common,
+  });
+}
+export function usePnlLinkage(horizon = 3, T?: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["pnl_linkage", horizon, T ?? "", book],
+    queryFn: () => apiGet<PnlLinkageResult>("/pnl_attribution/linkage", { horizon, T, book }),
     ...common,
   });
 }
