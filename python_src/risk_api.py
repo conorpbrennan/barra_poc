@@ -109,8 +109,10 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5", "Scenario ES 99",
                  "Scenario PnL vol", "Total ES 97.5",
                  # model vol — THE reference risk number (sigma = sqrt(x'Fx + w'dw); slice to
-                 # HistFull for the model sigma; degenerate on length-1 Hypo sets):
-                 "Model vol",
+                 # HistFull for the model sigma; degenerate on length-1 Hypo sets) + its Euler
+                 # marginal (== the ch-09 CTR; sums exactly to Model vol; by-NAME views) and the
+                 # diversification-aware incremental (vol released by removing the member):
+                 "Model vol", "Marginal Model vol", "% of Model vol", "Incremental Model vol",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -127,6 +129,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Incremental Scenario VaR 99", "Incremental Total VaR 99",
             "Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5", "Scenario ES 99",
             "Scenario PnL vol", "Total ES 97.5", "Model vol",
+            "Marginal Model vol", "% of Model vol", "Incremental Model vol",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -2578,6 +2581,10 @@ block. Read the measures as follows:
   contribution to the book number (the contributions sum to the book total). "% of ..." is that
   share, summing to 100%. Incremental VaR: the risk RELEASED by removing a member — diversification-
   aware, NOT additive (it does not sum to the book total), so there is no "% of" for it.
+- Marginal Model vol: the member's EULER contribution to book model vol (per name this IS the
+  ch-09 CTR = w·(Σw)/σ); sums exactly to Model vol; read it in by-NAME views (by Factor the
+  specific block fans out). Incremental Model vol: the vol released by removing the member —
+  sub-additive like Incremental VaR, no "% of".
 - VaR sensitivity: per-unit dVaR/dexposure. Risk HHI: Herfindahl index of each name's share of book
   Total VaR — 1/N for an evenly diversified book up to 1.0 for a single name; 1/HHI ~ the effective
   number of independent risk bets.

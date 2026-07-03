@@ -419,6 +419,30 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     Total_ex = tt.math.sqrt(VaR_ex * VaR_ex + (2.326 ** 2) * S_ex_var)
     m["Incremental Total VaR 99"] = book_total - Total_ex
 
+    # ---- Model-vol decomposition: Euler marginal (== CTR) + incremental -----------------------
+    # Marginal Model vol: the member's EULER contribution to book sigma — cov(member P&L vector,
+    # book P&L vector) plus the member's own specific variance, over book sigma. The covariance
+    # comes from the polarization identity cov(a,b) = (var(a+b) − var(a) − var(b))/2 on the SAME
+    # sample std Model vol uses, so Σ_member == book Model vol EXACTLY (Euler) and the per-NAME
+    # values equal the ch-09 CTR = w·(Σw)/σ that /contributions computes in numpy.
+    # Like Marginal Total VaR: meaningful in by-NAME views; by FACTOR the specific block fans out.
+    _sigma_book = tt.total(m["Model vol"], h["Security"], h["FactorDim"])
+    _cov_book = (tt.array.std(book_pnl_vec + m["Scenario PnL vector"]) ** 2
+                 - m["Scenario PnL vol"] ** 2
+                 - tt.array.std(book_pnl_vec) ** 2) / 2
+    m["Marginal Model vol"] = (_cov_book + m["Specific variance"]) / _sigma_book
+    m["% of Model vol"] = (m["Marginal Model vol"]
+        / tt.total(m["Marginal Model vol"], h["Security"], h["FactorDim"]))
+    # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
+    # vector minus this cell's, its specific variance minus this cell's), subtract from the book
+    # sigma. NOT additive (vol is sub-additive) — it answers "how much vol does removing this
+    # member release". At the grand level the remainder is empty -> vol_ex = 0, so the total
+    # reconciles with the Marginal column (both read the book sigma).
+    _vol_ex = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + S_ex_var)
+    m["Incremental Model vol"] = _sigma_book - _vol_ex
+    for _mn in ("Marginal Model vol", "Incremental Model vol"):
+        m[_mn].formatter = "DOUBLE[0.00%]"
+
     for _mn in ("Marginal Scenario VaR 99", "Marginal Total VaR 99",
                 "Incremental Scenario VaR 99", "Incremental Total VaR 99",
                 "Marginal Scenario ES 97.5"):

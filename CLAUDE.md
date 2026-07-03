@@ -131,9 +131,14 @@ split (`model_vol_1d`, now first in `_risk_from_weights` and the what-if/Overvie
 **`Model vol` is also a cube measure** (`barra_factor_risk_cube.py`: `√(Scenario PnL vol² +
 Specific variance)` — atoti sample-std == np.cov ddof=1, so sliced to HistFull it ties the API
 implementations to float precision; per-cell, so it drills by sector/name and serves `/trends`;
-on Evt sets it reads as window/regime vol, on length-1 Hypo sets it is degenerate → blank). On
-the `/pivot` allowlist + `TS_MEASURES`; accuracy pinned by `test_model_vol.py` (tie-outs to
-`/contributions` and `/whatif`, the in-cube identity, sub-additivity, set semantics, trends);
+on Evt sets it reads as window/regime vol, on length-1 Hypo sets it is degenerate → blank). The decomposition pair: **`Marginal Model vol`** (the Euler contribution — cov(member, book)
+via the polarization identity on the same sample std, + own specific variance, over book σ;
+sums EXACTLY to Model vol; per NAME it equals the ch-09 CTR — by Factor the specific block
+fans out, same caveat as Marginal Total VaR), **`% of Model vol`**, and **`Incremental Model
+vol`** (σ released by removing the member — sub-additive, ties the `/whatif` drop delta). On
+the `/pivot` allowlist + `TS_MEASURES`; accuracy pinned by `test_model_vol.py` (9 tests:
+tie-outs to `/contributions` CTR and `/whatif` at 5e-10, the in-cube identity, Euler sums,
+sub-additivity, set semantics, trends);
 the desk limits are written on **Scenario VaR 99 / ES 97.5** (the Kupiec-backtested metrics —
 `limits.json`'s Total VaR 99 limit was replaced by Scenario VaR 99, same thresholds); the house
 **Total VaR 99** composite (empirical factor quantile ⊕ Gaussian specific, in quadrature) is

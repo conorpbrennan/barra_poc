@@ -126,6 +126,59 @@ def t_model_vol_on_trends():
     assert abs(recs[-1]["Model vol"] - cube) < 1e-12, (recs[-1], cube)
 
 
+@integ
+def t_marginal_model_vol_is_euler():
+    """Marginal Model vol is the Euler decomposition: sector marginals sum EXACTLY to the book
+    Model vol, and '% of Model vol' sums to 100%."""
+    j = _pivot(rows="Sector", measures="Marginal Model vol,% of Model vol",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    marg = [float(r["Marginal Model vol"]) for r in j["records"]
+            if r.get("Marginal Model vol") is not None]
+    shares = [float(r["% of Model vol"]) for r in j["records"]
+              if r.get("% of Model vol") is not None]
+    book = float(_book_cell("Model vol")["Model vol"])
+    assert abs(sum(marg) - book) < 1e-12, (sum(marg), book)
+    assert abs(sum(shares) - 1.0) < 1e-12, sum(shares)
+
+
+@integ
+def t_marginal_model_vol_equals_ctr():
+    """Per-NAME Marginal Model vol == /contributions CTR (w·(Σw)/σ) — the cube's array algebra
+    against the numpy Euler decomposition, for the top-5 risk names."""
+    import requests
+    c = requests.get(f"{API}/contributions", params={"date": DATE}, timeout=60).json()
+    j = _pivot(rows="Position", measures="Marginal Model vol",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    cube = {r["Position"]: float(r["Marginal Model vol"]) for r in j["records"]
+            if r.get("Marginal Model vol") is not None}
+    for p in c["positions"][:5]:
+        assert p["position"] in cube, p["position"]
+        assert abs(cube[p["position"]] - p["ctr"]) < 5e-10, \
+            (p["ticker"], cube[p["position"]], p["ctr"])
+
+
+@integ
+def t_incremental_model_vol_ties_to_whatif():
+    """Incremental Model vol (vol released by removing the name) == the /whatif before→after
+    model-vol delta when the same name is dropped — cube array algebra vs the numpy what-if
+    engine, for the top risk name."""
+    import requests
+    c = requests.get(f"{API}/contributions", params={"date": DATE}, timeout=60).json()
+    top = c["positions"][0]
+    j = _pivot(rows="Position", measures="Incremental Model vol",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    cube = {r["Position"]: float(r["Incremental Model vol"]) for r in j["records"]
+            if r.get("Incremental Model vol") is not None}
+    w = requests.post(f"{API}/whatif",
+                      json={"trades": [{"position": top["position"], "weight": 0}]},
+                      timeout=120).json()
+    delta = w["before"]["model_vol_1d"] - w["after"]["model_vol_1d"]
+    assert abs(cube[top["position"]] - delta) < 5e-10, (cube[top["position"]], delta)
+    # sub-additivity sanity: releasing the top name frees LESS than its Euler contribution
+    # would suggest is impossible — incremental positive, and below the book vol
+    assert 0 < cube[top["position"]] < float(_book_cell("Model vol")["Model vol"])
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")
