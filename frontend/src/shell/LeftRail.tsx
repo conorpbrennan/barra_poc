@@ -8,11 +8,11 @@ const LENSES: { to: string; label: string }[] = [
   { to: "/trends", label: "Trends" },
   { to: "/stress", label: "Stress" },
   { to: "/whatif", label: "What-if" },
-  { to: "/liquidity", label: "Liquidity" },
   { to: "/universe", label: "Universe" },
   { to: "/drift", label: "Drift" },
   { to: "/attribution", label: "Attribution" },
   { to: "/changes", label: "Changes" },
+  { to: "/model", label: "Model" },
   { to: "/checks", label: "Checks" },
   { to: "/ask", label: "Ask" },
 ];

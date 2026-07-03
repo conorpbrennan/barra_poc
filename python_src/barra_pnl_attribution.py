@@ -137,6 +137,105 @@ def _stressed_cov(F: np.ndarray, vol_mult: float = 1.25, rho_blend: float = 0.75
     return np.outer(vs, vs) * Cs
 
 
+def _rolling_bias(realized: pd.Series, predicted_vol: pd.Series, window: int = 24) -> list[dict]:
+    """Rolling bias statistic: b_t = std of the trailing `window` standardized returns
+    z = realized/predicted-vol, with the 95% acceptance band 1 ± √(2/window). b > 1 = risk
+    under-forecast (the dangerous direction), b < 1 = over-forecast. The time-series version of
+    _bias_stat — where in the calendar the model drifted out of calibration."""
+    z = (realized / predicted_vol).replace([np.inf, -np.inf], np.nan).dropna()
+    band = float(np.sqrt(2.0 / window))
+    out = []
+    for i in range(window - 1, len(z)):
+        w = z.iloc[i - window + 1: i + 1]
+        out.append({"date": z.index[i], "b": float(w.std(ddof=1)), "band": band})
+    return out
+
+
+def _linkage_driver(x_t: float | None, x_win: float | None, realized: float,
+                    sig_daily: float, h: float, cum_f: float | None) -> dict | None:
+    """Classify what drove a reconcile-band breach. The band freezes the exposure at T
+    (sd = |x_T|·σ·√h), so a breach can be a genuine factor move OR an artifact of the exposure
+    migrating inside the window (a near-zero x_T makes z ill-conditioned). Returns:
+      z_window      — z rebuilt on the average in-window exposure (the honest denominator),
+      factor_sigma  — the factor's cumulative window move in σs of the window,
+      ratio         — |x_win| / |x_T|, migrated when ≥ 3 (loose, like the residual thresholds),
+      kind          — exposure_migration (within band on the in-window exposure — a timing
+                      artifact, not a factor event) / factor_move (exposure stable, factor
+                      moved ≥ 1.5σ) / mixed.
+    None when the row has no exposure/vol to reason about (specific / book rows)."""
+    if x_t is None or x_win is None or sig_daily <= 0 or h <= 0:
+        return None
+    rt = float(np.sqrt(h))
+    fs = float(cum_f / (sig_daily * rt)) if cum_f is not None else None
+    sd_win = abs(x_win) * sig_daily * rt
+    z_win = float(realized / sd_win) if sd_win > 0 else None
+    ratio = float(abs(x_win) / max(abs(x_t), 1e-9))
+    migrated = ratio >= 3.0
+    if migrated and z_win is not None and abs(z_win) <= 2.0:
+        kind = "exposure_migration"
+    elif not migrated and fs is not None and abs(fs) >= 1.5:
+        kind = "factor_move"
+    else:
+        kind = "mixed"
+    return {"kind": kind, "migrated": migrated, "ratio": ratio,
+            "z_window": z_win, "factor_sigma": fs}
+
+
+def _position_driver(realized: float, factor_pnl: float, specific_pnl: float,
+                     w_t: float | None, w_win: float | None, sd_base: float) -> dict | None:
+    """Classify a per-NAME reconcile-band breach — the stock-level analogue of _linkage_driver.
+    The band freezes the weight at T (sd = |w_T|·σ_i·√h) while realized PnL runs on the as-of
+    monthly weights, so a breach decomposes into:
+      weight_migration — the 13F re-anchor / resize made w(T) unrepresentative: z rebuilt on the
+                         in-window average weight sits within ±2 (a band artifact, not an event);
+      specific_move    — the name's own residual dominates the PnL (earnings/M&A-type move the
+                         factor block can't see; cross-check the specific-vol calibration);
+      factor_move      — the name's loadings carried a factor move (systematic, not stock news);
+      mixed            — no dominant component.
+    Returns None when there is no band to reason about."""
+    if sd_base is None or sd_base <= 0 or w_t is None:
+        return None
+    ratio = float(abs(w_win) / max(abs(w_t), 1e-9)) if w_win is not None else None
+    sd_win = sd_base * ratio if ratio is not None else None
+    z_win = float(realized / sd_win) if sd_win and sd_win > 0 else None
+    migrated = ratio is not None and (ratio >= 3.0 or ratio <= 1.0 / 3.0)
+    tot = abs(factor_pnl) + abs(specific_pnl)
+    spec_share = float(abs(specific_pnl) / tot) if tot > 0 else None
+    if migrated and z_win is not None and abs(z_win) <= 2.0:
+        kind = "weight_migration"
+    elif spec_share is not None and spec_share >= 0.65:
+        kind = "specific_move"
+    elif spec_share is not None and spec_share <= 0.35:
+        kind = "factor_move"
+    else:
+        kind = "mixed"
+    return {"kind": kind, "migrated": migrated, "ratio": ratio, "z_window": z_win,
+            "specific_share": spec_share}
+
+
+def _pairwise_mean_corr(panel: pd.DataFrame, min_obs: int = 20) -> dict | None:
+    """Mean pairwise correlation across a days×names residual panel — the cheap version of the
+    missing-factor test (Chris: correlated residuals across names are most likely a missing
+    factor; PCA deferred). Returns mean/max pairwise corr and the max pair, or None with < 2
+    usable columns. Independent stock events read ≈ 0; a common thread reads well above it."""
+    panel = panel.dropna(axis=1, thresh=min_obs)
+    if panel.shape[1] < 2:
+        return None
+    C = panel.corr().to_numpy()
+    names = list(panel.columns)
+    iu = np.triu_indices(len(names), 1)
+    vals = C[iu]
+    ok = ~np.isnan(vals)
+    if not ok.any():
+        return None
+    vals, ii, jj = vals[ok], iu[0][ok], iu[1][ok]
+    k = int(np.argmax(np.abs(vals)))
+    return {"mean_corr": float(np.mean(vals)), "max_corr": float(vals[k]),
+            "max_pair": [str(names[ii[k]]), str(names[jj[k]])],
+            "n_names": int(len(names)), "n_pairs": int(len(vals)),
+            "n_obs": int(len(panel))}
+
+
 # --------------------------------------------------------------------------- realized engine
 def compute_attribution(frames: dict[str, pd.DataFrame], book: str = "Soros") -> pd.DataFrame:
     """The daily tidy artifact (see module docstring) from the seven frames."""

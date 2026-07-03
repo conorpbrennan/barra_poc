@@ -4,11 +4,55 @@
 // cube's reported figures exactly — only the delta is new information.
 import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { useWhatif } from "../api/hooks";
+import { useWhatif, useHedge } from "../api/hooks";
 import { apiSend } from "../api/client";
 import { QueryState } from "../components/ui";
 import { pct, num, signedPct, signedNum } from "../lib/format";
 import type { WhatIfResult } from "../api/types";
+
+// ---- hedge panel: vol before/after neutralizing each factor, + the min-variance market h* ----
+function HedgePanel({ date, book }: { date: string; book: string }) {
+  const q = useHedge(date, book);
+  return (
+    <>
+      <h2>Hedge — remove the risk you don&rsquo;t want</h2>
+      <QueryState q={q}>
+        {(h) => (
+          <div style={{ maxWidth: "44rem" }}>
+            <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
+              Book daily vol {pct(h.vol_base, 2)} (specific floor {pct(h.specific_vol, 2)} — no
+              factor hedge touches it).
+              {h.market_hedge && (
+                <> Min-variance market hedge h* = {num(h.market_hedge.h_star, 2)} →
+                  vol {pct(h.market_hedge.vol_after, 2)} (−{pct(h.market_hedge.vol_reduction, 2)}).</>
+              )}
+            </p>
+            <table className="tufte">
+              <thead><tr><th className="label">Neutralize</th><th>Exposure</th>
+                <th>Hedge (pure-factor units)</th><th>Vol after</th><th>Vol saved</th></tr></thead>
+              <tbody>
+                {h.rows.slice(0, 8).map((r) => (
+                  <tr key={r.factor}>
+                    <td className="label">{r.factor}</td>
+                    <td>{num(r.exposure, 2)}</td>
+                    <td>{signedNum(r.hedge_units, 2)}</td>
+                    <td>{pct(r.vol_after, 2)}</td>
+                    <td>{r.vol_reduction > 1e-6 ? `−${pct(r.vol_reduction, 2)}` : "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted small">
+              Each row zeroes one net exposure with −x units of that pure factor portfolio
+              (implementable in principle; purity costs leverage and turnover). The market h* is
+              the single-instrument minimum-variance hedge, h* = −β.
+            </p>
+          </div>
+        )}
+      </QueryState>
+    </>
+  );
+}
 
 const RISK_ROWS: { key: keyof WhatIfResult["before"]; label: string; fmt: (v: number | null | undefined) => string }[] = [
   { key: "total_var_99", label: "Total VaR 99", fmt: (v) => pct(v) },
@@ -17,7 +61,7 @@ const RISK_ROWS: { key: keyof WhatIfResult["before"]; label: string; fmt: (v: nu
   { key: "es_975", label: "ES 97.5", fmt: (v) => pct(v) },
   { key: "es_99", label: "ES 99", fmt: (v) => pct(v) },
   { key: "specific_vol", label: "Specific vol", fmt: (v) => pct(v) },
-  { key: "risk_hhi", label: "Risk HHI", fmt: (v) => num(v, 3) },
+  { key: "top5_ctr_share", label: "Top-5 risk share", fmt: (v) => pct(v, 1) },
   { key: "gross", label: "Gross", fmt: (v) => num(v, 2) },
   { key: "net", label: "Net", fmt: (v) => num(v, 2) },
 ];
@@ -110,7 +154,7 @@ export function WhatIf() {
                         <td>{r.fmt(before as number)}</td>
                         <td>{after != null ? r.fmt(after as number) : "—"}</td>
                         <td className={delta != null && delta !== 0 ? (delta > 0 ? "rag-red" : "rag-green") : "muted"}>
-                          {delta != null ? (r.key === "gross" || r.key === "net" || r.key === "risk_hhi" ? signedNum(delta as number, 3) : signedPct(delta as number)) : "—"}
+                          {delta != null ? (r.key === "gross" || r.key === "net" ? signedNum(delta as number, 3) : signedPct(delta as number)) : "—"}
                         </td>
                       </tr>
                     );
@@ -126,6 +170,7 @@ export function WhatIf() {
           </div>
         )}
       </QueryState>
+      <HedgePanel date={date} book={book} />
     </main>
   );
 }

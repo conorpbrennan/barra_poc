@@ -16,6 +16,7 @@ export function Stress() {
   const factors = (meta?.factors ?? []).filter((f) => f !== "Market");
 
   const [shocks, setShocks] = useState<Record<string, number>>({});
+  const [conditional, setConditional] = useState(true);
   const [result, setResult] = useState<StressResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -25,7 +26,8 @@ export function Stress() {
     if (!Object.keys(active).length) { setErr("set at least one factor shock"); return; }
     setBusy(true); setErr(null);
     try {
-      setResult(await apiSend<StressResult>("POST", "/stress", { shocks: active, date, book }));
+      setResult(await apiSend<StressResult>("POST", "/stress",
+        { shocks: active, date, book, conditional }));
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
 
@@ -48,14 +50,27 @@ export function Stress() {
       <div className="row" style={{ margin: "0.8rem 0" }}>
         <button className="primary" onClick={run} disabled={busy}>{busy ? "computing…" : "Run stress"}</button>
         <button onClick={() => { setShocks({}); setResult(null); setErr(null); }}>Clear</button>
+        <label className="row small muted" style={{ gap: "0.3rem" }}>
+          <input type="checkbox" checked={conditional}
+            onChange={(e) => setConditional(e.target.checked)} />
+          correlated (conditional) — co-moving factors move too
+        </label>
         {err && <span className="err small">{err}</span>}
       </div>
 
       {result && (
         <div style={{ maxWidth: "44rem" }}>
-          <div className="hero" style={{ marginBottom: "0.6rem" }}>
-            <div className="v rag-red">{pct(result.loss)}</div>
-            <div className="k">book loss (P&L {signedPct(result.total_pnl)})</div>
+          <div className="row" style={{ gap: "2.5rem", marginBottom: "0.6rem" }}>
+            <div className="hero">
+              <div className="v rag-red">{pct(result.loss)}</div>
+              <div className="k">naive loss — shocked factors only</div>
+            </div>
+            {result.conditional && (
+              <div className="hero">
+                <div className="v rag-red">{pct(result.conditional.loss)}</div>
+                <div className="k">conditional loss — covariance propagated</div>
+              </div>
+            )}
           </div>
           <table className="tufte">
             <thead><tr><th className="label">Factor</th><th>Exposure</th><th>σ</th><th>Vol</th><th>Shock ret</th><th>P&L</th></tr></thead>
@@ -72,6 +87,32 @@ export function Stress() {
               ))}
             </tbody>
           </table>
+          {result.conditional && (
+            <>
+              <h2>Conditional propagation</h2>
+              <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
+                E[f | shock] — the factor covariance implies how every other factor moves when the
+                shocked one does. A stress that holds them still understates a real event.
+              </p>
+              <table className="tufte">
+                <thead><tr><th className="label">Factor</th><th>Exposure</th>
+                  <th>Implied σ</th><th>Implied ret</th><th>P&L</th></tr></thead>
+                <tbody>
+                  {result.conditional.components
+                    .filter((c) => c.shocked || Math.abs(c.pnl) > 1e-6)
+                    .map((c) => (
+                    <tr key={c.factor} style={c.shocked ? { fontWeight: 600 } : undefined}>
+                      <td className="label">{c.factor}{c.shocked ? " ←" : ""}</td>
+                      <td>{num(c.exposure, 2)}</td>
+                      <td>{c.implied_sigma === null ? "—" : num(c.implied_sigma, 1)}</td>
+                      <td>{signedPct(c.implied_return)}</td>
+                      <td className={c.pnl < 0 ? "rag-red" : ""}>{signedPct(c.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
         </div>
       )}
 

@@ -1,10 +1,10 @@
 {
-  "_comment": "Desk risk limits for the Soros book. All limits are UPPER bounds (the measure is bad when high). 'warn' is the amber threshold, 'limit' the red breach. Fractions of book value; weights are fractions. scenario_set is the book-level set the VaR/ES/HHI limits are evaluated against (scenario risk needs one). Edit freely; risk_api reloads on each /limits call.",
+  "_comment": "Desk risk limits for the Soros book. All limits are UPPER bounds (the measure is bad when high). 'warn' is the amber threshold, 'limit' the red breach. Fractions of book value; weights are fractions. scenario_set is the book-level set the VaR/ES limits are evaluated against (scenario risk needs one). 'Top-5 risk share' is the 5 largest names' share of the marginal-Total-VaR contributions (the ch-09 CTR concentration idiom; replaced Risk HHI 2026-07-02) — full-history, scenario-set independent. Edit freely; risk_api reloads on each /limits call.",
   "scenario_set": "HistFull",
   "book": {
     "Total VaR 99":     {"warn": 0.045, "limit": 0.055},
     "Scenario ES 97.5": {"warn": 0.050, "limit": 0.065},
-    "Risk HHI":         {"warn": 0.080, "limit": 0.120}
+    "Top-5 risk share": {"warn": 0.400, "limit": 0.500}
   },
   "concentration": {
     "single_name_weight": {"warn": 0.080, "limit": 0.100},

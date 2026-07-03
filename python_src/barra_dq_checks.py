@@ -128,6 +128,50 @@ def run(frames: dict | None = None) -> list[dict]:
     stub = (sec["Sector"] == "Unknown").mean()
     check("WARN" if stub > 0 else "PASS", "securities: Sector populated", f"{stub:.0%} 'Unknown' (known stub)")
 
+    # --- 6. model gates (theory-derived, the ch-16 pipeline checks) -----------
+    # Each gate validates a property the construction guarantees — a failure indicts the inputs,
+    # not the math. (a) standardization: every style factor's median ≈ 0 on the latest date, on
+    # the ESTIMATION cross-section (z-scores are centred there; the uncapped coverage tail is
+    # smaller/less liquid BY DESIGN, so full-cross-section medians legitimately sit off 0 —
+    # Size ≈ −1, NonLinSize ≈ +1.5). Estimation proxy = funnel survivors when the artifact
+    # exists; otherwise the gate is skipped rather than false-warned.
+    dlast = exp["Date"].max()
+    funnel_p = OUT / "universe_funnel.parquet"
+    est_pos: set = set()
+    if funnel_p.exists():
+        fn = pd.read_parquet(funnel_p, columns=["month", "position", "survived"])
+        est_pos = set(fn[(pd.to_datetime(fn["month"]) == dlast) & (fn["survived"] == True)]  # noqa: E712
+                      ["position"].dropna())
+    if len(est_pos) >= 30:
+        med = (exp[(exp["Date"] == dlast) & (exp["Position"].isin(est_pos))]
+               .groupby("Factor")["Loading"].median().drop("Market", errors="ignore"))
+        worst = med.abs().idxmax()
+        check("WARN" if med.abs().max() > 0.5 else "PASS",
+              "exposures: estimation-universe style medians ≈ 0 (standardization gate)",
+              f"{len(est_pos)} funnel survivors; worst {worst} {med[worst]:+.2f}")
+    else:
+        check("WARN", "exposures: estimation-universe style medians ≈ 0 (standardization gate)",
+              "skipped — universe_funnel.parquet absent (run barra_universe_funnel.py)")
+    # (b) the factor covariance must be PSD — the optimizer/risk-math gate.
+    widefr = fr.pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
+    if len(widefr) > 30:
+        eig = float(np.linalg.eigvalsh(widefr.cov().to_numpy()).min())
+        check("FAIL" if eig < -1e-12 else "PASS", "factor covariance PSD",
+              f"min eigenvalue {eig:.2e}")
+    # (c) the regression fit-health artifact (v2 builder): breadth floor + sane R².
+    reg_p = OUT / "regression_stats.parquet"
+    if reg_p.exists():
+        rs = pd.read_parquet(reg_p)
+        day = rs.groupby("Date")[["R2", "N"]].first()
+        bad_r2 = int(((day["R2"] < 0) | (day["R2"] > 1)).sum())
+        nmin = int(day["N"].min())
+        check("WARN" if nmin < 30 or bad_r2 else "PASS",
+              "regression_stats: N >= 30 every day, R² in [0,1]",
+              f"min N {nmin}, {bad_r2} bad-R² days, mean R² {day['R2'].mean():.2f}")
+    else:
+        check("WARN", "regression_stats artifact present",
+              "missing — rebuild with the v2 builder to enable /regression")
+
     return _results
 
 

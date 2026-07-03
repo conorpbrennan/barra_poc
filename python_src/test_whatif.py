@@ -77,12 +77,15 @@ def t_whatif_drop_reduces_gross_net():
 
 
 @integ
-def t_whatif_concentrating_raises_hhi():
-    """Doubling the top name (more concentrated) raises Risk HHI."""
+def t_whatif_concentrating_raises_top5_share():
+    """Doubling the top name (more concentrated) raises the top-5 risk share (the ch-09 CTR
+    concentration idiom that replaced Risk HHI)."""
     j = _whatif([])
     top = j["holdings"][0]
     res = _whatif([{"position": top["position"], "weight": 2 * top["weight"]}])
-    assert res["after"]["risk_hhi"] > res["before"]["risk_hhi"], (res["before"]["risk_hhi"], res["after"]["risk_hhi"])
+    assert res["after"]["top5_ctr_share"] > res["before"]["top5_ctr_share"], \
+        (res["before"]["top5_ctr_share"], res["after"]["top5_ctr_share"])
+    assert 0 < res["before"]["top5_ctr_share"] <= 1
 
 
 @integ

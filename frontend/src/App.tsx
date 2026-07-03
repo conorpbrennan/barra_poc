@@ -9,13 +9,13 @@ const Pivot = lazy(() => import("./routes/Pivot").then((m) => ({ default: m.Pivo
 import { Trends } from "./routes/Trends";
 import { Stress } from "./routes/Stress";
 import { WhatIf } from "./routes/WhatIf";
-import { Liquidity } from "./routes/Liquidity";
 import { Universe } from "./routes/Universe";
 import { Drift } from "./routes/Drift";
 import { Attribution } from "./routes/Attribution";
 import { Changes } from "./routes/Changes";
 import { Ask } from "./routes/Ask";
 import { Checks } from "./routes/Checks";
+import { Model } from "./routes/Model";
 
 export default function App() {
   return (
@@ -31,12 +31,12 @@ export default function App() {
             <Route path="/trends" element={<Trends />} />
             <Route path="/stress" element={<Stress />} />
             <Route path="/whatif" element={<WhatIf />} />
-            <Route path="/liquidity" element={<Liquidity />} />
             <Route path="/universe" element={<Universe />} />
             <Route path="/drift" element={<Drift />} />
             <Route path="/attribution" element={<Attribution />} />
             <Route path="/changes" element={<Changes />} />
             <Route path="/ask" element={<Ask />} />
+            <Route path="/model" element={<Model />} />
             <Route path="/checks" element={<Checks />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

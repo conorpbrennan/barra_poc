@@ -63,7 +63,7 @@ call is opt-in via `RUN_LLM=1`).
 filings: positions **entered / exited / resized** (by 13F weight), the book's net factor-exposure
 **drift attributed** with Phase 4's `barra_universe_drift.decompose` (each factor's Δ split into
 rotation = entered/exited vs re-pricing = loading_drift, summing to Δ exactly), and the **book risk
-delta** (Scenario VaR/ES, Total VaR 99, Risk HHI, specific vol, gross/net) computed at each date with
+delta** (Scenario VaR/ES, Total VaR 99, Top-5 risk share, specific vol, gross/net) computed at each date with
 the what-if math (`_book_inputs` + `_risk_from_weights`, so it's cube-consistent, on the full
 factor-return history). `prev` defaults to the previous *distinct* book (`_prior_filing_date` walks
 back past the flat monthly as-of months to the prior quarterly filing).
@@ -166,21 +166,82 @@ A hypothetical shock's book P&L is linear: `dPnL = Σ_k x_k·(σ_k·vol_k)` — 
 exposures (cube `Net exposure` by Factor) + factor vols (`_factor_vols`, matching `build_scenarios`'s
 `wide.std()`), so neither needs a cube rebuild. `POST /stress {shocks:{Factor:σ}}` returns the book
 P&L + per-factor contribution breakdown — verified to match the cube's baked-in Hypo sets to float
-precision. `GET /reverse_stress?loss=` inverts it: for a target loss `L`, the single-factor move
+precision. **`conditional: true`** adds the correlated read: `E[f|f_S=s] = F[:,S]·F[S,S]⁻¹·s`
+(`_conditional_shock`, pure) propagates the shock through the factor covariance so co-moving factors
+move too — the naive result holds them still and understates a real event. `GET /reverse_stress?loss=`
+inverts it: for a target loss `L`, the single-factor move
 `σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
-Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`). Tests: `test_stress.py`.
+Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
+conditional toggle (naive vs conditional side by side + the propagation table). Tests: `test_stress.py`.
+
+## Euler risk contributions (`/contributions`) & model trust (`/calibration`, `/regression`, `/factor_cov`)
+
+The It's Just Beta alignment set (see `itsjustbeta/additional-views-plan.md`), shipped 2026-07-02:
+
+- **`GET /contributions?date=&book=`** — the ch-09 standard reports from `_euler_contributions`
+  (pure): per-factor **CTV** `x_k(Fx)_k` (sums to factor VARIANCE, cross-terms 50/50, negative =
+  hedge) and per-position **CTR** `w·MCR` (sums EXACTLY to book daily vol). Model vol `σ² = x'Fx +
+  w'Δw` on the full factor-return history — the additive decomposition the standalone per-bucket
+  VaR view can't give; never compare CTR (vol units) with CTV (variance units). Vite Attribution
+  lens "Contributions (Euler)" tab, sums pinned. Tests: `test_contributions.py`.
+- **`GET /calibration?window=&book=`** — the ROLLING bias statistic (`_rolling_bias`, pure):
+  `b = std(realized/predicted vol)` over a trailing window with the `1 ± √(2/window)` acceptance
+  band, book + specific, plus 2σ exceedance counts (expected ≈ 4.6%). NB the route is
+  `/calibration` because `/validation` was already the scenario cross-check. Reads the attribution
+  artifact + `_pred_book_vols` (cached full-calendar on `S`).
+- **`GET /regression`** — the builder's WLS fit health from the **`regression_stats.parquet` side
+  artifact** (`barra_build_frames.py` now persists per-day weighted cross-sectional R², per-factor
+  t-stats, and N — an eighth parquet, NOT part of the seven-frame cube contract; written inside
+  `build_frames`, needs a rebuild to populate, 404s cleanly when absent). Serves the monthly R²
+  trend (mean ≈ 0.19 daily — the trend matters, not the monthly 0.2–0.4 rule) and the admission
+  table: % of days `|t|>2` per factor (Market 85% … Growth 9%, a drop candidate).
+- **`GET /factor_cov?date=`** — the F matrix made visible: correlation matrix + per-factor daily
+  vols, full window vs recent-1y side by side (vol-clustering warning where the ratio ≫ 1).
+
+UI: the Vite **Model lens** (`frontend/src/routes/Model.tsx`, rail entry "Model") — rolling-bias
+small multiples with the acceptance band, R² trend + admission table, shaded correlation matrix.
+Tests: `test_model_trust.py` (integ), `_rolling_bias` unit in `test_attribution.py`, `BiasChart`
+render in `Model.test.tsx`.
+
+Second wave (plan items #6–#10, same day):
+
+- **`GET /exposure_profile?factor=&date=`** — one factor's cross-section: histogram + quantiles,
+  the ±3 estimation-winsor lines, the uncapped beyond-±3 tail (off-index names' true tilts, e.g.
+  a held name at Size −5.5), the held book overlaid (dot size = weight), and the descriptor
+  recipe (`FACTOR_RECIPES`) — the "model-conditional: what OUR Value means" view. Model lens.
+- **`GET /hedge?date=&book=`** — ch-12/D6: book vol before/after NEUTRALIZING each factor (−x_k
+  units of the pure factor-k portfolio), ranked by vol saved, plus the single-instrument
+  minimum-variance market hedge `h* = −(Fx)_m/F_mm` (beats full neutralization — it nets the
+  correlated style covariance too). Specific vol is the floor no factor hedge touches.
+  `_hedge_table` pure. What-if lens panel.
+- **`GET /factor_portfolio?factor=&date=`** — ch-07's dual made visible: reconstructs
+  `P = (X'W²X)⁻¹X'W²` on the funnel survivors (≈ estimation universe; W = the builder's
+  exp(Size/4) sqrt-cap proxy) and serves one factor's pure portfolio: top longs/shorts, gross,
+  net, and the PX = I purity check (self-exposure 1, cross ~1e-16). Empirical note: style
+  portfolios are dollar-neutral and gross runs ~0.9–1.4× on this broad cross-section (the
+  primer's 11.9× is a 10-stock artifact); Market nets to exactly +1. Model lens.
+- **`GET /pnl_attribution/names?from=&to=`** — ch-13 scope: specific PnL name by name (winners /
+  losers), each with sign persistence (share of consecutive same-sign months; ≈0.5 memoryless,
+  ≫0.5 = edge / stale 13F / missing factor) and months-positive. `_name_attr` gained a
+  `monthly=True` mode returning the per-month specific panel. Attribution lens, PnL tab.
+- **DQ model gates** — `barra_dq_checks.py` §6: estimation-universe style medians ≈ 0
+  (standardization gate, on funnel survivors — full-cross-section medians legitimately sit off 0
+  because the uncapped coverage tail is smaller/less liquid BY DESIGN), factor covariance PSD,
+  and regression_stats sanity (N ≥ 30, R² ∈ [0,1]). Inherited by `/dq` + the Checks lens.
 
 ## Pre-trade / what-if (`/whatif`)
 
 `risk_api.py` `POST /whatif {trades:[{position, weight}]}` recomputes book risk under a modified weight
 vector — resize/drop held names, or add a universe name (absolute target weight; 0 drops). It
 reproduces the cube's risk math in numpy (`_book_inputs` + `_risk_from_weights`): factor P&L vector
-`R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and Risk HHI from the marginal-Total-VaR shares —
+`R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and the **Top-5 risk share** from the
+marginal-Total-VaR contributions (the ch-09 CTR concentration idiom; replaced Risk HHI in the
+what-if/limits/whatchanged payloads 2026-07-02 — the cube's `Risk HHI` measure itself is unchanged) —
 so **"before" matches the cube's reported figures exactly** and only the BEFORE→AFTER delta is the
 new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
 "add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
-VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Risk HHI, gross, net. UI panel `render_whatif`.
+VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. UI panel `render_whatif`.
 Tests: `test_whatif.py`.
 
 ## Liquidity / days-to-liquidate (`/liquidity`)
@@ -229,7 +290,26 @@ to the ex-ante risk decomposition. Three layers:
   /pnl_attribution/linkage?T=&horizon=` — the §4 reconcile: per factor + Specific + book total, the
   start-of-period ±2σ **base band** and a **stressed band** (vols ×`vol_mult` 1.25, correlations
   blended toward 1 by `rho` 0.75 via `_stressed_cov`), the realized dot, surprise z, and a
-  within / stress-regime / investigate verdict, plus per-position surprises. `/stress` gained the
+  within / stress-regime / investigate verdict, plus per-position surprises. Rows outside the ±2σ
+  base band also carry a **driver read** (`_linkage_driver`, pure): the band freezes `x` at T, so
+  each breach is classified `exposure_migration` (x(T) unrepresentative — z rebuilt on the
+  in-window avg exposure `exposure_window_avg` sits within band; loading churn / 13F re-anchor,
+  drawn as a hollow dot in the Vite UI), `factor_move` (exposure stable, factor moved ≥1.5σ), or
+  `mixed`, each with a one-sentence `text`; specific/book breaches point at the bias stats /
+  backtest instead (`vol_underforecast`). **Positions get the same treatment** (`_position_driver`,
+  pure): each name's row carries its factor/specific PnL split + `weight_window_avg`, and breaches
+  classify as `weight_migration` (13F re-anchor/resize made w(T) unrepresentative — band artifact),
+  `specific_move` (idiosyncratic event, ≥65% specific — cross-check the residual explorer),
+  `factor_move` (loadings carried a factor move, with the largest factor named), or `mixed`; the
+  Vite positions table shows the split + a stock-level driver-read block. Two joint reads on top:
+  **`breach_comovement`** (`_pairwise_mean_corr`, pure — Chris's missing-factor test, cheap
+  version): pairwise daily-residual correlation among the specific/mixed breach names; mean ρ ≥
+  0.25 ⇒ `common_thread` (one driver the model has no factor for), else `independent` (separate
+  stock events). And **`hidden_beta`** on `factor_move` AND `mixed` breaches (the flag reads on
+  the factor component): if the driving factor's own row sits WITHIN its band, the factor moved
+  normally — the name's realized comovement exceeded its T loading, so suspect the loading, not
+  the factor. NB `mixed` means neither component dominates (specific share 35–65%); it is a
+  composition statement, orthogonal to the hidden-beta inference. `/stress` gained the
   same correlation-stress mode (optional `vol_mult`/`rho` → `correlation_stress` block).
   `/analysis` folds in a trailing-12m headline. UI: Streamlit `render_attribution` (Risk tab —
   period presets, vega-lite stacked hero, RAG table, reconcile SVG) and the Vite Attribution lens
@@ -372,10 +452,13 @@ all existing functionality against the same `risk_api.py` endpoints** — no API
 charts and tables follow Edward Tufte and Stephen Few — a hard requirement, not a preference:**
 
 - **Overview-first monitor screen.** A single at-a-glance Overview (Few's dashboard sense): hero numbers
-  (Total VaR 99, ES, max drawdown, gross/net, Risk HHI) + the limits/DQ RAG strip + top exposures, no
-  scrolling for the summary. Everything else is a lens reached on demand.
-- **Details on demand.** One route per lens (Pivot, Trends, Stress, What-if, Liquidity, Universe, Drift,
-  Attribution, the LLM panels). Drill-downs stay hidden until asked for.
+  (Total VaR 99, ES, factor/specific variance split, Top-5 risk share, gross/net) + the
+  limits/DQ/backtest/**reconcile** RAG strip + **top risk contributions (CTV)** with net exposures
+  as the secondary read, no scrolling for the summary. The reconcile line counts only GENUINE
+  linkage breaches (exposure_migration drivers are band artifacts, excluded). Everything else is
+  a lens reached on demand.
+- **Details on demand.** One route per lens (Pivot, Trends, Stress, What-if, Universe, Drift,
+  Attribution, Model, the LLM panels). Drill-downs stay hidden until asked for.
 - **Data-ink.** Grey + one accent; colour encodes status (RAG) or data only, never decoration; no
   cards/shadows/gratuitous borders — whitespace and hairline rules separate. Numbers are the hero
   (large, tabular-nums). Direct labelling on charts, not legends.
@@ -396,9 +479,17 @@ of the existing endpoints — the **only** backend change is the saved-views CRU
 `test_views_api.py`). Lenses: Overview (hero + sparklines + limits bullet graphs + RAG strip + top
 exposures + QoQ), Pivot (dnd-kit field list → server-side `/pivot` drill in AG Grid as a pure
 renderer, grand-total only since VaR is non-additive; react-vega chart mode; `/views` Repository;
-on-demand `/analysis`), Trends/Drawdown, Stress, What-if, Liquidity, Universe (membership/funnel/span
-+ live scatter), Drift, Attribution, Changes, Ask, Checks. Global context bar (book/date/scenario,
-§9). Streamed LLM panels consume raw `text/markdown` via `ReadableStream`. Served at `/flexagg2++/`
+on-demand `/analysis`), Trends, Stress, What-if (+ hedge panel), Universe (membership/funnel/span
++ live scatter), Drift, Attribution (Euler + PnL tabs), Changes, Model, Ask, Checks. Global context
+bar (book/date/scenario, §9). **Scope cuts 2026-07-02** (itsjustbeta audit, `itsjustbeta/
+risk-manager-read.md` Part 2, steps 1–2 applied): the Attribution "Risk by level" tab, the Drawdown
+panel, the Liquidity rail entry, and the Basel zone display were removed from the Vite UI (the
+`/attribution`, `/drawdown`, `/liquidity` endpoints and `_basel_zone` are parked, still served and
+tested; the Streamlit app still shows them); the backtest badge reads Kupiec pass/reject; **Risk
+HHI was replaced by Top-5 risk share** in `_risk_from_weights` (`top5_ctr_share`), `/limits`
+(computed set-independently from the what-if math, not the cube), `limits.json`
+(warn 0.40 / limit 0.50), the what-if/whatchanged payloads and both UIs — the cube's `Risk HHI`
+measure remains on the pivot allowlist. Streamed LLM panels consume raw `text/markdown` via `ReadableStream`. Served at `/flexagg2++/`
 same-origin under `/flexagg2++/api` — **alongside** the unchanged `flexagg++` Streamlit app; ops in
 `docs/vite-ui-serving.md` (build → nginx alias + proxy with `proxy_buffering off`; restart the cube
 once for `/views`). The Attribution lens's "PnL attribution" tab is live against the Step-15

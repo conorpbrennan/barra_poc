@@ -5,7 +5,8 @@
 import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import {
-  useTrends, useDrawdown, useWhatif, useLimits, useDq, useBacktest, useExposures, useWhatChanged,
+  useTrends, useWhatif, useLimits, useDq, useBacktest, useExposures, useWhatChanged,
+  useContributions, usePnlLinkage,
 } from "../api/hooks";
 import { Sparkline, BulletGraph, LabelBar } from "../components/svg";
 import { RagDot } from "../components/ui";
@@ -24,13 +25,14 @@ function series(recs: Rec[] | undefined, key: string): (number | null)[] {
 export function Overview() {
   const { date, scenario, book, ready } = useApp();
 
-  const trends = useTrends(scenario, "Total VaR 99,Scenario ES 97.5,Risk HHI");
-  const dd = useDrawdown(scenario, date, book);
+  const trends = useTrends(scenario, "Total VaR 99,Scenario ES 97.5");
   const wi = useWhatif(date, book, []);
   const limits = useLimits(date, scenario, book);
   const dq = useDq();
   const bt = useBacktest("HistFull", date, book);
   const exposures = useExposures(date);
+  const contrib = useContributions(date, book);
+  const lk = usePnlLinkage(3, undefined, book);
   const changed = useWhatChanged(date, undefined, book);
 
   if (!ready) return <main className="lens"><div className="spin">loading…</div></main>;
@@ -38,9 +40,24 @@ export function Overview() {
   const tr = trends.data?.records;
   const totVar = lastNum(tr, "Total VaR 99");
   const es = lastNum(tr, "Scenario ES 97.5");
-  const hhi = lastNum(tr, "Risk HHI");
-  const ddVal = dd.data?.status === "ok" ? dd.data.max_drawdown ?? null : null;
   const before = wi.data?.before;
+  const factorShare = contrib.data?.factor_share ?? null;
+
+  // ch-09 step 1: contribution to risk (CTV), not raw exposure — the primary bars
+  const ctv = (contrib.data?.factors ?? []).slice(0, 7);
+  const maxCtv = Math.max(...ctv.map((r) => Math.abs((r.pct_of_variance ?? 0) * 100)), 1e-6);
+
+  // risk↔PnL reconcile status (Chris's step 4): genuine breaches only — an
+  // exposure_migration driver is a band artifact, not a risk the decomposition missed
+  const lkRows = lk.data ? [...lk.data.rows, lk.data.book_total] : [];
+  const genuine = lkRows.filter(
+    (r) => r.verdict === "investigate" && r.driver?.kind !== "exposure_migration");
+  const stressed = lkRows.filter((r) => r.verdict === "stress");
+  const lkStatus = !lk.data ? undefined
+    : genuine.length ? "red" : (stressed.length ? "amber" : "green");
+  const lkLabel = !lk.data ? "—"
+    : genuine.length ? `${genuine.length} to investigate (${genuine.map((r) => r.name).join(", ")})`
+    : stressed.length ? "stress regime" : "within band";
 
   // top factor exposures (by |Net exposure|), Market first as it dominates
   const exps = (exposures.data ?? [])
@@ -61,9 +78,11 @@ export function Overview() {
           <h2 style={{ marginTop: 0 }}>Risk</h2>
           <HeroNum k="Total VaR 99" v={pct(totVar)} spark={series(tr, "Total VaR 99")} to="/trends" />
           <HeroNum k="ES 97.5" v={pct(es)} spark={series(tr, "Scenario ES 97.5")} to="/trends" />
-          <HeroNum k="Max drawdown" v={pct(ddVal)} spark={(dd.data?.path ?? []).map((p) => p.drawdown)}
-            to="/trends" />
-          <HeroNum k="Risk HHI" v={num(hhi, 3)} spark={series(tr, "Risk HHI")} to="/trends" />
+          <HeroNum k="Factor share of variance"
+            v={factorShare === null ? "—" : `${pct(factorShare, 0)} / ${pct(1 - factorShare, 0)}`}
+            spark={[]} to="/attribution" />
+          <HeroNum k="Top-5 risk share" v={pct(before?.top5_ctr_share ?? null, 1)} spark={[]}
+            to="/attribution" />
         </div>
 
         {/* ---- limits as bullet graphs ---- */}
@@ -97,7 +116,13 @@ export function Overview() {
           </div>
           <div className="row small" style={{ gap: "1.1rem" }}>
             <span><RagDot status={dq.data?.status} /> <Link to="/checks">DQ {ragLabel(dq.data?.status)}</Link></span>
-            <span><RagDot status={bt.data?.basel_zone} /> <Link to="/checks">backtest {bt.data?.basel_zone ?? "—"}</Link></span>
+            <span><RagDot status={bt.data ? (bt.data.kupiec_reject ? "red" : "green") : undefined} />{" "}
+              <Link to="/checks">backtest {bt.data?.kupiec_reject === undefined ? "—"
+                : bt.data.kupiec_reject ? "Kupiec reject" : "Kupiec pass"}</Link></span>
+          </div>
+          <div className="row small">
+            <span><RagDot status={lkStatus} />{" "}
+              <Link to="/attribution">reconcile {lkLabel}</Link></span>
           </div>
         </div>
       </div>
@@ -105,9 +130,17 @@ export function Overview() {
       <hr className="rule" />
 
       <div className="hgroup">
-        {/* ---- top factor exposures ---- */}
+        {/* ---- step 1: contribution to risk (CTV), exposures as the secondary read ---- */}
         <div style={{ gridColumn: "span 2" }}>
-          <h2 style={{ marginTop: 0 }}><Link to="/attribution">Top factor exposures</Link></h2>
+          <h2 style={{ marginTop: 0 }}><Link to="/attribution">Top risk contributions (CTV)</Link></h2>
+          {ctv.length ? ctv.map((r) => (
+            <LabelBar key={r.factor} label={r.factor}
+              value={(r.pct_of_variance ?? 0) * 100} max={maxCtv} suffix="%" neg />
+          )) : <div className="muted small">—</div>}
+          <p className="muted small" style={{ margin: "0.2rem 0 0.6rem" }}>
+            share of total variance; negative = hedges the book
+          </p>
+          <div className="muted small" style={{ marginBottom: "0.2rem" }}>Net exposures</div>
           {exps.length ? exps.map((e) => (
             <LabelBar key={e.factor} label={e.factor} value={e.v} max={maxExp} neg />
           )) : <div className="muted small">—</div>}

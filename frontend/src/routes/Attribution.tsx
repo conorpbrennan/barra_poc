@@ -8,16 +8,14 @@
 import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
 import {
-  useAttribution, usePnlAttribution, usePnlResidual, usePnlLinkage,
+  useContributions, usePnlAttribution, usePnlResidual, usePnlLinkage, usePnlNames,
 } from "../api/hooks";
 import type {
-  PnlAttributionResult, PnlLinkageResult, PnlSeriesPoint,
+  ContributionsResult, PnlAttributionResult, PnlLinkageResult, PnlSeriesPoint,
 } from "../api/types";
-import { LabelBar } from "../components/svg";
 import { QueryState, RagDot } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
-const LEVELS = ["sector", "issuer", "position", "country"];
 const INK = "#111";
 const BAND_KEYS: { key: keyof PnlSeriesPoint; label: string; color: string }[] = [
   { key: "market", label: "Market", color: "#c9c5bb" },
@@ -118,13 +116,17 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
     const z = r.z ?? 0;
     const dx = cx + Math.max(-4.4, Math.min(4.4, z)) * px;
     const c = DOT[r.verdict as keyof typeof DOT] ?? "#33332f";
+    // an exposure-migration breach is a band artifact (x frozen at T), not a factor event —
+    // draw it hollow so it doesn't read like a real breach
+    const hollow = r.driver?.kind === "exposure_migration";
     els.push(
       <g key={r.name}>
         <rect x={cx - halfS} y={y} width={2 * halfS} height={14} fill="#ece9e0" />
         <rect x={cx - 2 * px} y={y} width={4 * px} height={14} fill="#d9d5ca" />
         <text x={labelX} y={y + 11} textAnchor="end" fontSize={12.5}
           fontWeight={r.kind === "book" ? 600 : 400} fill="#2a2a26">{r.name}</text>
-        <circle cx={dx} cy={y + 7} r={4.2} fill={c} />
+        <circle cx={dx} cy={y + 7} r={4.2} fill={hollow ? "#fffff8" : c}
+          stroke={hollow ? c : "none"} strokeWidth={hollow ? 1.5 : 0} />
         <text x={zX} y={y + 11} fontSize={11.5} fill={c} className="num">
           {signedNum(z, 1)}σ</text>
       </g>,
@@ -133,7 +135,7 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
   }
   const axY = y + 2;
   const legendY = axY + 34;
-  const height = legendY + 40;
+  const height = legendY + 58;
   return (
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} role="img"
       aria-label="realized contribution vs the start-of-period expected band, by factor"
@@ -162,7 +164,63 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
       <text x={270} y={legendY + 31} fontSize={10.5} fill="#2a2a26">beyond base — stress regime</text>
       <circle cx={470} cy={legendY + 27} r={4.2} fill={DOT.investigate} />
       <text x={480} y={legendY + 31} fontSize={10.5} fill="#2a2a26">beyond stressed — investigate</text>
+      <circle cx={80} cy={legendY + 45} r={4.2} fill="#fffff8" stroke="#33332f" strokeWidth={1.5} />
+      <text x={90} y={legendY + 49} fontSize={10.5} fill="#2a2a26">
+        hollow — exposure migrated in-window (band artifact, see driver read)</text>
     </svg>
+  );
+}
+
+// Significance of the specific (stock-selection) stream: t = IR·√years observed, and the years
+// of data an IR of this size needs to clear two standard errors ((2/IR)²). Exported for tests.
+export function irSignificance(ir: number | null | undefined, nMonths: number) {
+  if (ir == null || !isFinite(ir) || nMonths <= 0) return null;
+  const t = ir * Math.sqrt(nMonths / 12);
+  const years = ir === 0 ? null : (2 / Math.abs(ir)) ** 2;
+  return { t, years };
+}
+
+// ---- residual explorer: the specific PnL name by name (winners / losers + persistence) ----
+function ResidualExplorer({ from, to }: { from?: string; to?: string }) {
+  const q = usePnlNames(from, to);
+  const cols = (
+    <thead><tr><th className="label">Name</th><th>Specific</th><th>Factor</th>
+      <th>Persistence</th><th>Months +</th></tr></thead>
+  );
+  const row = (r: import("../api/types").PnlNameRow) => (
+    <tr key={r.position}>
+      <td className="label">{r.ticker.toUpperCase()}</td>
+      <td>{signedPct(r.specific_pnl, 1)}</td>
+      <td className="muted">{signedPct(r.factor_pnl, 1)}</td>
+      <td style={r.sign_persistence !== null && r.sign_persistence > 0.7
+        ? { color: "#b07d2b" } : undefined}>
+        {r.sign_persistence === null ? "—" : pct(r.sign_persistence, 0)}</td>
+      <td className="muted">{r.hit_rate === null ? "—" : pct(r.hit_rate, 0)}</td>
+    </tr>
+  );
+  return (
+    <>
+      <h2>Residual explorer — the specific PnL, name by name</h2>
+      <QueryState q={q}>
+        {(n) => (
+          <div style={{ maxWidth: "52rem" }}>
+            <div className="row" style={{ gap: "2.5rem", alignItems: "flex-start" }}>
+              <table className="tufte" style={{ minWidth: "22rem" }}>
+                {cols}<tbody>{n.winners.slice(0, 8).map(row)}</tbody>
+              </table>
+              <table className="tufte" style={{ minWidth: "22rem" }}>
+                {cols}<tbody>{n.losers.slice(0, 8).map(row)}</tbody>
+              </table>
+            </div>
+            <p className="muted small" style={{ marginTop: "0.4rem" }}>
+              Persistence = share of consecutive months with the same specific sign: ≈50% is
+              memoryless (re-underwritten bets); well above (amber &gt; 70%) is a persistent
+              unexplained driver — a real edge, a stale 13F weight, or a missing factor.
+            </p>
+          </div>
+        )}
+      </QueryState>
+    </>
   );
 }
 
@@ -214,7 +272,8 @@ function PnlTab() {
                 realized (geometric) · {a.from} → {a.to} · {a.n_days} trading days —
                 factor {signedPct(a.headline.factor, 1)}, specific {signedPct(a.headline.specific, 1)}
                 {a.headline.specific_share !== null &&
-                  ` (${signedPct(a.headline.specific_share, 0)} of total)`}
+                  ` (${signedPct(a.headline.specific_share, 0)} of total)`} ·
+                Cariño-linked, parts sum to the geometric return exactly
               </span>
             </p>
             <StackedHero series={a.series} />
@@ -243,6 +302,11 @@ function PnlTab() {
                 ))}
               </tbody>
             </table>
+            <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
+              Each factor line is x·f — the return on the pure-factor portfolio the book
+              implicitly held. Contributions are Cariño-linked so they sum exactly to the
+              geometric period return; the chart above is the unlinked arithmetic path.
+            </p>
             <p className="muted small">
               Coverage: {a.coverage.mean_priced_share === null ? "—"
                 : pct(a.coverage.mean_priced_share, 0)} of book weight priced on average
@@ -251,11 +315,22 @@ function PnlTab() {
                     .map((u) => `${u.name.toUpperCase()} (${pct(u.weight, 1)})`).join(", ")}`
                 : " · every held name priced"}.
             </p>
+            <p className="muted small">
+              Absolute attribution — no benchmark, so Market stands in for beta (a
+              Brinson allocation/selection view needs one). Model-conditional: the factor lines
+              mean <em>this</em> model&rsquo;s factor definitions. 13F weights are quarterly, so
+              intra-period trading and exposure timing fold into Specific.
+            </p>
           </div>
         )}
       </QueryState>
 
       <h2>Residual diagnostics</h2>
+      <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
+        The tilt-vs-skill split: the factor contributions above are tilt — replicable with
+        factor products; the specific stream is stock selection, the part the model
+        can&rsquo;t span.
+      </p>
       <QueryState q={rq}>
         {(r) => (
           <div style={{ maxWidth: "52rem" }}>
@@ -271,6 +346,19 @@ function PnlTab() {
                 ))}
               </tbody>
             </table>
+            {(() => {
+              const ir = r.checks.find((c) => c.name.startsWith("Information ratio"))?.value;
+              const sig = irSignificance(ir ?? null, r.n_months);
+              if (!sig) return null;
+              return (
+                <p className="muted small" style={{ marginTop: "0.4rem" }}>
+                  Significance t = IR·√T ≈ {signedNum(sig.t, 1)} over {r.n_months} months
+                  {sig.years !== null && sig.years < 200 &&
+                    <> · an IR of {num(Math.abs(ir!), 2)} needs ≈{num(sig.years, 0)}y of data to
+                      clear 2σ — a single good quarter is noise</>}.
+                </p>
+              );
+            })()}
             <p className="muted small" style={{ marginTop: "0.4rem" }}>
               {r.specific_share !== null && <>specific share {signedPct(r.specific_share, 0)} · </>}
               {r.explained_share !== null &&
@@ -293,6 +381,8 @@ function PnlTab() {
         )}
       </QueryState>
 
+      <ResidualExplorer from={from} to={to} />
+
       <h2>Risk ↔ PnL reconcile</h2>
       <div className="row" style={{ marginBottom: "0.5rem" }}>
         <span className="muted small">Horizon</span>
@@ -309,28 +399,38 @@ function PnlTab() {
               its own start-of-period band; the dot is the realized contribution.
             </p>
             <BandChart lk={lk} />
-            {lk.surprises.length > 0 && (
-              <p style={{ marginTop: "0.4rem" }}>
-                <strong>Investigate:</strong>{" "}
-                {lk.surprises.map((s) =>
-                  `${s.name} (${signedPct(s.realized, 1)} vs ±${pct(2 * s.sd_stressed, 1)} stressed)`)
-                  .join(", ")}
-              </p>
-            )}
+            {(() => {
+              const flagged = [...lk.rows, lk.book_total].filter((r) => r.driver);
+              if (!flagged.length) return null;
+              return (
+                <div style={{ marginTop: "0.4rem" }}>
+                  <p style={{ margin: 0 }}><strong>Outside the base band — driver read:</strong></p>
+                  {flagged.map((r) => (
+                    <p key={r.name} className="small" style={{ margin: "0.25rem 0 0" }}>
+                      <strong>{r.name}</strong> ({signedNum(r.z ?? 0, 1)}σ,{" "}
+                      {r.driver!.kind.replace(/_/g, " ")}) — {r.driver!.text}
+                    </p>
+                  ))}
+                </div>
+              );
+            })()}
             {lk.positions.length > 0 && (
               <>
                 <p className="muted small" style={{ margin: "0.8rem 0 0.2rem" }}>
-                  Position surprises — realized vs own ex-ante σ at T (top |z|)
+                  Position surprises — realized vs own ex-ante σ at T (top |z|), split
+                  factor / specific
                 </p>
                 <table className="tufte">
                   <thead><tr><th className="label">Name</th><th>Weight</th><th>Realized</th>
-                    <th>z</th><th>Verdict</th></tr></thead>
+                    <th>Factor</th><th>Specific</th><th>z</th><th>Verdict</th></tr></thead>
                   <tbody>
                     {lk.positions.map((p) => (
                       <tr key={p.position}>
                         <td className="label">{p.name.toUpperCase()}</td>
                         <td>{pct(p.weight, 1)}</td>
                         <td>{signedPct(p.realized, 2)}</td>
+                        <td className="muted">{signedPct(p.factor_pnl, 2)}</td>
+                        <td className="muted">{signedPct(p.specific_pnl, 2)}</td>
                         <td style={{ color: DOT[p.verdict as keyof typeof DOT] ?? INK }}>
                           {signedNum(p.z, 1)}</td>
                         <td className="muted">{p.verdict}</td>
@@ -338,6 +438,34 @@ function PnlTab() {
                     ))}
                   </tbody>
                 </table>
+                {(() => {
+                  const flagged = lk.positions.filter((p) => p.driver);
+                  if (!flagged.length) return null;
+                  return (
+                    <div style={{ marginTop: "0.4rem" }}>
+                      <p style={{ margin: 0 }}>
+                        <strong>Outside the band — stock-level driver read:</strong>
+                      </p>
+                      {flagged.map((p) => (
+                        <p key={p.position} className="small" style={{ margin: "0.25rem 0 0" }}>
+                          <strong>{p.name.toUpperCase()}</strong> ({signedNum(p.z, 1)}σ,{" "}
+                          {p.driver!.kind.replace(/_/g, " ")}
+                          {p.driver!.hidden_beta ? " · hidden beta" : ""}) — {p.driver!.text}
+                        </p>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {lk.breach_comovement && (
+                  <p className="small" style={{ marginTop: "0.4rem",
+                    color: lk.breach_comovement.verdict === "common_thread" ? "#a8322a" : undefined }}>
+                    <strong>Breach co-movement
+                      ({lk.breach_comovement.names.map((n) => n.toUpperCase()).join(", ")}):</strong>{" "}
+                    {lk.breach_comovement.text}
+                    {lk.breach_comovement.shared_sector &&
+                      ` Shared sector: ${lk.breach_comovement.shared_sector}.`}
+                  </p>
+                )}
               </>
             )}
             <p className="muted small" style={{ marginTop: "0.4rem" }}>{lk.note}</p>
@@ -348,67 +476,116 @@ function PnlTab() {
   );
 }
 
+// ---- Euler contributions tab: CTR (positions, vol units) + CTV (factors, variance units) ----
+function EulerTab() {
+  const { date, book } = useApp();
+  const q = useContributions(date, book);
+  return (
+    <QueryState q={q}>
+      {(c: ContributionsResult) => (
+        <div style={{ maxWidth: "52rem" }}>
+          <p style={{ margin: "0 0 0.6rem" }}>
+            <strong style={{ fontSize: "1.25rem" }} className="num">{pct(c.vol_1d, 2)}</strong>{" "}
+            <span className="muted small">
+              book daily vol (model, σ² = x&prime;Fx + w&prime;Δw) ·
+              factor {c.factor_share === null ? "—" : pct(c.factor_share, 0)} of variance,
+              specific {c.factor_share === null ? "—" : pct(1 - c.factor_share, 0)} ·
+              normal-approx VaR99 {pct(c.var99_normal, 2)}
+            </span>
+          </p>
+
+          <h2>Factors — contribution to variance (CTV)</h2>
+          <table className="tufte">
+            <thead><tr><th className="label">Factor</th><th>Exposure</th><th>CTV</th>
+              <th>% of variance</th></tr></thead>
+            <tbody>
+              {c.factors.map((r) => (
+                <tr key={r.factor}>
+                  <td className="label">{r.factor}</td>
+                  <td>{num(r.exposure, 2)}</td>
+                  <td className={r.ctv < 0 ? "rag-green" : ""}>{signedNum(r.ctv * 1e4, 2)}bp²</td>
+                  <td>{r.pct_of_variance === null ? "—" : pct(r.pct_of_variance, 1)}</td>
+                </tr>
+              ))}
+              <tr style={{ fontWeight: 600 }}>
+                <td className="label">Σ factors</td><td></td>
+                <td>{signedNum(c.sum_ctv * 1e4, 2)}bp²</td>
+                <td>{pct(c.factor_variance / c.total_variance, 1)}</td>
+              </tr>
+              <tr>
+                <td className="label">+ specific</td><td></td>
+                <td>{signedNum(c.specific_variance * 1e4, 2)}bp²</td>
+                <td>{pct(c.specific_variance / c.total_variance, 1)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="muted small">
+            CTV_k = x_k·(Fx)_k — cross-terms split 50/50; a negative line hedges the book.
+            Sums to factor variance; plus specific = total variance = vol².
+          </p>
+
+          <h2>Positions — contribution to risk (CTR)</h2>
+          <table className="tufte">
+            <thead><tr><th className="label">Name</th><th>Weight</th><th>MCR</th><th>CTR</th>
+              <th>% of vol</th></tr></thead>
+            <tbody>
+              {c.positions.slice(0, 20).map((r) => (
+                <tr key={r.position}>
+                  <td className="label">{r.ticker.toUpperCase()}</td>
+                  <td>{pct(r.weight, 1)}</td>
+                  <td>{num(r.mcr, 3)}</td>
+                  <td>{pct(r.ctr, 3)}</td>
+                  <td>{r.pct_of_vol === null ? "—" : pct(r.pct_of_vol, 1)}</td>
+                </tr>
+              ))}
+              {c.positions.length > 20 && (
+                <tr>
+                  <td className="label muted">…{c.positions.length - 20} more</td><td></td><td></td>
+                  <td>{pct(c.positions.slice(20).reduce((s, r) => s + r.ctr, 0), 3)}</td>
+                  <td>{pct(c.positions.slice(20).reduce((s, r) => s + (r.pct_of_vol ?? 0), 0), 1)}</td>
+                </tr>
+              )}
+              <tr style={{ fontWeight: 600 }}>
+                <td className="label">Σ positions</td><td></td><td></td>
+                <td>{pct(c.sum_ctr, 3)}</td>
+                <td>{pct(c.sum_ctr / c.vol_1d, 0)}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p className="muted small">
+            MCR is a rate (risk per unit weight — nothing to sum); CTR = w·MCR sums exactly to
+            book vol (Euler). CTR is in vol units, CTV in variance units — never compare the two
+            directly. Model vol on the full factor-return history, distinct from the
+            scenario-VaR views.
+          </p>
+        </div>
+      )}
+    </QueryState>
+  );
+}
+
+// NB the old "Risk by level" tab (standalone Scenario VaR per Sector/Issuer/Position) was removed
+// 2026-07-02 (itsjustbeta scope audit): ch 09 warns standalone per-bucket risk doesn't sum and
+// names CTR the standard position-level report — the Euler tab supersedes it. The /attribution
+// endpoint is parked, not removed.
 export function Attribution() {
-  const { date, scenario } = useApp();
-  const [by, setBy] = useState("sector");
-  const [tab, setTab] = useState<"risk" | "pnl">("risk");
-  const q = useAttribution(date, scenario, by);
+  const { date } = useApp();
+  const [tab, setTab] = useState<"euler" | "pnl">("euler");
 
   return (
     <main className="lens">
       <h1>Attribution</h1>
       <p className="sub">
-        {tab === "risk"
-          ? `Standalone risk by level · ${scenario} · as-of ${date}`
+        {tab === "euler" ? `Euler risk contributions · as-of ${date}`
           : "Realized PnL by factor + residual · risk↔PnL reconcile"}
       </p>
 
       <div className="row" style={{ marginBottom: "0.8rem" }}>
-        <button className={tab === "risk" ? "primary" : ""} onClick={() => setTab("risk")}>Risk by level</button>
+        <button className={tab === "euler" ? "primary" : ""} onClick={() => setTab("euler")}>Contributions (Euler)</button>
         <button className={tab === "pnl" ? "primary" : ""} onClick={() => setTab("pnl")}>PnL attribution</button>
       </div>
 
-      {tab === "pnl" ? (
-        <PnlTab />
-      ) : (
-        <>
-          <div className="row" style={{ marginBottom: "0.8rem" }}>
-            <span className="muted small">Level</span>
-            <select value={by} onChange={(e) => setBy(e.target.value)}>
-              {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
-          </div>
-          <QueryState q={q}>
-            {(rows) => {
-              const key = by === "position" ? "Position" : by[0].toUpperCase() + by.slice(1);
-              const sorted = [...rows].sort(
-                (a, b) => Number(b["Scenario VaR 99"] ?? 0) - Number(a["Scenario VaR 99"] ?? 0));
-              const maxV = Math.max(...sorted.map((r) => Number(r["Scenario VaR 99"] ?? 0)), 1e-6);
-              return (
-                <div style={{ maxWidth: "52rem" }}>
-                  {sorted.slice(0, 15).map((r, i) => (
-                    <LabelBar key={i} label={String(r[by === "position" ? "Ticker" : key] ?? r[key] ?? "—")}
-                      value={Number(r["Scenario VaR 99"] ?? 0)} max={maxV} suffix="" />
-                  ))}
-                  <table className="tufte" style={{ marginTop: "1rem" }}>
-                    <thead><tr><th className="label">{key}</th><th>Net exposure</th><th>Scenario VaR 99</th><th>Worst loss</th></tr></thead>
-                    <tbody>
-                      {sorted.map((r, i) => (
-                        <tr key={i}>
-                          <td className="label">{String(r[by === "position" ? "Ticker" : key] ?? r[key] ?? "—")}</td>
-                          <td>{num(Number(r["Net exposure"] ?? 0), 2)}</td>
-                          <td>{pct(Number(r["Scenario VaR 99"] ?? 0))}</td>
-                          <td>{pct(Number(r["Scenario worst loss"] ?? 0))}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              );
-            }}
-          </QueryState>
-        </>
-      )}
+      {tab === "euler" ? <EulerTab /> : <PnlTab />}
     </main>
   );
 }

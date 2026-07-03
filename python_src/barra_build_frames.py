@@ -616,7 +616,8 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
 
 # --------------------------------------------------------------------------- 6. cross-sectional regression
 def regress_factors(exp_long: pd.DataFrame, prices: dict,
-                    sec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+                    sec: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame,
+                                                pd.DataFrame]:
     """Daily WLS of stock returns on the latest prior month-end exposures.
 
     -> DAILY factor returns (the scenario cache: real 99% tails need ~2,200 obs, not 89)
@@ -624,6 +625,9 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     -> daily specific RETURNS (the un-squared residual u), the 7th frame: the PnL-attribution
        leaf. R_i(t) = L_i·[1;f(t)] + u_i(t) reconstructs the exact return the regression saw,
        so realized = factor + specific ties out to machine precision downstream.
+    -> regression stats (Date, Factor, TStat, R2, N): the per-day weighted cross-sectional R²
+       and per-factor t-stats — the fit-health diagnostics. A side artifact for /regression,
+       NOT one of the seven cube frames.
     All risk numbers downstream are therefore 1-DAY horizon.
     """
     fig2tkr = sec.set_index("figi")["ticker"].to_dict()
@@ -638,7 +642,7 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     R = pd.DataFrame({t: px["Close"].pct_change() for t, px in prices.items()}).loc[START:END]
     R = R.where(R.abs() <= 0.5)
     X = exp_long.pivot_table(index=["Date", "Position"], columns="Factor", values="Loading")
-    fac_rows, spec_rows = [], []
+    fac_rows, spec_rows, reg_rows = [], [], []
     dates = sorted(exp_long["Date"].unique())
     # Barra timing: exposures update monthly; factor returns are estimated DAILY by
     # regressing each day's stock returns on the latest *prior* month-end exposures.
@@ -671,15 +675,37 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
             ok_e = ~np.isnan(y_est)
             if ok_e.sum() < 30:                          # not enough estimation names to fit
                 continue
-            beta, *_ = np.linalg.lstsq(Xm_est[ok_e] * W[ok_e, None], y_est[ok_e] * W[ok_e], rcond=None)
-            for name, b in zip(["Market"] + cols, beta):
+            Xw = Xm_est[ok_e] * W[ok_e, None]
+            yw = y_est[ok_e] * W[ok_e]
+            beta, *_ = np.linalg.lstsq(Xw, yw, rcond=None)
+            # fit health: weighted cross-sectional R² (about the weighted mean) + per-factor
+            # t-stats from the WLS coefficient covariance — cheap, and thrown away otherwise
+            wts = W[ok_e] ** 2
+            ybar = float(np.sum(wts * y_est[ok_e]) / np.sum(wts))
+            sst = float(np.sum(wts * (y_est[ok_e] - ybar) ** 2))
+            ssr = float(np.sum(wts * (y_est[ok_e] - Xm_est[ok_e] @ beta) ** 2))
+            r2 = (1.0 - ssr / sst) if sst > 0 else None
+            n_, k_ = Xw.shape
+            tvals = None
+            if n_ > k_:
+                try:
+                    se = np.sqrt(np.clip(np.diag(np.linalg.inv(Xw.T @ Xw)) * ssr / (n_ - k_),
+                                         0.0, None))
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        tvals = np.where(se > 0, beta / se, np.nan)
+                except np.linalg.LinAlgError:
+                    tvals = None
+            for j, (name, b) in enumerate(zip(["Market"] + cols, beta)):
                 fac_rows.append({"Date": d, "Factor": name, "Return": b})
+                t_j = (float(tvals[j]) if tvals is not None and np.isfinite(tvals[j]) else None)
+                reg_rows.append({"Date": d, "Factor": name, "TStat": t_j, "R2": r2, "N": n_})
             # specific residual for EVERY coverage name with a return that day (estimation + held)
             resid_all = y_all - Xm_all @ beta
             ok_a = ~np.isnan(y_all)
             for fig, u in zip(figs_all[ok_a], resid_all[ok_a]):
                 spec_rows.append({"Date": d, "Position": fig, "u": u, "u2": u * u})
     factor_returns = pd.DataFrame(fac_rows)
+    regression_stats = pd.DataFrame(reg_rows)
     spec = pd.DataFrame(spec_rows).sort_values(["Position", "Date"])
     # 7th frame: the residual VALUE, kept daily (not just its square). Taken before the
     # month-end restamp below so Date stays the trade day.
@@ -696,7 +722,8 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     # variance — consistent with the daily scenario VaR horizon.
     spec["Date"] = spec["Date"] + pd.offsets.MonthEnd(0)
     spec = spec.sort_values("Date").groupby(["Position", "Date"], as_index=False).last()
-    return factor_returns, spec[["Date", "Position", "SpecificVar"]], specific_returns
+    return factor_returns, spec[["Date", "Position", "SpecificVar"]], specific_returns, \
+        regression_stats
 
 
 # --------------------------------------------------------------------------- 7. orchestrator
@@ -745,7 +772,14 @@ def build_frames():
 
     # --- exposures (leaf) + factor cache + specific risk -------------------
     exposures = build_exposures(sec, prices, funda, cal, mkt)
-    factor_returns, specific_var, specific_returns = regress_factors(exposures, prices, sec)
+    factor_returns, specific_var, specific_returns, reg_stats = \
+        regress_factors(exposures, prices, sec)
+    # regression-health side artifact (daily weighted R² + per-factor t-stats). Written here,
+    # not in __main__, so it exists however build_frames is invoked; the cube never reads it —
+    # only /regression does. Not part of the seven-frame contract.
+    _out = pathlib.Path(__file__).resolve().parent.parent / "data"
+    _out.mkdir(exist_ok=True)
+    reg_stats.to_parquet(_out / "regression_stats.parquet", index=False)
     # Add Market as a LEAF loading of 1.0 for every (Date, Position). In v2 Market is the
     # cross-sectional regression intercept, so each name loads exactly 1.0 on it and a
     # fully-invested book (weights sum to 1) has unit market exposure. Done AFTER regress_factors

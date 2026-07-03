@@ -1,10 +1,10 @@
-// Trends + Drawdown lens (render_trends + render_drawdown). Small multiples (shared time axis) of
-// the book scenario measures over the calendar, the top style-factor exposures over time, and the
-// constant-portfolio equity curve + underwater area for the global scenario set.
+// Trends lens (render_trends). Small multiples (shared time axis) of the book scenario measures
+// over the calendar and the top style-factor exposures over time. The Drawdown panel and the
+// Risk-HHI chart were removed 2026-07-02 (itsjustbeta scope audit — neither is a primer report;
+// concentration now reads as Top-5 risk share on the Overview / What-if).
 import { useApp } from "../context/AppContext";
-import { useTrends, useDrawdown } from "../api/hooks";
+import { useTrends } from "../api/hooks";
 import { LineChart } from "../components/LineChart";
-import { LinePath } from "../components/svg";
 import { QueryState } from "../components/ui";
 import { pct, num } from "../lib/format";
 import type { Rec } from "../api/types";
@@ -20,7 +20,7 @@ function col(recs: Rec[], xKey: string, yKey: string) {
 
 export function Trends() {
   const { scenario } = useApp();
-  const book = useTrends(scenario, "Scenario VaR 99,Scenario ES 97.5,Risk HHI,Total VaR 99,Specific vol");
+  const book = useTrends(scenario, "Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol");
   const byFactor = useTrends(scenario, "Net exposure", "Factor");
 
   return (
@@ -35,7 +35,6 @@ export function Trends() {
             { title: "Total VaR 99", key: "Total VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario VaR 99", key: "Scenario VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario ES 97.5", key: "Scenario ES 97.5", fmt: (v) => pct(v) },
-            { title: "Risk HHI", key: "Risk HHI", fmt: (v) => num(v, 3) },
             { title: "Specific vol", key: "Specific vol", fmt: (v) => pct(v) },
           ];
           return (
@@ -73,46 +72,6 @@ export function Trends() {
           );
         }}
       </QueryState>
-
-      <Drawdown />
     </main>
-  );
-}
-
-function Drawdown() {
-  const { date, scenario, book } = useApp();
-  const dd = useDrawdown(scenario, date, book);
-  return (
-    <>
-      <h2>Drawdown (constant-portfolio, over the scenario path)</h2>
-      <QueryState q={dd}>
-        {(d) => {
-          if (d.status !== "ok" || !d.path) {
-            return <div className="muted small">insufficient path (hypothetical sets are length-1)</div>;
-          }
-          const W = 620, H = 120;
-          const eq = d.path.map((p, i) => ({ x: i, y: p.equity }));
-          const under = d.path.map((p, i) => ({ x: i, y: p.drawdown }));
-          return (
-            <div>
-              <div className="wrap small" style={{ marginBottom: "0.5rem" }}>
-                <span><span className="muted">max drawdown </span><b className="num rag-red">{pct(d.max_drawdown)}</b></span>
-                <span><span className="muted">peak </span><span className="num">{d.peak_date}</span></span>
-                <span><span className="muted">trough </span><span className="num">{d.trough_date}</span></span>
-                <span><span className="muted">recovered </span><span className="num">{d.recovered ? d.recovery_date : "no"}</span></span>
-                <span><span className="muted">longest underwater </span><span className="num">{d.longest_underwater_obs}d</span></span>
-              </div>
-              <svg width={W} height={H} role="img" aria-label="equity curve">
-                <LinePath points={eq} width={W} height={H} color="#3b5e8c" />
-              </svg>
-              <svg width={W} height={56} role="img" aria-label="underwater">
-                <LinePath points={under} width={W} height={56} color="#a3322b" fill="#a3322b22" yMax={0} />
-              </svg>
-              <div className="muted small">Equity curve (top) and underwater area (bottom). {d.set}.</div>
-            </div>
-          );
-        }}
-      </QueryState>
-    </>
   );
 }

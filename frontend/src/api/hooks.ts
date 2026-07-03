@@ -7,7 +7,9 @@ import type {
   Meta, Dims, PivotResult, TrendsResult, LimitsResult, DqResult, BacktestResult,
   DrawdownResult, LiquidityResult, ReverseStressResult, UniverseResult, FunnelResult,
   SpanResult, DriftResult, WhatChangedResult, AttributionRow, WhatIfResult, Rec,
-  PnlAttributionResult, PnlResidualResult, PnlLinkageResult,
+  PnlAttributionResult, PnlResidualResult, PnlLinkageResult, ContributionsResult,
+  ValidationResult, RegressionResult, FactorCovResult,
+  HedgeResult, ExposureProfileResult, FactorPortfolioResult, PnlNamesResult,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -167,6 +169,70 @@ export function usePnlLinkage(horizon = 3, T?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_linkage", horizon, T ?? "", book],
     queryFn: () => apiGet<PnlLinkageResult>("/pnl_attribution/linkage", { horizon, T, book }),
+    ...common,
+  });
+}
+
+export function useContributions(date: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["contributions", date, book],
+    queryFn: () => apiGet<ContributionsResult>("/contributions", { date, book }),
+    ...common,
+  });
+}
+
+export function useCalibration(window = 24, book = "Soros") {
+  return useQuery({
+    queryKey: ["calibration", window, book],
+    queryFn: () => apiGet<ValidationResult>("/calibration", { window, book }),
+    ...common,
+  });
+}
+
+export function useRegression() {
+  return useQuery({
+    queryKey: ["regression"],
+    queryFn: () => apiGet<RegressionResult>("/regression"),
+    ...common,
+  });
+}
+
+export function useFactorCov(date?: string) {
+  return useQuery({
+    queryKey: ["factor_cov", date ?? ""],
+    queryFn: () => apiGet<FactorCovResult>("/factor_cov", { date }),
+    ...common,
+  });
+}
+
+export function useHedge(date: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["hedge", date, book],
+    queryFn: () => apiGet<HedgeResult>("/hedge", { date, book }),
+    ...common,
+  });
+}
+
+export function useExposureProfile(factor: string, date: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["exposure_profile", factor, date, book],
+    queryFn: () => apiGet<ExposureProfileResult>("/exposure_profile", { factor, date, book }),
+    ...common,
+  });
+}
+
+export function useFactorPortfolio(factor: string, date: string) {
+  return useQuery({
+    queryKey: ["factor_portfolio", factor, date],
+    queryFn: () => apiGet<FactorPortfolioResult>("/factor_portfolio", { factor, date }),
+    ...common,
+  });
+}
+
+export function usePnlNames(from?: string, to?: string, book = "Soros") {
+  return useQuery({
+    queryKey: ["pnl_names", from ?? "", to ?? "", book],
+    queryFn: () => apiGet<PnlNamesResult>("/pnl_attribution/names", { from, to, book }),
     ...common,
   });
 }

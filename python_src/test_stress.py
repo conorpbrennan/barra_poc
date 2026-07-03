@@ -1,11 +1,12 @@
 """
 test_stress.py — checks for custom & reverse stress (Step 5).
 
+  * UNIT  — always run, no backend: _conditional_shock (covariance propagation, all-factor
+            identity, diagonal-F no-op).
   * INTEG — need the live backend on :8010; SKIP if down. Custom stress reproduces the cube's
-            built-in Hypo set exactly (same linear math), components sum to the total, reverse
-            stress round-trips (its implied sigma reproduces the target loss), and bad inputs 400.
-
-The stress helpers read the cube + frames, so there are no pure-unit cases.
+            built-in Hypo set exactly (same linear math), components sum to the total, the
+            conditional block propagates by covariance, reverse stress round-trips (its implied
+            sigma reproduces the target loss), and bad inputs 400.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_stress.py
 """
@@ -15,7 +16,11 @@ import json
 import urllib.parse
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
-INTEG = []
+UNIT, INTEG = [], []
+
+
+def unit(fn):
+    UNIT.append(fn); return fn
 
 
 def integ(fn):
@@ -28,6 +33,55 @@ def _backend_up():
         return requests.get(f"{API}/dims", timeout=5).status_code == 200
     except Exception:
         return False
+
+
+# --------------------------------------------------------------------------- UNIT
+@unit
+def t_conditional_shock_propagates_by_covariance():
+    """E[f|f_0=s] on a 2-factor F: the unshocked factor moves by F10/F00·s (the beta of f1 on f0)."""
+    import numpy as np
+    import risk_api
+    F = np.array([[1.0, 0.5], [0.5, 4.0]])            # vols 1 & 2, corr 0.25
+    f = risk_api._conditional_shock(F, [0], np.array([-1.0]))
+    assert abs(f[0] - (-1.0)) < 1e-12                 # the shocked factor IS the shock
+    assert abs(f[1] - (-0.5)) < 1e-12                 # beta = F10/F00 = 0.5
+
+
+@unit
+def t_conditional_shock_all_factors_is_identity():
+    """Conditioning on every factor returns the shock vector itself — the naive case."""
+    import numpy as np
+    import risk_api
+    rng = np.random.default_rng(7)
+    A = rng.normal(size=(5, 3)); F = A.T @ A + np.eye(3) * 0.1
+    s = np.array([0.01, -0.02, 0.005])
+    f = risk_api._conditional_shock(F, [0, 1, 2], s)
+    assert np.allclose(f, s)
+
+
+@unit
+def t_conditional_shock_uncorrelated_stays_naive():
+    """With a diagonal F the co-moving factors don't move — conditional == naive."""
+    import numpy as np
+    import risk_api
+    F = np.diag([1.0, 2.0, 3.0])
+    f = risk_api._conditional_shock(F, [1], np.array([0.5]))
+    assert abs(f[1] - 0.5) < 1e-12 and abs(f[0]) < 1e-12 and abs(f[2]) < 1e-12
+
+
+@integ
+def t_stress_conditional_block():
+    """conditional:true adds the correlated read: components sum to its total, the shocked factor's
+    implied return equals sigma·vol, and unshocked co-moving factors carry non-zero implied moves."""
+    import requests
+    s = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -2}, "conditional": True},
+                      timeout=60).json()
+    c = s["conditional"]
+    assert abs(sum(r["pnl"] for r in c["components"]) - c["total_pnl"]) < 1e-12
+    mom = next(r for r in c["components"] if r["factor"] == "Momentum")
+    assert mom["shocked"] and abs(mom["implied_sigma"] - (-2)) < 1e-6, mom
+    others = [r for r in c["components"] if not r["shocked"]]
+    assert any(abs(r["implied_return"]) > 1e-9 for r in others)   # covariance propagated
 
 
 @integ
@@ -94,6 +148,13 @@ def t_reverse_stress_roundtrips():
 
 def main():
     p = f = 0
+    print("=== unit ===")
+    for fn in UNIT:
+        try:
+            fn(); print(f"PASS  {fn.__name__}"); p += 1
+        except Exception as e:
+            import traceback
+            print(f"FAIL  {fn.__name__}: {type(e).__name__}: {e}"); traceback.print_exc(); f += 1
     print("=== integration (live backend) ===")
     if _backend_up():
         for fn in INTEG:

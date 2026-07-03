@@ -23,7 +23,8 @@ import pandas as pd
 
 from barra_pnl_attribution import (
     _carino_link, _info_ratio, _autocorr, _bias_stat, _concentration_hhi, _hit_rate,
-    _resid_factor_regression, _stressed_cov, compute_attribution,
+    _resid_factor_regression, _stressed_cov, _linkage_driver, _position_driver, _rolling_bias,
+    _pairwise_mean_corr, compute_attribution,
 )
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
@@ -121,6 +122,98 @@ def t_stressed_cov():
     assert np.allclose(Fs / np.outer(vs, vs), np.ones((2, 2)))
     half = _stressed_cov(F, 1.0, 0.5)                                       # blend halves the gap
     assert abs(half[0, 1] / (v[0] * v[1]) - 0.65) < 1e-12
+
+
+@unit
+def t_rolling_bias():
+    # z drawn with std 1 -> b hovers ~1 inside the acceptance band; scaling realized by 2x
+    # pushes every window's b to ~2 (risk under-forecast)
+    rng = np.random.default_rng(11)
+    idx = pd.date_range("2018-01-31", periods=96, freq="ME")
+    pred = pd.Series(0.03, index=idx)
+    realized = pd.Series(rng.normal(0, 0.03, 96), index=idx)
+    rb = _rolling_bias(realized, pred, window=24)
+    assert len(rb) == 96 - 23
+    assert abs(rb[0]["band"] - np.sqrt(2.0 / 24)) < 1e-12
+    assert 0.7 < np.mean([r["b"] for r in rb]) < 1.3
+    rb2 = _rolling_bias(realized * 2, pred, window=24)
+    assert all(r2["b"] > r1["b"] for r1, r2 in zip(rb, rb2))
+    assert np.mean([r["b"] for r in rb2]) > 1.5
+
+
+@unit
+def t_linkage_driver():
+    # the Q4-2024 Momentum case: x at T ~0, exposure migrated to ~0.17 in-window, factor moved
+    # an ordinary +0.79σ -> a band artifact, within ±2σ on the honest denominator
+    d = _linkage_driver(x_t=0.0031, x_win=0.174, realized=0.00102,
+                        sig_daily=0.00343, h=63, cum_f=0.0215)
+    assert d["kind"] == "exposure_migration" and d["migrated"]
+    assert d["ratio"] > 50 and abs(d["z_window"]) < 0.5 and abs(d["factor_sigma"] - 0.79) < 0.05
+    # the Q4-2024 NonLinSize case: exposure stable, the factor itself fell ~2σ -> genuine
+    d = _linkage_driver(x_t=0.737, x_win=0.99, realized=-0.0152,
+                        sig_daily=0.00097, h=63, cum_f=-0.0152)
+    assert d["kind"] == "factor_move" and not d["migrated"]
+    assert d["factor_sigma"] < -1.9
+    # both moved: exposure tripled AND still breaches on the in-window denominator -> mixed
+    d = _linkage_driver(x_t=0.05, x_win=0.20, realized=0.02,
+                        sig_daily=0.002, h=63, cum_f=0.02)
+    assert d["kind"] == "mixed" and d["migrated"] and abs(d["z_window"]) > 2
+    # guards: no exposure/vol to reason about -> None (specific / book rows)
+    assert _linkage_driver(None, 0.2, 0.01, 0.002, 63, 0.01) is None
+    assert _linkage_driver(0.1, None, 0.01, 0.002, 63, 0.01) is None
+    assert _linkage_driver(0.1, 0.2, 0.01, 0.0, 63, 0.01) is None
+    # x_t exactly zero doesn't divide-by-zero; reads as migrated
+    d = _linkage_driver(0.0, 0.2, 0.001, 0.002, 63, 0.001)
+    assert d is not None and d["migrated"]
+
+
+@unit
+def t_pairwise_mean_corr():
+    rng = np.random.default_rng(4)
+    idx = pd.date_range("2024-01-01", periods=120, freq="B")
+    # one common driver + small noise -> residuals co-move, mean corr well above 0
+    common = rng.normal(0, 0.02, 120)
+    co = pd.DataFrame({c: common + rng.normal(0, 0.008, 120) for c in "abcd"}, index=idx)
+    st = _pairwise_mean_corr(co)
+    assert st["mean_corr"] > 0.6 and st["n_names"] == 4 and st["n_pairs"] == 6
+    # independent noise -> mean corr near 0
+    ind = pd.DataFrame({c: rng.normal(0, 0.02, 120) for c in "abcd"}, index=idx)
+    st2 = _pairwise_mean_corr(ind)
+    assert abs(st2["mean_corr"]) < 0.15
+    assert st["mean_corr"] > st2["mean_corr"]
+    # max pair identified and consistent
+    assert st["max_corr"] >= st["mean_corr"] and len(st["max_pair"]) == 2
+    # guards: single column / too few observations -> None
+    assert _pairwise_mean_corr(co[["a"]]) is None
+    assert _pairwise_mean_corr(co.head(5)) is None
+
+
+@unit
+def t_position_driver():
+    # weight migrated 4x (13F resize) and z on the in-window weight sits inside ±2 -> artifact
+    d = _position_driver(realized=0.008, factor_pnl=0.004, specific_pnl=0.004,
+                         w_t=0.01, w_win=0.04, sd_base=0.002)
+    assert d["kind"] == "weight_migration" and d["migrated"]
+    assert abs(d["z_window"] - 1.0) < 1e-12                     # 0.008 / (0.002*4)
+    # specific dominates -> idiosyncratic event
+    d = _position_driver(realized=-0.02, factor_pnl=-0.002, specific_pnl=-0.018,
+                         w_t=0.05, w_win=0.05, sd_base=0.004)
+    assert d["kind"] == "specific_move" and d["specific_share"] > 0.85
+    # loadings carried a factor move -> systematic
+    d = _position_driver(realized=-0.02, factor_pnl=-0.017, specific_pnl=-0.003,
+                         w_t=0.05, w_win=0.05, sd_base=0.004)
+    assert d["kind"] == "factor_move"
+    # neither dominates -> mixed
+    d = _position_driver(realized=-0.02, factor_pnl=-0.011, specific_pnl=-0.009,
+                         w_t=0.05, w_win=0.05, sd_base=0.004)
+    assert d["kind"] == "mixed"
+    # guards
+    assert _position_driver(0.01, 0.005, 0.005, None, 0.05, 0.004) is None
+    assert _position_driver(0.01, 0.005, 0.005, 0.05, 0.05, 0.0) is None
+    # exit mid-window (w_win ~ 0) is migration when the tiny in-window weight explains the size
+    d = _position_driver(realized=0.0001, factor_pnl=0.0001, specific_pnl=0.0,
+                         w_t=0.03, w_win=0.005, sd_base=0.003)
+    assert d["migrated"] and d["kind"] == "weight_migration"
 
 
 # --------------------------------------------------------------------------- UNIT: the tie-out

@@ -629,8 +629,11 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
     have_book = "Book" in {n for _, n in cube.hierarchies}
     base = (l["Date"] == _date(date)) & ((l["Book"] == book) if have_book else (l["Date"] == _date(date)))
 
-    # book-level scenario measures (VaR/ES/HHI need a single ScenarioSet)
-    bspec = cfg.get("book", {})
+    # book-level scenario measures (VaR/ES need a single ScenarioSet). "Top-5 risk share" is NOT
+    # a cube measure — it's the what-if math's top-5 marginal-Total-VaR share (full-history,
+    # scenario-set independent), computed here from the frames.
+    bspec = dict(cfg.get("book", {}))
+    t5spec = bspec.pop("Top-5 risk share", None)
     if bspec:
         df = cube.query(*[m[x] for x in bspec], filter=base & (l["ScenarioSet"] == scen))
         row = df.iloc[0] if len(df) else None
@@ -639,6 +642,17 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
             status, head = _rag(val, spec.get("warn"), spec.get("limit"))
             checks.append({"name": name, "scope": "book", "value": val, "warn": spec.get("warn"),
                            "limit": spec.get("limit"), "status": status, "headroom": head, "detail": None})
+    if t5spec is not None:
+        try:
+            L, w, s, R = _book_inputs(date, book)
+            val = _risk_from_weights(w, L, s, R)["top5_ctr_share"]
+        except Exception:
+            val = None
+        status, head = _rag(val, t5spec.get("warn"), t5spec.get("limit"))
+        checks.append({"name": "Top-5 risk share", "scope": "book", "value": val,
+                       "warn": t5spec.get("warn"), "limit": t5spec.get("limit"), "status": status,
+                       "headroom": head,
+                       "detail": "5 largest name contributions to Total VaR (set-independent)"})
 
     # concentration from the positions overlay, as-of the latest filing on/before `date`
     conc = cfg.get("concentration", {})
@@ -1166,10 +1180,48 @@ def _stress_result(shocks: dict, date: str, book: str) -> dict:
             "total_pnl": total, "loss": -total, "components": comps}
 
 
+def _conditional_shock(F: np.ndarray, idx: list[int], s: np.ndarray) -> np.ndarray:
+    """E[f | f_idx = s] under the factor covariance F: F[:, idx] @ inv(F[idx, idx]) @ s. The
+    correlated stress — a shocked factor drags every co-moving factor with it instead of moving
+    alone. Shocking every factor returns s itself (the naive case)."""
+    sub = F[np.ix_(idx, idx)]
+    return F[:, idx] @ np.linalg.solve(sub, np.asarray(s, dtype=float))
+
+
+def _conditional_stress_result(shocks: dict, date: str, book: str) -> dict:
+    """Correlated version of _stress_result: condition the whole factor system on the shocked
+    factors via the factor covariance, then dPnL = Σ x_k·E[f_k | shock]. The naive single-factor
+    read understates a real event because the co-moving factors don't stay still."""
+    L, w, _s, R = _book_inputs(date, book)
+    factors = list(L.columns)
+    missing = [f for f in shocks if f not in factors]
+    if missing:
+        raise HTTPException(400, f"no loadings for factor(s) at {date}: {missing}")
+    F = np.cov(R, rowvar=False)
+    vols = np.sqrt(np.clip(np.diag(F), 0.0, None))
+    idx = [factors.index(f) for f in shocks]
+    sh = np.array([float(sig) * vols[factors.index(f)] for f, sig in shocks.items()])
+    f_cond = _conditional_shock(F, idx, sh)
+    x = L.to_numpy().T @ w.to_numpy()
+    pnl = x * f_cond
+    comps = [{"factor": factors[i], "exposure": float(x[i]),
+              "implied_return": float(f_cond[i]),
+              "implied_sigma": (float(f_cond[i] / vols[i]) if vols[i] > 0 else None),
+              "pnl": float(pnl[i]), "shocked": factors[i] in shocks}
+             for i in range(len(factors))]
+    comps.sort(key=lambda c: c["pnl"])
+    return {"total_pnl": float(pnl.sum()), "loss": float(-pnl.sum()), "components": comps,
+            "note": ("E[f | shock] = F[:,S]·F[S,S]⁻¹·s — the factor covariance propagates the "
+                     "shock to every co-moving factor; the naive result holds them still.")}
+
+
 class StressBody(BaseModel):
     shocks: dict[str, float]                          # {Factor: sigma}
     date: str | None = None
     book: str = "Soros"
+    # correlated (conditional) mode: propagate the shock through the factor covariance and add a
+    # `conditional` block — implied return per factor + the conditional book P&L.
+    conditional: bool = False
     # correlation-stress mode (Step 15 §4): scale factor vols by vol_mult and blend correlations
     # toward 1 by rho — adds a `correlation_stress` block (base vs stressed book vol) to the result.
     vol_mult: float | None = None
@@ -1206,6 +1258,8 @@ async def stress(body: StressBody):
     def run():
         d = body.date or _latest_date()
         res = _stress_result(body.shocks, d, body.book)
+        if body.conditional:
+            res["conditional"] = _conditional_stress_result(body.shocks, d, body.book)
         if body.vol_mult is not None or body.rho is not None:
             res["correlation_stress"] = _corr_stress_result(
                 d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
@@ -1268,7 +1322,8 @@ def _book_inputs(date: str, book: str):
 
 def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarray) -> dict:
     """Book risk for a weight vector — mirrors the cube measures (Scenario VaR ladder, ES, Specific
-    vol, Total VaR 99, Risk HHI) plus gross/net."""
+    vol, Total VaR 99) plus gross/net and the top-5 CTR share (the ch-09 concentration idiom:
+    the 5 largest names' share of the marginal-Total-VaR contributions — replaced Risk HHI)."""
     wv, Lv, sv = w.to_numpy(), L.to_numpy(), s.to_numpy()
     x = Lv.T @ wv
     pnl = R @ x
@@ -1279,21 +1334,86 @@ def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarra
     var975 = float(-np.quantile(pnl, 0.025))
     es = lambda a: float(-np.mean(np.sort(pnl)[:max(1, int(np.ceil((1 - a) * n)))]))
     total99 = (var99 * var99 + (_Z99 * specvol) ** 2) ** 0.5
-    # HHI from marginal Total VaR shares (read off the book's 1% tail day, lower interpolation)
+    # top-5 share of the marginal-Total-VaR contributions (read off the book's 1% tail day)
     ti = int(np.argsort(pnl)[int(np.floor(0.01 * (n - 1)))])
     msv = -(wv * (Lv @ R[ti]))                       # marginal Scenario VaR per name
     Fro = float(np.sum(msv))                          # = -pnl[ti]; book factor-VaR read-off
     T = (Fro * Fro + _Z99 * _Z99 * svar) ** 0.5
-    hhi = None
+    top5 = None
     if T > 0:
         mtv = msv * (Fro / T) + (_Z99 * _Z99) * (wv * wv * sv) / T
         tot = float(np.sum(mtv))
         if tot:
-            hhi = float(np.sum((mtv / tot) ** 2))
+            top5 = float(np.sort(mtv)[::-1][:5].sum() / tot)
     return {"scenario_var_99": var99, "scenario_var_975": var975,
             "es_975": es(0.975), "es_99": es(0.99), "specific_vol": specvol,
-            "total_var_99": total99, "risk_hhi": hhi,
+            "total_var_99": total99, "top5_ctr_share": top5,
             "gross": float(np.sum(np.abs(wv))), "net": float(np.sum(wv))}
+
+
+def _euler_contributions(w: np.ndarray, Lv: np.ndarray, F: np.ndarray, sv: np.ndarray) -> dict:
+    """Euler decomposition of model vol (σ² = x'Fx + w'Δw). Per-position MCR_i = (Σw)_i/σ (a
+    rate) and CTR_i = w_i·MCR_i, which sums EXACTLY to σ — the standard position-level report.
+    Per-factor CTV_k = x_k·(Fx)_k, which sums to factor VARIANCE (cross-terms split 50/50,
+    legitimately negative for hedging exposures). CTR is in vol units, CTV in variance units —
+    different pairings, never compare directly."""
+    x = Lv.T @ w
+    Fx = F @ x
+    fac_var = float(x @ Fx)
+    svar = float(np.sum(w * w * sv))
+    sigma = float(np.sqrt(max(fac_var + svar, 0.0)))
+    ctv = x * Fx
+    sig_w = Lv @ Fx + sv * w                      # (Σw)_i under Σ = LFL' + Δ
+    mcr = sig_w / sigma if sigma > 0 else np.zeros_like(w)
+    ctr = w * mcr
+    return {"sigma": sigma, "factor_var": fac_var, "specific_var": svar,
+            "x": x, "ctv": ctv, "mcr": mcr, "ctr": ctr}
+
+
+@app.get("/contributions")
+async def contributions(date: str | None = None, book: str = "Soros"):
+    """Euler risk contributions — the ch-09 standard reports. Factors: CTV_k = x_k(Fx)_k, sums to
+    factor variance (negative = a hedge). Positions: CTR_i = w_i·MCR_i, sums exactly to book
+    daily vol. Model vol (σ² = x'Fx + w'Δw on the full factor-return history), not scenario VaR —
+    the additive decomposition the standalone per-bucket VaR view can't give."""
+    def run():
+        d = date or _latest_date()
+        L, w, s, R = _book_inputs(d, book)
+        if not float(np.abs(w.to_numpy()).sum()):
+            raise HTTPException(404, f"no {book} positions at {d}")
+        F = np.cov(R, rowvar=False)
+        e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
+        total_var = e["factor_var"] + e["specific_var"]
+        factors = sorted(
+            [{"factor": f, "exposure": float(e["x"][i]), "ctv": float(e["ctv"][i]),
+              "pct_of_variance": (float(e["ctv"][i] / total_var) if total_var > 0 else None)}
+             for i, f in enumerate(L.columns)],
+            key=lambda r: -abs(r["ctv"]))
+        tk = _ticker_map()
+        wv = w.to_numpy()
+        held = [i for i in range(len(wv)) if wv[i] != 0.0]
+        positions = sorted(
+            [{"position": str(L.index[i]), "ticker": tk.get(str(L.index[i]), str(L.index[i])),
+              "weight": float(wv[i]), "mcr": float(e["mcr"][i]), "ctr": float(e["ctr"][i]),
+              "pct_of_vol": (float(e["ctr"][i] / e["sigma"]) if e["sigma"] > 0 else None)}
+             for i in held],
+            key=lambda r: -r["ctr"])
+        return {
+            "date": d, "book": book,
+            "vol_1d": e["sigma"], "var99_normal": _Z99 * e["sigma"],
+            "factor_variance": e["factor_var"], "specific_variance": e["specific_var"],
+            "total_variance": total_var,
+            "factor_share": (e["factor_var"] / total_var) if total_var > 0 else None,
+            "sum_ctr": float(np.sum(e["ctr"])),   # = vol_1d, the Euler tie-out
+            "sum_ctv": float(np.sum(e["ctv"])),   # = factor_variance
+            "factors": factors, "positions": positions,
+            "note": ("CTR (positions) is in VOL units and sums exactly to book vol; CTV (factors) "
+                     "is in VARIANCE units and sums to factor variance — different unit pairings, "
+                     "never compare directly. Negative CTV = the exposure hedges the book. MCR is "
+                     "a rate (risk per unit weight), nothing to sum. Model vol on the full "
+                     "factor-return history — distinct from the scenario-VaR views."),
+        }
+    return await run_in_threadpool(run)
 
 
 def _whatif_result(date: str, book: str, trades: list) -> dict:
@@ -1436,10 +1556,12 @@ def _attr_window(art: pd.DataFrame, frm: str | None, to: str | None):
     return w, lo, hi
 
 
-def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str) -> pd.DataFrame:
+def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
+               monthly: bool = False):
     """Per-name factor/specific/realized PnL over the window, on the AS-OF monthly weights — the
     same convention (and numbers) as the cube's attribution measures. Index Position, columns
-    factor_pnl / specific_pnl / realized."""
+    factor_pnl / specific_pnl / realized. With monthly=True also returns the per-month specific
+    panel (rows = exposure month d0, cols = Position) for persistence stats."""
     f = S["frames"]
     exp, pos, frt = f["exposures"], f["positions"], f["factor_returns"]
     sr = f.get("specific_returns")
@@ -1463,11 +1585,20 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str) -> pd.DataFrame:
         facs = [c for c in Ld.columns if c in fsum.index]
         fac_i = (Ld[facs].fillna(0.0) @ fsum[facs]).reindex(w_.index).fillna(0.0)
         eps_i = eps.reindex(w_.index).fillna(0.0)
-        parts.append(pd.DataFrame({"factor_pnl": w_ * fac_i, "specific_pnl": w_ * eps_i}))
+        part = pd.DataFrame({"factor_pnl": w_ * fac_i, "specific_pnl": w_ * eps_i})
+        part["month"] = d0
+        parts.append(part)
     if not parts:
-        return pd.DataFrame(columns=["factor_pnl", "specific_pnl", "realized"])
-    out = pd.concat(parts).groupby(level=0).sum()
+        empty = pd.DataFrame(columns=["factor_pnl", "specific_pnl", "realized"])
+        return (empty, pd.DataFrame()) if monthly else empty
+    allp = pd.concat(parts)
+    out = allp.groupby(level=0)[["factor_pnl", "specific_pnl"]].sum()
     out["realized"] = out["factor_pnl"] + out["specific_pnl"]
+    if monthly:
+        panel = (allp.reset_index(names="Position")
+                 .pivot_table(index="month", columns="Position", values="specific_pnl",
+                              aggfunc="sum"))
+        return out, panel
     return out
 
 
@@ -1720,6 +1851,23 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
     return await run_in_threadpool(run)
 
 
+def _driver_text(x_t: float, x_win: float | None, cum_f: float | None, drv: dict) -> str:
+    """One-sentence driver read for a reconcile-band breach (see _pnl._linkage_driver)."""
+    fs, zw = drv["factor_sigma"], drv["z_window"]
+    fs_s = f"{fs:+.1f}σ" if fs is not None else "n/a"
+    if drv["kind"] == "exposure_migration":
+        return (f"exposure-timing artifact — x was {x_t:+.3f} at T but averaged {x_win:+.3f} "
+                f"in-window ({drv['ratio']:.0f}×); on the in-window exposure z = {zw:+.1f}, "
+                f"within ±2σ, and the factor moved {fs_s} (ordinary). Check Δx, not the factor.")
+    if drv["kind"] == "factor_move":
+        cf_s = f"{cum_f:+.1%}" if cum_f is not None else "n/a"
+        return (f"genuine factor move — exposure stable ({x_t:+.2f} at T, {x_win:+.2f} "
+                f"in-window); the factor returned {cf_s} = {fs_s} of the window.")
+    return (f"mixed — exposure {x_t:+.2f} at T vs {x_win:+.2f} in-window "
+            f"({drv['ratio']:.1f}×) and the factor moved {fs_s}; part exposure-timing, "
+            f"part factor move.")
+
+
 @app.get("/pnl_attribution/linkage")
 async def pnl_attribution_linkage(T: str | None = None,
                                   horizon: int = Query(3, ge=1, le=24, description="months"),
@@ -1750,6 +1898,12 @@ async def pnl_attribution_linkage(T: str | None = None,
         if win.empty:
             raise HTTPException(404, f"no realized days in ({t0.date()}, {t1.date()}]")
         h = float(len(win))
+        # in-window exposure path for the driver read — the band freezes x at T, this is what
+        # the book actually carried (the artifact's daily drifting exposures)
+        xe = (art[art["Kind"] == "exposure"]
+              .pivot_table(index="Date", columns="Source", values="Value", aggfunc="first")
+              .sort_index())
+        xwin = xe.loc[(xe.index > t0) & (xe.index <= t1)]
         # ex-ante at T: exposures, factor covariance on history <= T, specific block
         pos = f["positions"]
         w_ = pos[(pos["Book"] == book) & (pos["Date"] == t0)].groupby("Position")["Weight"].sum()
@@ -1781,51 +1935,184 @@ async def pnl_attribution_linkage(T: str | None = None,
         rows = []
         standalone = {f_: abs(float(x[f_])) * float(sig[i]) for i, f_ in enumerate(facs)}
         tot_sa = sum(standalone.values()) + np.sqrt(svar)
+        fwin = frw.loc[(frw.index > t0) & (frw.index <= t1)]
         for i, f_ in enumerate(facs):
             if f_ not in win.columns:
                 continue
             realized = float(win[f_].sum())
             sd_b = abs(float(x[f_])) * float(sig[i]) * np.sqrt(h)
             sd_s = abs(float(x[f_])) * float(sig_s[i]) * np.sqrt(h)
-            rows.append({"name": f_, "kind": "factor",
-                         "exposure": float(x[f_]),
-                         "risk_share": (standalone[f_] / tot_sa) if tot_sa > 0 else None,
-                         "realized": realized, "sd_base": sd_b, "sd_stressed": sd_s,
-                         "z": (realized / sd_b) if sd_b > 0 else None,
-                         "verdict": _verdict(realized, sd_b, sd_s)})
+            verdict = _verdict(realized, sd_b, sd_s)
+            x_win = float(xwin[f_].mean()) if f_ in xwin.columns and len(xwin) else None
+            row = {"name": f_, "kind": "factor",
+                   "exposure": float(x[f_]), "exposure_window_avg": x_win,
+                   "risk_share": (standalone[f_] / tot_sa) if tot_sa > 0 else None,
+                   "realized": realized, "sd_base": sd_b, "sd_stressed": sd_s,
+                   "z": (realized / sd_b) if sd_b > 0 else None,
+                   "verdict": verdict}
+            if verdict != "within":
+                cf = float(fwin[f_].sum()) if f_ in fwin.columns else None
+                drv = _pnl._linkage_driver(float(x[f_]), x_win, realized, float(sig[i]), h, cf)
+                if drv is not None:
+                    drv["text"] = _driver_text(float(x[f_]), x_win, cf, drv)
+                    row["driver"] = drv
+            rows.append(row)
+        def _agg_driver(realized_, sd_, verdict_, what):
+            # specific/book rows have no exposure to migrate — a breach there is the risk
+            # forecast itself; point at the calibration machinery
+            if verdict_ == "within" or sd_ <= 0:
+                return None
+            z_ = realized_ / sd_
+            return {"kind": "vol_underforecast", "migrated": False, "ratio": None,
+                    "z_window": None, "factor_sigma": z_,
+                    "text": (f"no exposure to migrate at this level — realized is {z_:+.1f}σ "
+                             f"against the start-of-period vol; cross-check {what}.")}
         sd_sp = float(np.sqrt(svar) * np.sqrt(h))
         real_sp = float(win["Specific"].sum()) if "Specific" in win else 0.0
-        rows.append({"name": "Specific", "kind": "specific", "exposure": None,
-                     "risk_share": (float(np.sqrt(svar)) / tot_sa) if tot_sa > 0 else None,
-                     "realized": real_sp, "sd_base": sd_sp, "sd_stressed": sd_sp * vol_mult,
-                     "z": (real_sp / sd_sp) if sd_sp > 0 else None,
-                     "verdict": _verdict(real_sp, sd_sp, sd_sp * vol_mult)})
+        sp_verdict = _verdict(real_sp, sd_sp, sd_sp * vol_mult)
+        sp_row = {"name": "Specific", "kind": "specific", "exposure": None,
+                  "risk_share": (float(np.sqrt(svar)) / tot_sa) if tot_sa > 0 else None,
+                  "realized": real_sp, "sd_base": sd_sp, "sd_stressed": sd_sp * vol_mult,
+                  "z": (real_sp / sd_sp) if sd_sp > 0 else None,
+                  "verdict": sp_verdict}
+        drv_sp = _agg_driver(real_sp, sd_sp, sp_verdict, "the specific bias stat")
+        if drv_sp:
+            sp_row["driver"] = drv_sp
+        rows.append(sp_row)
         rows.sort(key=lambda r: -abs(r["z"] or 0.0))
         real_book = float(win["Realized"].sum()) if "Realized" in win else 0.0
+        book_verdict = _verdict(real_book, sd_book, sd_book_s)
         book_row = {"name": "Book total", "kind": "book", "exposure": None, "risk_share": 1.0,
                     "realized": real_book, "sd_base": sd_book, "sd_stressed": sd_book_s,
                     "z": (real_book / sd_book) if sd_book > 0 else None,
-                    "verdict": _verdict(real_book, sd_book, sd_book_s)}
+                    "verdict": book_verdict}
+        drv_bk = _agg_driver(real_book, sd_book, book_verdict, "the book bias stat and /backtest")
+        if drv_bk:
+            book_row["driver"] = drv_bk
         # per-position surprises: realized name PnL vs its own ex-ante sd at T
         na = _name_attr(t0, t1, book)
         tk = _ticker_map()
         Lv = L.to_numpy()
         name_var = np.einsum("ij,jk,ik->i", Lv, F, Lv) + sv.reindex(w_.index).fillna(0.0).to_numpy()
         name_sd = np.abs(w_.to_numpy()) * np.sqrt(np.clip(name_var, 0.0, None)) * np.sqrt(h)
+        # in-window average as-of weight per name (the band froze w at T; the 13F re-anchor /
+        # resizes inside the window are the position analogue of exposure migration)
+        mwin = [d for d in exp_dates if t0 <= d < t1]
+        wpath = (pos[(pos["Book"] == book) & (pos["Date"].isin(mwin))]
+                 .pivot_table(index="Date", columns="Position", values="Weight", aggfunc="sum")
+                 .reindex(mwin).fillna(0.0))
+        w_win_avg = wpath.mean() if len(wpath) else pd.Series(dtype=float)
+        fsum = fwin.sum()
+
+        Ld_link = L  # T-date loadings, Position × Factor (already restricted to fit factors)
+        fac_verdict = {r["name"]: r["verdict"] for r in rows}
+
+        def _top_factor(p):
+            """The name's largest factor-PnL contributor over the window (T loadings × factor
+            sums), for the driver text and the hidden-beta inference."""
+            if p not in Ld_link.index:
+                return None, None
+            fc = Ld_link.loc[p] * fsum.reindex(Ld_link.columns).fillna(0.0)
+            if not len(fc):
+                return None, None
+            tf = str(fc.abs().idxmax())
+            return tf, float(fc[tf])
+
+        def _pos_driver_text(w_t, w_win, drv, fac_pnl, spec_pnl, r_i, top_f, top_v):
+            if drv["kind"] == "weight_migration":
+                return (f"weight-timing artifact — weight was {w_t:.1%} at T but averaged "
+                        f"{w_win:.1%} in-window (13F re-anchor / resize); on the in-window "
+                        f"weight z = {drv['z_window']:+.1f}, within ±2. Check the filing, "
+                        f"not the name.")
+            top_s = (f"{top_f} {top_v * w_t:+.2%} of book" if top_f else "n/a")
+            if drv["kind"] == "specific_move":
+                return (f"idiosyncratic — specific is {drv['specific_share']:.0%} of the move "
+                        f"({spec_pnl:+.2%} of {r_i:+.2%}); a stock event the factor block can't "
+                        f"see. Cross-check the name in the residual explorer and the specific "
+                        f"bias stat.")
+            if drv["kind"] == "factor_move":
+                base = (f"factor-driven — {1 - drv['specific_share']:.0%} of the move is the "
+                        f"name's loadings carrying factor returns (largest: {top_s})")
+                if drv.get("hidden_beta"):
+                    return (base + f"; but the {top_f} row itself sits WITHIN its band — the "
+                            f"name moved further with the factor than its T loading predicts. "
+                            f"Suspect the loading (hidden beta), not the factor.")
+                return base + "; systematic, not stock news — read it with the factor rows above."
+            base = (f"mixed — factor {fac_pnl:+.2%} and specific {spec_pnl:+.2%} both material "
+                    f"(largest factor: {top_s})")
+            if drv.get("hidden_beta"):
+                return (base + f"; and the {top_f} row itself sits WITHIN its band, so the "
+                        f"factor half also points at a mis-measured loading (hidden beta).")
+            return base + "."
         positions = []
         for p, sd_i in zip(w_.index, name_sd):
             if p not in na.index or sd_i <= 0:
                 continue
             r_i = float(na.loc[p, "realized"])
-            positions.append({"name": tk.get(p, p), "position": p, "weight": float(w_[p]),
-                              "realized": r_i, "sd_base": float(sd_i), "z": r_i / float(sd_i),
-                              "verdict": _verdict(r_i, float(sd_i), float(sd_i) * vol_mult)})
+            fac_i = float(na.loc[p, "factor_pnl"])
+            spec_i = float(na.loc[p, "specific_pnl"])
+            w_t = float(w_[p])
+            w_win = float(w_win_avg.get(p, 0.0)) if len(w_win_avg) else None
+            verdict = _verdict(r_i, float(sd_i), float(sd_i) * vol_mult)
+            row = {"name": tk.get(p, p), "position": p, "weight": w_t,
+                   "weight_window_avg": w_win,
+                   "realized": r_i, "factor_pnl": fac_i, "specific_pnl": spec_i,
+                   "sd_base": float(sd_i), "z": r_i / float(sd_i), "verdict": verdict}
+            if verdict != "within":
+                drv = _pnl._position_driver(r_i, fac_i, spec_i, w_t, w_win, float(sd_i))
+                if drv is not None:
+                    top_f, top_v = _top_factor(p)
+                    drv["top_factor"] = top_f
+                    # hidden beta: the factor COMPONENT of the breach ran while the driving
+                    # factor's own row sat within band — the factor moved normally, so the name's
+                    # realized comovement exceeded its modeled loading (mis-measured exposure).
+                    # Checked on factor_move AND mixed (a mixed breach's factor half can carry
+                    # the same loading error).
+                    drv["hidden_beta"] = bool(drv["kind"] in ("factor_move", "mixed") and top_f
+                                              and fac_verdict.get(top_f) == "within")
+                    drv["text"] = _pos_driver_text(w_t, w_win, drv, fac_i, spec_i, r_i,
+                                                   top_f, top_v or 0.0)
+                    row["driver"] = drv
+            positions.append(row)
         positions.sort(key=lambda r: -abs(r["z"]))
+        # co-movement among the idiosyncratic breaches (Chris's missing-factor test, the cheap
+        # version): if the specific/mixed breach names' daily residuals co-move over the window,
+        # that's one common driver the model has no factor for — not several stock events
+        comove = None
+        breach_ids = [q["position"] for q in positions
+                      if q.get("driver") and q["driver"]["kind"] in ("specific_move", "mixed")]
+        if len(breach_ids) >= 2:
+            srf = f.get("specific_returns")
+            if srf is not None:
+                sub = srf[(srf["Position"].isin(breach_ids))
+                          & (srf["Date"] > t0) & (srf["Date"] <= t1)]
+                panel = sub.pivot_table(index="Date", columns="Position", values="SpecificReturn")
+                st_ = _pnl._pairwise_mean_corr(panel)
+                if st_ is not None:
+                    sec_ = S["frames"]["securities"][["Position", "Sector"]].set_index("Position")
+                    secs = [str(sec_["Sector"].get(pp, "?")) for pp in breach_ids]
+                    top_sec = max(set(secs), key=secs.count)
+                    common = st_["mean_corr"] >= 0.25
+                    st_.update({
+                        "names": [tk.get(pp, pp) for pp in breach_ids],
+                        "shared_sector": (top_sec if secs.count(top_sec) >= 2 else None),
+                        "verdict": "common_thread" if common else "independent",
+                        "text": ((f"the breach names' residuals CO-MOVE (mean pairwise ρ "
+                                  f"{st_['mean_corr']:+.2f} over {st_['n_obs']}d) — one common "
+                                  f"driver the model has no factor for, not several stock "
+                                  f"events; a missing-factor signal")
+                                 if common else
+                                 (f"the breach names' residuals are independent (mean pairwise "
+                                  f"ρ {st_['mean_corr']:+.2f} over {st_['n_obs']}d) — separate "
+                                  f"stock events, not a hidden common driver")),
+                    })
+                    comove = st_
         return {
             "T": str(t0.date()), "to": str(t1.date()), "horizon_months": horizon,
             "n_days": int(h), "book": book,
             "stress": {"vol_mult": vol_mult, "rho_blend": rho},
             "book_total": book_row, "rows": rows, "positions": positions[:15],
+            "breach_comovement": comove,
             "surprises": [r for r in rows + [book_row] if r["verdict"] == "investigate"],
             "note": ("Bands are the start-of-period risk made visible: half-width = 2σ where σ² = "
                      "x'Fx (+ the diagonal specific block), scaled √days. The model forecasts "
@@ -1833,7 +2120,382 @@ async def pnl_attribution_linkage(T: str | None = None,
                      "risk understood; outside base but inside stressed = a stress regime; outside "
                      "stressed = a risk the decomposition missed — investigate (gain or loss "
                      "alike). Correlations only enter the aggregate rows, so the book band widens "
-                     "under the correlation shock even where no single factor's does."),
+                     "under the correlation shock even where no single factor's does. Rows outside "
+                     "the base band carry a driver read: the band freezes x at T, so a breach is "
+                     "either a genuine factor move or the exposure migrating inside the window "
+                     "(loading refresh / 13F re-anchor) — an ill-conditioned z, not a factor "
+                     "event."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ============================================================================ model trust
+# The fit-for-purpose family: /calibration (rolling bias + exceedances; NB /validation was
+# already taken by the scenario cross-check), /regression
+# (the builder's WLS fit health from the regression_stats side artifact), /factor_cov (the F
+# matrix made visible — correlations + vols, full window vs recent year).
+
+REG_ARTIFACT = _pnl.OUT / "regression_stats.parquet"
+
+
+def _reg_artifact() -> pd.DataFrame:
+    """regression_stats.parquet, cached on S and reloaded when the file changes."""
+    if not REG_ARTIFACT.exists():
+        raise HTTPException(404, "regression_stats.parquet missing — rebuild with the v2 builder "
+                                 "(barra_build_frames.py now persists the WLS fit stats)")
+    mt = REG_ARTIFACT.stat().st_mtime
+    if S.get("reg_stats_mtime") != mt:
+        a = pd.read_parquet(REG_ARTIFACT)
+        a["Date"] = pd.to_datetime(a["Date"])
+        S["reg_stats"], S["reg_stats_mtime"] = a, mt
+    return S["reg_stats"]
+
+
+@app.get("/regression")
+async def regression_health():
+    """The cross-sectional WLS fit health: monthly-mean weighted R² trend (NB ours is a DAILY
+    regression — daily single-stock R² runs lower than the monthly 0.2–0.4 rule of thumb; the
+    trend matters more than the level), per-factor share of days with |t| > 2 (the admission
+    bar: ≥ 1/3 of periods justifies inclusion), and the cross-section breadth N."""
+    def run():
+        df = _reg_artifact()
+        day = df.groupby("Date")[["R2", "N"]].first()
+        r2m = day["R2"].resample("ME").mean().dropna()
+        fac = []
+        for f_, g in df.dropna(subset=["TStat"]).groupby("Factor"):
+            t = g["TStat"].abs()
+            fac.append({"factor": str(f_), "pct_days_t_gt2": float((t > 2).mean()),
+                        "mean_abs_t": float(t.mean()), "n_days": int(len(t))})
+        fac.sort(key=lambda r: -r["pct_days_t_gt2"])
+        return {
+            "from": _clean(day.index.min()), "to": _clean(day.index.max()),
+            "n_days": int(len(day)),
+            "r2_monthly": [{"date": _clean(d), "r2": float(v)} for d, v in r2m.items()],
+            "r2_mean": float(day["R2"].mean()),
+            "n_names": {"min": int(day["N"].min()), "median": float(day["N"].median()),
+                        "max": int(day["N"].max())},
+            "factors": fac,
+            "note": ("Weighted cross-sectional R² of the daily WLS on the estimation universe "
+                     "(sqrt-cap weights). Factors clearing |t|>2 on a meaningful share of days "
+                     "earn their place; a persistently insignificant factor is a candidate to "
+                     "drop. N is the estimation cross-section that day — thin days make noisy "
+                     "factor returns."),
+        }
+    return await run_in_threadpool(run)
+
+
+@app.get("/calibration")
+async def calibration(window: int = Query(24, ge=6, le=60, description="rolling window, months"),
+                      book: str = "Soros"):
+    """Fit-for-purpose calibration over time: the ROLLING bias statistic b = std(realized /
+    predicted vol) over a trailing window, with the 1 ± √(2/window) acceptance band — run for
+    the whole book and the specific block — plus 2σ exceedance counts (expected ≈ 4.6%)."""
+    def run():
+        art = _attr_artifact()
+        c = (art[art["Kind"] == "contribution"]
+             .pivot_table(index="Date", columns="Source", values="Value", aggfunc="first")
+             .sort_index())
+        r_m = _monthly(c["Realized"].dropna())
+        u_m = _monthly(c["Specific"].dropna())
+        f = S["frames"]
+        months = [pd.Timestamp(d) for d in np.sort(f["exposures"]["Date"].unique())
+                  if pd.Timestamp(d) <= c.index.max()]
+        key = ("pred_vols_full", book, str(months[-1].date()) if months else "")
+        if S.get("pred_vols_key") != key:
+            S["pred_vols"], S["pred_vols_key"] = _pred_book_vols(months, book), key
+        book_v, spec_v, _fv = S["pred_vols"]
+        ndays = c["Realized"].resample("ME").count()
+
+        def pred_m(pred_daily: dict) -> pd.Series:
+            pv = pd.Series({(pd.Timestamp(k) + pd.offsets.MonthEnd(1)): v
+                            for k, v in pred_daily.items()})
+            return (pv * np.sqrt(ndays.reindex(pv.index).astype(float))).dropna()
+
+        out = {}
+        for name, realized, pred in (("book", r_m, pred_m(book_v)),
+                                     ("specific", u_m, pred_m(spec_v))):
+            r_ = realized.reindex(pred.index).dropna()
+            p_ = pred.reindex(r_.index)
+            z = (r_ / p_).replace([np.inf, -np.inf], np.nan).dropna()
+            rb = _pnl._rolling_bias(r_, p_, window)
+            out[name] = {
+                "bias": [{"date": _clean(r["date"]), "b": r["b"]} for r in rb],
+                "band": (rb[0]["band"] if rb else float(np.sqrt(2.0 / window))),
+                "exceedance_2s": (float((z.abs() > 2).mean()) if len(z) else None),
+                "n_months": int(len(z)),
+            }
+        return {
+            "window": window, "book": book, "expected_exceedance_2s": 0.0455,
+            "series": out,
+            "note": ("b ≈ 1 = calibrated; b > 1 = risk under-forecast (the dangerous direction); "
+                     "the band is the 95% acceptance range 1 ± √(2/window). Exceedances are "
+                     "months beyond ±2 predicted σ — a fat-tail read the std-based b can miss. "
+                     "Realized is the attribution artifact's book return (drifting weights, "
+                     "price-only); predicted is the model risk at each prior month-end."),
+        }
+    return await run_in_threadpool(run)
+
+
+@app.get("/factor_cov")
+async def factor_cov(date: str | None = None):
+    """The factor covariance made visible: the correlation matrix and per-factor daily vols on
+    the full history ≤ date, with the recent-1y vols beside them (vol clustering — where the
+    full-window estimate understates the current regime)."""
+    def run():
+        fr = S["frames"]["factor_returns"]
+        wide = fr.pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
+        if date:
+            wide = wide.loc[wide.index <= pd.Timestamp(date)]
+        if len(wide) < 60:
+            raise HTTPException(404, "not enough factor-return history")
+        recent = wide.loc[wide.index > wide.index.max() - pd.DateOffset(years=1)]
+        facs = list(wide.columns)
+        C, C1 = wide.corr(), recent.corr()
+        off = ~np.eye(len(facs), dtype=bool)
+        return {
+            "date": _clean(wide.index.max()), "n_days": int(len(wide)),
+            "n_days_recent": int(len(recent)), "factors": facs,
+            "corr": [[float(C.iloc[i, j]) for j in range(len(facs))] for i in range(len(facs))],
+            "vol_full": {f_: float(wide[f_].std()) for f_ in facs},
+            "vol_recent": {f_: float(recent[f_].std()) for f_ in facs},
+            "avg_abs_corr": {"full": float(np.abs(C.to_numpy()[off]).mean()),
+                             "recent": float(np.abs(C1.to_numpy()[off]).mean())},
+            "note": ("Daily vols; recent = trailing year. A recent/full vol ratio well above 1 "
+                     "is the vol-clustering warning — full-window bands (backtest, reconcile) "
+                     "understate the current regime there. Correlations rising toward the "
+                     "recent window is the diversification the book leans on decaying — the "
+                     "stressed band's ρ→1 blend is the deliberate exaggeration of that."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ---- exposure profile (ch 03: what each factor IS, and where the book sits in it) ----
+
+FACTOR_RECIPES = {
+    "Market": "intercept — every name loads 1.0; carries the cross-sectional average return",
+    "Beta": "252d regression beta of daily returns on the market index",
+    "ResidVol": "annualized std of the 252d market-regression residual",
+    "Momentum": "12-1 month price return (t−252d → t−21d)",
+    "Liquidity": "log trailing-63d average dollar volume",
+    "Size": "log market cap (close × PIT shares)",
+    "NonLinSize": "log-mcap cubed, orthogonalized to Size on the estimation fit",
+    "Value": "book-to-price: PIT equity / mcap",
+    "EarnYield": "earnings yield: PIT net income / mcap",
+    "Leverage": "assets / equity (PIT)",
+    "Growth": "period-over-period asset growth (PIT)",
+}
+
+
+def _snap_exposure_date(exp: pd.DataFrame, date: str | None) -> pd.Timestamp:
+    dts = np.sort(exp["Date"].unique())
+    if date is None:
+        return pd.Timestamp(dts[-1])
+    d = pd.Timestamp(date)
+    prior = [t for t in dts if pd.Timestamp(t) <= d]
+    if not prior:
+        raise HTTPException(404, f"no exposure date at or before {date}")
+    return pd.Timestamp(prior[-1])
+
+
+@app.get("/exposure_profile")
+async def exposure_profile(factor: str, date: str | None = None, book: str = "Soros"):
+    """One factor's cross-section at a date: the loading distribution (histogram + quantiles),
+    the ±3 estimation winsor bounds, the uncapped tail beyond them (coverage names showing their
+    true tilt), and the held book overlaid — the 'model-conditional: this is what OUR {factor}
+    means' view, with the descriptor recipe attached."""
+    def run():
+        f = S["frames"]; exp = f["exposures"]
+        d0 = _snap_exposure_date(exp, date)
+        sub = (exp[(exp["Date"] == d0) & (exp["Factor"] == factor)]
+               .set_index("Position")["Loading"].dropna())
+        if sub.empty:
+            raise HTTPException(400, f"unknown factor or no loadings: {factor}")
+        pos = f["positions"]
+        w_ = pos[(pos["Book"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
+        tk = _ticker_map()
+        held = sorted(
+            [{"ticker": tk.get(p, p), "weight": float(wt), "loading": float(sub[p])}
+             for p, wt in w_.items() if p in sub.index],
+            key=lambda r: -abs(r["loading"]))
+        edges = np.linspace(min(float(sub.min()), -3.5), max(float(sub.max()), 3.5), 41)
+        cnt, _ = np.histogram(sub, bins=edges)
+        beyond = sub[sub.abs() > 3].abs().sort_values(ascending=False)
+        return {
+            "factor": factor, "date": _clean(d0), "book": book,
+            "recipe": FACTOR_RECIPES.get(factor, ""),
+            "n_names": int(len(sub)),
+            "quantiles": {q: float(np.percentile(sub, p))
+                          for q, p in (("p01", 1), ("p25", 25), ("p50", 50),
+                                       ("p75", 75), ("p99", 99))},
+            "hist": [{"x0": float(edges[i]), "x1": float(edges[i + 1]), "n": int(cnt[i])}
+                     for i in range(len(cnt))],
+            "beyond3": {"n": int(len(beyond)), "share": float(len(beyond) / len(sub)),
+                        "names": [{"ticker": tk.get(p, p), "loading": float(sub[p])}
+                                  for p in beyond.index[:8]]},
+            "held": held,
+            "note": ("Loadings are z-scores vs the ESTIMATION cross-section (median/MAD); "
+                     "estimation names winsorized at ±3, coverage names uncapped (±10 backstop) "
+                     "— so anything beyond ±3 is an off-index name showing its true tilt. "
+                     "Model-conditional: this distribution defines what the factor means here."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ---- hedging (appendix D6 + mini-example §7–8: remove the risk you don't want) ----
+
+def _hedge_table(x: np.ndarray, F: np.ndarray, svar: float, factors: list[str]) -> dict:
+    """Per factor: book vol before/after NEUTRALIZING it (x_k → 0 via -x_k units of the pure
+    factor-k portfolio — ch-07's investable dual), ranked by vol saved. Plus the D6 single-
+    instrument minimum-variance hedge with the pure Market portfolio as the instrument:
+    h* = −Cov(r_h, r_p)/Var(r_h) = −(Fx)_mkt/F_mm."""
+    base = float(np.sqrt(max(x @ F @ x + svar, 0.0)))
+    rows = []
+    for k, f_ in enumerate(factors):
+        x2 = x.copy(); x2[k] = 0.0
+        after = float(np.sqrt(max(x2 @ F @ x2 + svar, 0.0)))
+        rows.append({"factor": f_, "exposure": float(x[k]), "hedge_units": float(-x[k]),
+                     "vol_after": after, "vol_reduction": base - after})
+    rows.sort(key=lambda r: -r["vol_reduction"])
+    mkt = None
+    if "Market" in factors:
+        m = factors.index("Market")
+        if F[m, m] > 0:
+            Fx = F @ x
+            h = float(-Fx[m] / F[m, m])
+            xh = x.copy(); xh[m] += h
+            after = float(np.sqrt(max(xh @ F @ xh + svar, 0.0)))
+            mkt = {"h_star": h, "vol_after": after, "vol_reduction": base - after}
+    return {"vol_base": base, "rows": rows, "market_hedge": mkt}
+
+
+@app.get("/hedge")
+async def hedge(date: str | None = None, book: str = "Soros"):
+    """What hedging each factor would do: book daily vol before/after zeroing each net exposure
+    (the pure-factor-portfolio hedge), ranked by vol saved, plus the minimum-variance market
+    hedge h* = −β. Specific risk is untouched by construction — factor hedges can't remove it."""
+    def run():
+        d = date or _latest_date()
+        L, w, s, R = _book_inputs(d, book)
+        if not float(np.abs(w.to_numpy()).sum()):
+            raise HTTPException(404, f"no {book} positions at {d}")
+        F = np.cov(R, rowvar=False)
+        x = L.to_numpy().T @ w.to_numpy()
+        svar = float(np.sum(w.to_numpy() ** 2 * s.to_numpy()))
+        res = _hedge_table(x, F, svar, list(L.columns))
+        res.update({
+            "date": d, "book": book, "specific_vol": float(np.sqrt(svar)),
+            "note": ("hedge_units = −x_k of the pure factor-k portfolio (ch 07's f̂ = Pr dual) — "
+                     "implementable in principle, but pure portfolios carry real leverage/turnover "
+                     "cost. The market h* is the D6 single-instrument minimum-variance hedge "
+                     "(h* = −β of the book on the Market factor). Vol is model vol σ² = x'Fx + "
+                     "w'Δw; the specific block survives any factor hedge."),
+        })
+        return res
+    return await run_in_threadpool(run)
+
+
+# ---- factor portfolio inspector (ch 07: a factor return IS a portfolio return, f̂ = Pr) ----
+
+@app.get("/factor_portfolio")
+async def factor_portfolio(factor: str, date: str | None = None):
+    """Reconstruct the pure factor portfolio for one factor at a date: P = (X'W²X)⁻¹X'W² over
+    the fit cross-section (funnel survivors when the artifact exists, else all names), W the
+    builder's sqrt-cap proxy exp(Size/4). Row k has unit exposure to its own factor and ~zero
+    to every other (PX = I) — the top longs/shorts, gross leverage, and the purity check."""
+    def run():
+        f = S["frames"]; exp = f["exposures"]
+        d0 = _snap_exposure_date(exp, date)
+        Ld = (exp[exp["Date"] == d0]
+              .pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first"))
+        styles = [c for c in Ld.columns if c != "Market"]
+        keep = Ld[styles].notna().sum(axis=1) >= 6            # mirror the builder's floor
+        Ld = Ld[keep]
+        fit_idx = Ld.index
+        approx_fit = "all coverage names"
+        if _uf.ARTIFACT.exists():
+            fn = pd.read_parquet(_uf.ARTIFACT, columns=["month", "position", "survived"])
+            surv = set(fn[(pd.to_datetime(fn["month"]) == d0) & (fn["survived"] == True)]  # noqa: E712
+                       ["position"].dropna())
+            cand = Ld.index.intersection(surv)
+            if len(cand) >= 30:
+                fit_idx, approx_fit = cand, "funnel survivors (≈ estimation universe)"
+        Xd = Ld.loc[fit_idx, styles].fillna(0.0)
+        cols = [c for c in styles if Xd[c].std() > 0.05]      # builder's degeneracy guard
+        if factor != "Market" and factor not in cols:
+            raise HTTPException(400, f"factor not in the fit at {d0.date()}: {factor}")
+        if "Size" not in cols:
+            raise HTTPException(404, "Size missing from the fit — cannot form the WLS weights")
+        X = np.column_stack([np.ones(len(Xd)), Xd[cols].values])
+        W2 = np.exp(Xd["Size"].values / 2.0)                  # (exp(Size/4))² — the builder's W²
+        names = ["Market"] + cols
+        try:
+            P = np.linalg.solve(X.T @ (X * W2[:, None]), (X * W2[:, None]).T)
+        except np.linalg.LinAlgError:
+            raise HTTPException(500, "singular fit cross-section")
+        p = P[names.index(factor)]
+        expo = p @ X                                          # should be e_k (PX = I)
+        k = names.index(factor)
+        cross = float(np.max(np.abs(np.delete(expo, k))))
+        tk = _ticker_map()
+        order = np.argsort(p)
+        pos_list = list(Xd.index)
+        def side(idx):
+            return [{"ticker": tk.get(pos_list[i], pos_list[i]), "weight": float(p[i])}
+                    for i in idx if abs(p[i]) > 1e-9]
+        return {
+            "factor": factor, "date": _clean(d0),
+            "fit_universe": approx_fit, "n_names": int(len(Xd)),
+            "gross_leverage": float(np.abs(p).sum()), "net": float(p.sum()),
+            "self_exposure": float(expo[k]), "max_cross_exposure": cross,
+            "longs": side(order[::-1][:10]), "shorts": side(order[:10]),
+            "note": ("The regression dual made visible: this long-short portfolio's daily return "
+                     "IS (approximately) the published factor return. Reconstruction — the "
+                     "production fit used the builder's internal estimation flag and per-day "
+                     "return availability, so weights are approximate; the PX = I purity check "
+                     "(self exposure 1, cross ~0) is exact for this cross-section. High gross "
+                     "leverage is the ch-07 purity price."),
+        }
+    return await run_in_threadpool(run)
+
+
+# ---- residual explorer (ch 13's question: what can't the model explain, name by name) ----
+
+@app.get("/pnl_attribution/names")
+async def pnl_attribution_names(frm: str | None = Query(None, alias="from"), to: str | None = None,
+                                book: str = "Soros", top: int = Query(12, ge=3, le=50)):
+    """The specific PnL name by name over the window: top winners and losers by |specific|, each
+    with sign persistence (share of consecutive same-sign months — a real edge or a stale 13F
+    reads persistent; noise mean-reverts) and the share of months positive."""
+    def run():
+        art = _attr_artifact()
+        _c, lo, hi = _attr_window(art, frm, to)
+        na, panel = _name_attr(lo, hi, book, monthly=True)
+        if na.empty:
+            raise HTTPException(404, "no attribution rows in the window")
+        tk = _ticker_map()
+        ranked = na.reindex(na["specific_pnl"].abs().sort_values(ascending=False).index)
+        rows = []
+        for p, r in ranked.head(top * 2).iterrows():
+            m = panel[p].dropna() if p in panel.columns else pd.Series(dtype=float)
+            m = m[m != 0.0]
+            sgn = np.sign(m.to_numpy())
+            persist = (float((sgn[1:] == sgn[:-1]).mean()) if len(sgn) > 3 else None)
+            rows.append({"ticker": tk.get(p, p), "position": p,
+                         "factor_pnl": float(r["factor_pnl"]),
+                         "specific_pnl": float(r["specific_pnl"]),
+                         "realized": float(r["realized"]),
+                         "months": int(len(m)), "sign_persistence": persist,
+                         "hit_rate": (float((m > 0).mean()) if len(m) else None)})
+        winners = [r for r in rows if r["specific_pnl"] > 0][:top]
+        losers = [r for r in rows if r["specific_pnl"] < 0][:top]
+        return {
+            "from": str(lo.date()), "to": str(hi.date()), "book": book,
+            "winners": winners, "losers": losers,
+            "note": ("Specific = the part of each name's PnL the factors don't explain, on the "
+                     "as-of monthly weights (the cube convention). sign_persistence is the share "
+                     "of consecutive months with the same specific sign: ≈0.5 = memoryless "
+                     "(re-underwritten bets), well above = a persistent unexplained driver — "
+                     "a real edge, a stale 13F weight, or a missing factor."),
         }
     return await run_in_threadpool(run)
 

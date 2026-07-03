@@ -789,7 +789,7 @@ def render_whatchanged():
         rows = []
         for k, lab, pct in [("scenario_var_99", "Scenario VaR 99", True), ("es_975", "ES 97.5", True),
                             ("total_var_99", "Total VaR 99", True), ("specific_vol", "Specific vol", True),
-                            ("risk_hhi", "Risk HHI", False), ("gross", "Gross", True), ("net", "Net", True)]:
+                            ("top5_ctr_share", "Top-5 risk share", True), ("gross", "Gross", True), ("net", "Net", True)]:
             v = wc["risk"].get(k, {})
             def fmt(x, pct=pct):
                 return "—" if x is None else (f"{x:.2%}" if pct else f"{x:.3f}")
@@ -969,13 +969,13 @@ def render_whatif():
                     spec = [("Scenario VaR 99", "scenario_var_99"), ("Scenario VaR 97.5", "scenario_var_975"),
                             ("Scenario ES 97.5", "es_975"), ("Scenario ES 99", "es_99"),
                             ("Total VaR 99", "total_var_99"), ("Specific vol", "specific_vol"),
-                            ("Risk HHI", "risk_hhi"), ("Net exposure", "net"), ("Gross exposure", "gross")]
+                            ("Top-5 risk share", "top5_ctr_share"), ("Net exposure", "net"), ("Gross exposure", "gross")]
 
                     def cell(v, key):
-                        return "—" if v is None else (f"{v:.3f}" if key == "risk_hhi" else f"{v:.2%}")
+                        return "—" if v is None else f"{v:.2%}"
 
                     def dcell(v, key):
-                        return "—" if v is None else (f"{v:+.3f}" if key == "risk_hhi" else f"{v:+.2%}")
+                        return "—" if v is None else f"{v:+.2%}"
                     tbl = [{"Measure": lab, "Before": cell(b.get(k), k), "After": cell(a.get(k), k),
                             "Δ": dcell(d.get(k), k)} for lab, k in spec]
                     st.dataframe(pd.DataFrame(tbl), hide_index=True, use_container_width=True)

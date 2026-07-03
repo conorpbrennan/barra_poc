@@ -85,8 +85,8 @@ export function Checks() {
           ) : (
             <div style={{ maxWidth: "46rem" }}>
               <div className="row" style={{ marginBottom: "0.6rem" }}>
-                <RagDot status={d.basel_zone} />
-                <b>Basel {d.basel_zone}</b>
+                <RagDot status={d.kupiec_reject ? "red" : "green"} />
+                <b>Kupiec {d.kupiec_reject ? "reject" : "pass"}</b>
                 <span className="muted small">
                   method {d.method} · {d.alpha! * 100}% · {d.window}d window
                 </span>
