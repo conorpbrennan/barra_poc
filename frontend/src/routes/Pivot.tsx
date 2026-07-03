@@ -122,6 +122,19 @@ export function Pivot() {
   });
   const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, warning, loading, error } = pivot;
 
+  // Cross-lens drill link (?drill=<json {rows, cols?, measures, filters}>, e.g. from the
+  // Attribution reconcile drawer): captured ONCE at mount, consumed inside the fold effect below
+  // so mount issues exactly one reload — a separate effect would race the fold's own reload and
+  // the loser's response would clobber the grid (blank measure columns). Deliberately NOT an
+  // effect dependency: consuming it must not re-trigger the fold.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [pendingDrill, setPendingDrill] = useState<
+    Partial<Pick<PivotConfig, "rows" | "cols" | "measures" | "filters">> | null>(() => {
+    const raw = searchParams.get("drill");
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  });
+
   // Reload whenever the cube is ready or the global context (date / scenario) changes, folding them
   // into the pivot filters AND re-querying — so changing the scenario dropdown updates the numbers
   // immediately (previously it updated the filter chip but not the grid). ScenarioSet is only sliced
@@ -129,6 +142,20 @@ export function Pivot() {
   // sets (e.g. Concentration — Risk HHI), and those must not be collapsed to the single global set.
   useEffect(() => {
     if (!dimsQ.data || !date) return;
+    if (pendingDrill) {
+      const next: PivotConfig = { ...cfg,
+        rows: pendingDrill.rows ?? cfg.rows, cols: pendingDrill.cols ?? [],
+        measures: pendingDrill.measures ?? cfg.measures,
+        filters: pendingDrill.filters ?? cfg.filters,
+        whatif: [], shocks: {} };
+      setCfg(next);
+      setMode("grid");
+      reload(next);
+      setLoadedView({ name: "drill-through", description: "opened from another lens" });
+      setPendingDrill(null);
+      setSearchParams({}, { replace: true });
+      return;
+    }
     const onAxis = cfg.rows.includes("ScenarioSet") || cfg.cols.includes("ScenarioSet");
     const filters: Record<string, string[]> = { ...cfg.filters, Date: [date] };
     if (onAxis) delete filters.ScenarioSet;
@@ -138,29 +165,6 @@ export function Pivot() {
     reload(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimsQ.data, date, scenario]);
-
-  // Cross-lens drill link: another lens (e.g. the Attribution reconcile drawer) navigates here
-  // with ?drill=<json {rows, cols?, measures, filters}>. Applied once when dims are ready, then
-  // stripped from the URL. Declared AFTER the context-fold effect so on a fresh mount the drill
-  // config wins the initial render (effects run in declaration order).
-  const [searchParams, setSearchParams] = useSearchParams();
-  useEffect(() => {
-    if (!dimsQ.data) return;
-    const raw = searchParams.get("drill");
-    if (!raw) return;
-    try {
-      const s = JSON.parse(raw) as Partial<Pick<PivotConfig, "rows" | "cols" | "measures" | "filters">>;
-      const next: PivotConfig = { ...cfg, rows: s.rows ?? cfg.rows, cols: s.cols ?? [],
-        measures: s.measures ?? cfg.measures, filters: s.filters ?? cfg.filters,
-        whatif: [], shocks: {} };
-      setCfg(next);
-      setMode("grid");
-      reload(next);
-      setLoadedView({ name: "drill-through", description: "opened from another lens" });
-    } catch { /* malformed link — fall back to the default view */ }
-    setSearchParams({}, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dimsQ.data, searchParams]);
 
   const loadViewState = (s: ViewState, name: string) => {
     // Build the next config explicitly and hand it straight to reload(). Do NOT rely on setCfg +
