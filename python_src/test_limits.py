@@ -97,8 +97,10 @@ def t_limits_evaluates_book_var():
 
 @integ
 def t_limits_set_override():
-    """`set` overrides the scenario set the book VaR/ES limits read against; the Top-5 risk
-    share is set-INDEPENDENT by design (what-if math on the full history) so it must not move."""
+    """`set` overrides the scenario set every book limit reads against — including Top-5 risk
+    share (a cube measure since 2026-07-04, set-DEPENDENT like the old Risk HHI): a Hypo set
+    zeroes the Market move, so risk collapses onto the style-tilt names and concentration
+    reads far higher than the historical set."""
     import requests
     base = requests.get(f"{API}/limits", timeout=30).json()
     hypo = requests.get(f"{API}/limits", params={"set": "Hypo:MomentumCrash"}, timeout=30).json()
@@ -110,9 +112,9 @@ def t_limits_set_override():
     bt = next((c for c in base["checks"] if c["name"] == "Top-5 risk share"), None)
     ht = next((c for c in hypo["checks"] if c["name"] == "Top-5 risk share"), None)
     assert bt is not None and ht is not None
-    if bt["value"] is not None:
+    if bt["value"] is not None and ht["value"] is not None:
         assert 0 < bt["value"] <= 1
-        assert bt["value"] == ht["value"]                               # set-independent
+        assert ht["value"] >= bt["value"]                               # Hypo concentrates
 
 
 def _run(group):

@@ -121,6 +121,9 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # custom stress on a StressShock scenario (reads 0 on the Base branch — pass
                  # the /pivot `shocks` param to price a transient shock):
                  "Custom stress PnL",
+                 # concentration: 5 largest names' share of Total VaR (tt.rank over the flat
+                 # PositionRank hierarchy; set-dependent like the marginals):
+                 "Top-5 risk share",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -140,7 +143,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Marginal Model vol", "% of Model vol", "Incremental Model vol",
             "Factor variance contribution",
             "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
-            "Vol at min-variance hedge", "Custom stress PnL",
+            "Vol at min-variance hedge", "Custom stress PnL", "Top-5 risk share",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -755,30 +758,19 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
     have_book = "Book" in {n for _, n in cube.hierarchies}
     base = (l["Date"] == _date(date)) & ((l["Book"] == book) if have_book else (l["Date"] == _date(date)))
 
-    # book-level scenario measures (VaR/ES need a single ScenarioSet). "Top-5 risk share" is NOT
-    # a cube measure — it's the what-if math's top-5 marginal-Total-VaR share (full-history,
-    # scenario-set independent), computed here from the frames.
+    # book-level scenario measures (VaR/ES/Top-5 need a single ScenarioSet; Top-5 risk share is
+    # a cube measure since 2026-07-04 — tt.rank over the flat PositionRank hierarchy — so the
+    # generic query below serves it and it is SET-DEPENDENT like the old Risk HHI was).
     bspec = dict(cfg.get("book", {}))
-    t5spec = bspec.pop("Top-5 risk share", None)
     if bspec:
         df = cube.query(*[m[x] for x in bspec], filter=base & (l["ScenarioSet"] == scen))
         row = df.iloc[0] if len(df) else None
         for name, spec in bspec.items():
-            val = _clean(row[name]) if row is not None else None
+            v = row[name] if row is not None else None
+            val = None if (v is None or pd.isna(v)) else _clean(v)
             status, head = _rag(val, spec.get("warn"), spec.get("limit"))
             checks.append({"name": name, "scope": "book", "value": val, "warn": spec.get("warn"),
                            "limit": spec.get("limit"), "status": status, "headroom": head, "detail": None})
-    if t5spec is not None:
-        try:
-            L, w, s, R = _book_inputs(date, book)
-            val = _risk_from_weights(w, L, s, R)["top5_ctr_share"]
-        except Exception:
-            val = None
-        status, head = _rag(val, t5spec.get("warn"), t5spec.get("limit"))
-        checks.append({"name": "Top-5 risk share", "scope": "book", "value": val,
-                       "warn": t5spec.get("warn"), "limit": t5spec.get("limit"), "status": status,
-                       "headroom": head,
-                       "detail": "5 largest name contributions to Total VaR (set-independent)"})
 
     # concentration from the positions overlay, as-of the latest filing on/before `date`
     conc = cfg.get("concentration", {})
@@ -1631,8 +1623,8 @@ async def contributions(date: str | None = None, book: str = "Soros"):
 _CUBE_RISK_KEYS = {"model_vol_1d": "Model vol", "scenario_var_99": "Scenario VaR 99",
                    "scenario_var_975": "Scenario VaR 97.5", "es_975": "Scenario ES 97.5",
                    "es_99": "Scenario ES 99", "specific_vol": "Specific vol",
-                   "total_var_99": "Total VaR 99"}
-_WHATIF_AUX_KEYS = ("top5_ctr_share", "gross", "net")   # weight arithmetic / mtv-share — numpy
+                   "total_var_99": "Total VaR 99", "top5_ctr_share": "Top-5 risk share"}
+_WHATIF_AUX_KEYS = ("gross", "net")                     # plain weight arithmetic — numpy
 
 
 def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
@@ -1689,6 +1681,10 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
             "max_rel_diff_tails": max(abs(c[k] - r[k]) / max(abs(r[k]), 1e-12) for c, r in
                                       ((cube_before, ref_before), (cube_after, ref_after))
                                       for k in _tk_),
+            # top-5: cube (interpolated-quantile tail day) vs numpy (read-off) differ by
+            # convention — loose bound, reported for the record
+            "abs_diff_top5": max(abs(c["top5_ctr_share"] - (r["top5_ctr_share"] or 0.0))
+                                 for c, r in ((cube_before, ref_before), (cube_after, ref_after))),
         }
     except Exception as e:
         source = "numpy_fallback"

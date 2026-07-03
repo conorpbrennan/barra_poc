@@ -308,7 +308,13 @@ vector — resize/drop held names, or add a universe name (absolute target weigh
 reproduces the cube's risk math in numpy (`_book_inputs` + `_risk_from_weights`): factor P&L vector
 `R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and the **Top-5 risk share** from the
 marginal-Total-VaR contributions (the ch-09 CTR concentration idiom; replaced Risk HHI in the
-what-if/limits/whatchanged payloads 2026-07-02 — the cube's `Risk HHI` measure itself is unchanged) —
+what-if/limits/whatchanged payloads 2026-07-02; **a cube measure since 2026-07-04** — `tt.rank`
+over the hidden flat `PositionRank` hierarchy, whose creation required every book-level
+`tt.total` in the cube to ALSO lift `PositionRank` so measures inside rank contexts still see
+true book totals; `/limits` and the what-if before/after serve the cube number, which is
+SET-DEPENDENT like the old Risk HHI — Hypo:MomentumCrash reads ~0.74/breach vs HistFull 0.29 by
+the documented Hypo-concentration mechanism; the numpy mtv variant remains in
+`_risk_from_weights` as the verification twin, diff ~3e-6 from tail-day conventions) —
 so **"before" matches the cube's reported figures exactly** and only the BEFORE→AFTER delta is the
 new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's

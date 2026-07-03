@@ -216,6 +216,24 @@ def t_hedge_served_from_cube():
     assert all(r["vol_after"] >= j["specific_vol"] - 1e-12 for r in j["rows"])
 
 
+@integ
+def t_top5_risk_share_cube():
+    """The tt.rank-based Top-5 risk share: the scalar equals the sum of the 5 largest
+    '% of Total VaR 99' name shares from a by-Position pivot (validates the flat-hierarchy
+    ranking wiring), sits in (0, 1], and reads via /limits."""
+    import requests
+    top5 = float(_book_cell("Top-5 risk share")["Top-5 risk share"])
+    assert 0 < top5 <= 1, top5
+    j = _pivot(rows="Position", measures="% of Total VaR 99",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    shares = sorted((float(r["% of Total VaR 99"]) for r in j["records"]
+                     if r.get("% of Total VaR 99") is not None), reverse=True)
+    assert abs(top5 - sum(shares[:5])) < 1e-12, (top5, sum(shares[:5]))
+    lim = requests.get(f"{API}/limits", timeout=60).json()
+    lt = next(c for c in lim["checks"] if c["name"] == "Top-5 risk share")
+    assert abs(float(lt["value"]) - top5) < 1e-12, (lt["value"], top5)
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")

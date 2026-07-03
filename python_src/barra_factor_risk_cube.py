@@ -193,6 +193,14 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
 
     h["Security"]  = {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
                       "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]}
+    # FLAT position hierarchy for GLOBAL cross-member ranking (tt.rank ranks siblings; under
+    # Security a position's siblings are its issuer's positions). Level named PositionR so the
+    # plain l["Position"] lookups stay unambiguous; hidden — rank plumbing, not a browse dim.
+    h["PositionRank"] = {"PositionR": t_exp["Position"]}
+    try:
+        h["PositionRank"].visible = False
+    except Exception:
+        pass
     h["FactorDim"] = {"FactorGroup": t_fm["FactorGroup"], "Factor": t_exp["Factor"]}
     h["Date"]      = {"Date": t_exp["Date"]}
     # Book and ScenarioSet are NOT created manually: they are the un-mapped key columns of the
@@ -291,8 +299,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # the query to its real days). VaR/worst are lifted to BOOK level (tt.total) so the rule/point are
     # the book's, identical whether or not Sector is on the axis; signs are baked for the chart (the
     # loss threshold and worst P&L are negative). Used by the COVID view's two graphs.
-    _book_var  = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"])
-    _book_loss = tt.total(m["Scenario worst loss"], h["Security"], h["FactorDim"])
+    _book_var  = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
+    _book_loss = tt.total(m["Scenario worst loss"], h["Security"], h["FactorDim"], h["PositionRank"])
     m["Scenario VaR line at day"]           = tt.where(_in, -_book_var, None)
     m["Scenario worst pnl at day"]          = tt.where(_in, -_book_loss, None)
     m["Scenario worst date at day (epoch)"] = tt.where(_in, m["Scenario worst date (epoch)"], None)
@@ -356,7 +364,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #                    (tt.total lifts those hierarchies to their top; Date/Book/ScenarioSet
     #                    stay on the current slice, so the tail is the sliced book's tail).
     #   tail_idx      -> index of that book vector's 1% quantile (the VaR scenario).
-    book_pnl_vec = tt.total(m["Scenario PnL vector"], h["Security"], h["FactorDim"])
+    book_pnl_vec = tt.total(m["Scenario PnL vector"], h["Security"], h["FactorDim"], h["PositionRank"])
     tail_idx = tt.array.quantile_index(book_pnl_vec, 0.01, interpolation="lower")
     # --- contribution to the FACTOR VaR (Scenario VaR 99): the current cell's P&L at the book's
     #     tail scenario. ADDITIVE: Σ_member = Scenario VaR 99. ("marginal" in the Flex Agg sense.)
@@ -365,7 +373,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # share of factor VaR: divide by the SUM of the marginals (NOT the interpolated quantile) so
     # it sums to EXACTLY 100%.
     m["% of Scenario VaR 99"] = (m["Marginal Scenario VaR 99"]
-        / tt.total(m["Marginal Scenario VaR 99"], h["Security"], h["FactorDim"]))
+        / tt.total(m["Marginal Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # --- contribution to the FACTOR ES 97.5: a member's MEAN P&L over the BOOK's worst-k tail
     #     scenarios (k = ceil(0.025 * n) lowest days of the BOOK P&L vector). Additive like the
@@ -377,19 +385,19 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _book_tail_idx = tt.array.n_lowest_indices(book_pnl_vec, _k975_book)
     m["Marginal Scenario ES 97.5"] = -tt.array.mean(m["Scenario PnL vector"][_book_tail_idx])
     m["% of Scenario ES 97.5"] = (m["Marginal Scenario ES 97.5"]
-        / tt.total(m["Marginal Scenario ES 97.5"], h["Security"], h["FactorDim"]))
+        / tt.total(m["Marginal Scenario ES 97.5"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # --- contribution to TOTAL VaR 99 (factor + specific, combined in quadrature). Euler split of
     #     Total=√(F²+S²): each factor-marginal is scaled by F/Total, and the idiosyncratic block
     #     adds z²·(w²σ²)/Total PER NAME. Σ_member = Total VaR 99.
     #     NB: meaningful only in by-NAME views (Issuer/Sector/Country/Position). By FACTOR the
     #     specific part fans out (specific risk has no factor) -> use Marginal Scenario VaR 99 there.
-    F_book = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"])     # book factor VaR
-    T_book = tt.total(m["Total VaR 99"], h["Security"], h["FactorDim"])        # book total VaR
+    F_book = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])     # book factor VaR
+    T_book = tt.total(m["Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])        # book total VaR
     m["Marginal Total VaR 99"] = (m["Marginal Scenario VaR 99"] * F_book / T_book
                                   + (2.326 ** 2) * m["Specific variance"] / T_book)
     m["% of Total VaR 99"] = (m["Marginal Total VaR 99"]
-        / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"]))
+        / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # ---- concentration: Herfindahl-Hirschman index of risk shares. HHI = Σ_name share², where
     #      share is a NAME's fraction of book Total VaR (its Marginal Total VaR / the book total).
@@ -397,9 +405,22 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #      like Specific variance. Reads 1/N for an evenly-diversified book up to 1.0 for a single
     #      name; the standard single-number concentration gauge a desk watches against a limit.
     _name_share = (m["Marginal Total VaR 99"]
-                   / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"]))
+                   / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
     m["Risk HHI"] = tt.agg.sum(_name_share * _name_share, scope=tt.OriginScope({l["Position"]}))
     m["Risk HHI"].formatter = "DOUBLE[0.000]"
+
+    # ---- Top-5 risk share: the /limits concentration metric, cube-native via tt.rank ----------
+    # tt.rank ranks SIBLINGS, and in the multilevel Security hierarchy a position's siblings are
+    # the positions under the same Issuer (~1:1 here — every rank would read 1). The FLAT
+    # PositionRank hierarchy (created with the other hierarchies above) gives the global
+    # ranking; every book-level tt.total in this file lifts it, so measures evaluated inside a
+    # PositionRank context still see the true book totals.
+    _tot_r = tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
+    _rank_r = tt.rank(m["Marginal Total VaR 99"], h["PositionRank"], ascending=False)
+    m["Top-5 risk share"] = tt.agg.sum(
+        tt.where(_rank_r <= 5, m["Marginal Total VaR 99"] / _tot_r, 0.0),
+        scope=tt.OriginScope({l["PositionR"]}))
+    m["Top-5 risk share"].formatter = "DOUBLE[0.0%]"
 
     # --- INCREMENTAL VaR (Flex Agg sense): REMOVE the current member, recompute the BOOK VaR on
     #     the reduced portfolio, and subtract it from the reference book VaR. Unlike the marginals
@@ -422,8 +443,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Incremental Scenario VaR 99"] = book_var - VaR_ex
     # total-VaR analog: strip the member's specific variance too, recombine in quadrature, subtract.
     # Reference = tt.total(Marginal Total VaR 99) (the additive book total) for the same reconciliation.
-    book_total = tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"])
-    S_ex_var = tt.total(m["Specific variance"], h["Security"], h["FactorDim"]) - m["Specific variance"]
+    book_total = tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
+    S_ex_var = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"]) - m["Specific variance"]
     Total_ex = tt.math.sqrt(VaR_ex * VaR_ex + (2.326 ** 2) * S_ex_var)
     m["Incremental Total VaR 99"] = book_total - Total_ex
 
@@ -434,13 +455,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # sample std Model vol uses, so Σ_member == book Model vol EXACTLY (Euler) and the per-NAME
     # values equal the ch-09 CTR = w·(Σw)/σ that /contributions computes in numpy.
     # Like Marginal Total VaR: meaningful in by-NAME views; by FACTOR the specific block fans out.
-    _sigma_book = tt.total(m["Model vol"], h["Security"], h["FactorDim"])
+    _sigma_book = tt.total(m["Model vol"], h["Security"], h["FactorDim"], h["PositionRank"])
     _cov_book = (tt.array.std(book_pnl_vec + m["Scenario PnL vector"]) ** 2
                  - m["Scenario PnL vol"] ** 2
                  - tt.array.std(book_pnl_vec) ** 2) / 2
     m["Marginal Model vol"] = (_cov_book + m["Specific variance"]) / _sigma_book
     m["% of Model vol"] = (m["Marginal Model vol"]
-        / tt.total(m["Marginal Model vol"], h["Security"], h["FactorDim"]))
+        / tt.total(m["Marginal Model vol"], h["Security"], h["FactorDim"], h["PositionRank"]))
     # The clean FACTOR-side contribution (no specific block, VARIANCE units): cov(member, book).
     # By Factor: per factor this IS the ch-09 CTV = x_k(Fx)_k (cross-terms 50/50, negative =
     # hedge) and Σ_factor = the factor variance x'Fx. /contributions serves it.
@@ -459,7 +480,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # block kept — by FACTOR this is the hedge table's vol-after-neutralizing-k (zeroing x_k
     # cannot touch specific risk; NB Incremental Model vol strips the cell's specific, which is
     # right for NAMES and wrong here — the fan-out trap, handled explicitly).
-    _svar_book = tt.total(m["Specific variance"], h["Security"], h["FactorDim"])
+    _svar_book = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"])
     m["Vol ex factor"] = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + _svar_book)
     m["Vol ex factor"].formatter = "DOUBLE[0.00%]"
     # Min-variance hedge ratio (appendix D6), in EXPOSURE units: h* = −(Fx)_k/F_kk. Via the
