@@ -63,6 +63,8 @@ def build() -> None:
     wide = (factor_ret[factor_ret["Factor"] != "Market"]
             .pivot(index="Date", columns="Factor", values="Return").dropna(how="any").sort_index())
     factors = list(wide.columns)
+    n_style = int((factor_meta["FactorGroup"] == "Style").sum())
+    n_ind = int((factor_meta["FactorGroup"] == "Industry").sum())
 
     # --- full-book risk snapshot (mirrors the cube measures in pandas) ----------------
     L = (exposures[(exposures["Date"] == last) & (exposures["Position"].isin(book["Position"]))]
@@ -286,7 +288,8 @@ def build() -> None:
 
 <h2>Summary</h2>
 <ul>
-<li><strong>What.</strong> A two-block linear factor model — {len(factors)} style factors + a market
+<li><strong>What.</strong> A two-block linear factor model — {n_style} style factors + {n_ind} GICS
+    industry factors + a market
     intercept (the systematic block) and a diagonal name-specific block — over Soros Fund Management's
     13F US-equity book ({n_names} names across the sample, {book.shape[0]} held at {last.date()}).</li>
 <li><strong>Data, all free / public.</strong> SEC EDGAR 13F (positions), SEC XBRL company facts
@@ -301,9 +304,12 @@ def build() -> None:
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
     shock vector changes (historical simulation, event replay, or a hypothetical stress). All figures are
     1-day, 99%; book specific vol is currently {spec_vol:.2%}.</li>
-<li><strong>Descriptors, not factors.</strong> Sector (SIC→GICS) and Country (SEC state of incorporation;
-    ~21% of the book reads non-US) are tags only — there is <strong>no country or industry factor</strong>,
-    so that exposure is carried by the style / market / specific loadings, not a country bet.</li>
+<li><strong>Industries are factors; country is a tag.</strong> Since 2026-07-04 each name carries a
+    0/1 loading on its GICS sector and the daily regression prices {n_ind} industry factors under the
+    Barra constraint (weighted industry returns sum to zero, so Market stays the market). Country
+    (SEC state of incorporation; ~21% of the book reads non-US) remains a tag only — there is
+    <strong>no country factor</strong>, so that exposure is carried by the market / style / industry /
+    specific loadings, not a country bet.</li>
 <li><strong>Cadence.</strong> Three different clocks. <strong>Quarterly</strong> 13F holdings set the
     book. Each <strong>month-end</strong> the exposure loadings are rebuilt — from as-of fundamentals and
     prices (§3a–b). The daily stock returns then regress on those month-old loadings to give
@@ -329,7 +335,7 @@ every check.</p>
 from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
 {SOROS_CIK}). The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
-splits into {len(factors)}&nbsp;style factors plus a market
+splits into {n_style}&nbsp;style factors plus {n_ind}&nbsp;GICS industry factors plus a market
 intercept (the systematic block) and a diagonal name-specific block. Every scenario is the same
 calculation, <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub> · Δf<sub>k</sub></span>,
 where x<sub>k</sub> is the book's net exposure to factor k and Δf<sub>k</sub> is a shock vector.
@@ -362,7 +368,8 @@ is bought or downloaded. The monthly-to-daily step is the heart of the model and
 
 <div class="note"><strong>Where does the factor model come from? Read this first.</strong>
 <strong>The factor model is not downloaded from anyone.</strong> There is no MSCI or Barra licence
-and no external factor-return file behind these numbers. The {len(factors)} style factors and the
+and no external factor-return file behind these numbers. The {n_style} style factors, the {n_ind}
+industry factors and the
 market factor are <em>built here, from scratch</em>, in three parts:
 <ol style="margin:.4rem 0">
 <li><strong>Factor definitions (the taxonomy), open-source and academic.</strong> What
@@ -405,7 +412,8 @@ sit in one place.</p>
     side of the daily factor-return regression</td>
     <td>Month-old when the daily returns regress on them — intra-month drift (§9)</td></tr>
 <tr><td>Factor returns</td><td><strong>Not sourced, estimated.</strong> Daily cross-sectional WLS regression of stock
-    returns on the latest monthly exposures (§3). {len(factors)} style factors + 1 market intercept.</td>
+    returns on the latest monthly exposures (§3). {n_style} style factors + {n_ind} GICS industry
+    factors (0/1 sector dummies, constrained — §3e) + 1 market intercept.</td>
     <td>Daily, {n_days:,} trading days ({START[:4]}–{END[:4]})</td><td><strong>Factor</strong></td><td>The entire systematic block and scenario engine</td>
     <td>Quality scales with universe breadth; no vendor benchmark to validate against</td></tr>
 </table>
@@ -624,9 +632,18 @@ about.</p>
     regress the day's stock returns y on the screened exposure matrix X with a column of ones
     prepended. That <strong>intercept is the Market factor</strong>. It is weighted least squares
     with weight ∝ <strong>√mcap</strong>, so large names anchor the fit (implemented by multiplying
-    both sides by mcap<sup>¼</sup>). The fitted coefficients <em>are</em> that day's factor returns
+    both sides by mcap<sup>¼</sup>). <strong>Industries (2026-07-04):</strong> the design also
+    carries a <strong>0/1 dummy per GICS sector</strong>. Raw dummies sum to the intercept
+    (every name is in exactly one sector), so they enter under the standard <strong>Barra
+    constraint</strong> — the weighted industry returns sum to zero, with weights = each sector's
+    WLS mass — imposed by substituting the heaviest (reference) sector out of the design,
+    <span class="formula">D̃<sub>j</sub> = D<sub>j</sub> − (c<sub>j</sub>/c<sub>ref</sub>)·D<sub>ref</sub></span>,
+    and recovering its return from the constraint after the fit. Market therefore stays the
+    weighted-market return and each industry return reads as that sector <em>relative to</em> the
+    market. Names with an unknown sector carry no dummy and price through Market + styles. The
+    fitted coefficients <em>are</em> that day's factor returns
     Δf<sub>k</sub>, and the residuals are the name-specific returns.{est_fit_clause} Output: {n_days:,} days ×
-    ({len(factors)} style + Market) factor returns, the shared scenario cache.</li>
+    ({n_style} style + {n_ind} industry + Market) factor returns, the shared scenario cache.</li>
 
 <li><strong>(f) Specific (idiosyncratic) risk.</strong> We square each day's regression residual
     and run it through an EWMA with a <strong>{EWMA_HALFLIFE_D}-trading-day half-life</strong> per
@@ -635,12 +652,16 @@ about.</p>
     specific block is strictly <em>diagonal</em>: one variance per name, no cross-name specific
     covariance, in line with the daily VaR horizon.{cov_spec_clause}</li>
 
-<li><strong>(g) Market intercept as a leaf loading.</strong> After the regression we give every
-    (date, name) a <code>Market</code> loading of exactly <strong>1.0</strong> in the exposure
-    panel. This is the leaf form of the regression intercept. A fully-invested book (Σ weights = 1)
-    then carries unit market exposure, so the directional market move flows through the scenario
-    engine. We add it <em>after</em> stage (e) so the style factor returns are estimated on style
-    exposures only and are not contaminated by the constant.</li>
+<li><strong>(g) Market and industry memberships as leaf loadings.</strong> After the regression we
+    give every (date, name) a <code>Market</code> loading of exactly <strong>1.0</strong> in the
+    exposure panel — the leaf form of the regression intercept — and a
+    <code>Ind:&lt;Sector&gt;</code> loading of <strong>1.0</strong> on its GICS sector, the leaf
+    form of the industry dummies. A fully-invested book (Σ weights = 1)
+    then carries unit market exposure and its sector weights as industry exposures, so the
+    directional market move and each sector's relative move flow through the scenario
+    engine, and the cube can drill factor risk by industry. Both are added <em>after</em> stage (e)
+    so the style factor returns are estimated on style
+    exposures only and are not contaminated by the constants.</li>
 
 <li><strong>(h) Scenario construction.</strong> One table keyed (ScenarioSet, Factor) → shock
     vector. <em>HistFull</em> is the full daily factor-return history. <em>Evt:*</em> is that
