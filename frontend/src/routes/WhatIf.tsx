@@ -55,12 +55,13 @@ function HedgePanel({ date, book }: { date: string; book: string }) {
 }
 
 const RISK_ROWS: { key: keyof WhatIfResult["before"]; label: string; fmt: (v: number | null | undefined) => string }[] = [
-  { key: "total_var_99", label: "Total VaR 99", fmt: (v) => pct(v) },
+  { key: "model_vol_1d", label: "Model vol (1d)", fmt: (v) => pct(v, 2) },
   { key: "scenario_var_99", label: "Scenario VaR 99", fmt: (v) => pct(v) },
   { key: "scenario_var_975", label: "Scenario VaR 97.5", fmt: (v) => pct(v) },
   { key: "es_975", label: "ES 97.5", fmt: (v) => pct(v) },
   { key: "es_99", label: "ES 99", fmt: (v) => pct(v) },
   { key: "specific_vol", label: "Specific vol", fmt: (v) => pct(v) },
+  { key: "total_var_99", label: "Total VaR 99 (legacy)", fmt: (v) => pct(v) },
   { key: "top5_ctr_share", label: "Top-5 risk share", fmt: (v) => pct(v, 1) },
   { key: "gross", label: "Gross", fmt: (v) => num(v, 2) },
   { key: "net", label: "Net", fmt: (v) => num(v, 2) },

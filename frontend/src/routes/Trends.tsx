@@ -34,10 +34,10 @@ export function Trends() {
           const r = data.records;
           const dates = r.map((rec) => String(rec.Date ?? "").slice(0, 10));
           const charts: { title: string; key: string; fmt: (v: number) => string }[] = [
-            { title: "Total VaR 99", key: "Total VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario VaR 99", key: "Scenario VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario ES 97.5", key: "Scenario ES 97.5", fmt: (v) => pct(v) },
             { title: "Specific vol", key: "Specific vol", fmt: (v) => pct(v) },
+            { title: "Total VaR 99 (legacy)", key: "Total VaR 99", fmt: (v) => pct(v) },
           ];
           return (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "1.4rem 2rem" }}>

@@ -125,6 +125,15 @@ risk-tooling roadmap.
 
 ## Desk limits (`/limits`)
 
+**Reference-metric decision (2026-07-03): MODEL VOL is the reference; VaR/ES are the limits.**
+The desk's reference risk number is model vol `σ = √(x'Fx + w'Δw)` with its factor/specific
+split (`model_vol_1d`, now first in `_risk_from_weights` and the what-if/Overview displays);
+the desk limits are written on **Scenario VaR 99 / ES 97.5** (the Kupiec-backtested metrics —
+`limits.json`'s Total VaR 99 limit was replaced by Scenario VaR 99, same thresholds); the house
+**Total VaR 99** composite (empirical factor quantile ⊕ Gaussian specific, in quadrature) is
+kept as a measure but demoted to "(legacy)" in the UIs, and `/reverse_stress` defaults to the
+Scenario VaR 99 limit. CHRIS_VOICE prompts carry the same hierarchy.
+
 `risk_api.py` has a `GET /limits?date=&set=&book=` endpoint that compares the book's numbers to a
 desk limit set in repo-root `limits.json` (reloaded each call) and returns a red/amber/green status
 per limit + a worst-of overall. Book-level VaR/ES/HHI come from the cube (scenario-dependent, so the

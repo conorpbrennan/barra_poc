@@ -4,7 +4,7 @@ test_limits.py — checks for the desk-limit RAG monitoring (Step 1).
   * UNIT  — always run, no backend: _rag traffic-light logic, and limits.json parses with the
             expected shape.
   * INTEG — need the live backend on :8010; SKIP if down. /limits returns a configured RAG status
-            with well-formed checks, and the book Total VaR 99 limit is evaluated.
+            with well-formed checks, and the book Scenario VaR 99 limit is evaluated.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_limits.py
 """
@@ -60,7 +60,7 @@ def t_limits_json_shape():
     import risk_api
     cfg = risk_api._load_limits()
     assert cfg, "limits.json missing or empty"
-    assert "Total VaR 99" in cfg.get("book", {}), cfg.get("book")
+    assert "Scenario VaR 99" in cfg.get("book", {}), cfg.get("book")
     for spec in cfg["book"].values():
         assert isinstance(spec.get("limit"), (int, float)), spec
     assert "single_name_weight" in cfg.get("concentration", {}), cfg.get("concentration")
@@ -84,11 +84,12 @@ def t_limits_endpoint_configured():
 
 @integ
 def t_limits_evaluates_book_var():
-    """The Total VaR 99 limit is present and (when data exists) carries a numeric value + headroom."""
+    """The Scenario VaR 99 limit (the limit metric since the 2026-07-03 vol-reference
+    decision) is present and (when data exists) carries a numeric value + headroom."""
     import requests
     j = requests.get(f"{API}/limits", timeout=30).json()
-    var = next((c for c in j["checks"] if c["name"] == "Total VaR 99"), None)
-    assert var is not None, "Total VaR 99 limit not evaluated"
+    var = next((c for c in j["checks"] if c["name"] == "Scenario VaR 99"), None)
+    assert var is not None, "Scenario VaR 99 limit not evaluated"
     if var["value"] is not None:                          # green/amber/breach (not unknown)
         assert var["status"] != "unknown"
         assert abs(var["headroom"] - (var["limit"] - var["value"])) < 1e-9, var
@@ -102,8 +103,8 @@ def t_limits_set_override():
     base = requests.get(f"{API}/limits", timeout=30).json()
     hypo = requests.get(f"{API}/limits", params={"set": "Hypo:MomentumCrash"}, timeout=30).json()
     assert hypo["set"] == "Hypo:MomentumCrash", hypo["set"]
-    bv = next((c for c in base["checks"] if c["name"] == "Total VaR 99"), None)
-    hv = next((c for c in hypo["checks"] if c["name"] == "Total VaR 99"), None)
+    bv = next((c for c in base["checks"] if c["name"] == "Scenario VaR 99"), None)
+    hv = next((c for c in hypo["checks"] if c["name"] == "Scenario VaR 99"), None)
     if bv and hv and bv["value"] and hv["value"]:
         assert abs(bv["value"] - hv["value"]) > 1e-9                    # set changed the VaR read
     bt = next((c for c in base["checks"] if c["name"] == "Top-5 risk share"), None)

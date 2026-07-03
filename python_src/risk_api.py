@@ -1273,7 +1273,7 @@ async def reverse_stress(loss: float | None = None, date: str | None = None, boo
     per factor, ranked by |sigma| (smallest = the book's most vulnerable factor). Default L = the
     Total VaR 99 desk limit (limits.json), else 0.05."""
     L = loss if loss is not None else (_load_limits().get("book", {})
-                                       .get("Total VaR 99", {}).get("limit") or 0.05)
+                                       .get("Scenario VaR 99", {}).get("limit") or 0.05)
     def run():
         d = date or _latest_date()
         vols = _factor_vols(); x = _factor_exposures(d, book)
@@ -1321,15 +1321,19 @@ def _book_inputs(date: str, book: str):
 
 
 def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarray) -> dict:
-    """Book risk for a weight vector — mirrors the cube measures (Scenario VaR ladder, ES, Specific
-    vol, Total VaR 99) plus gross/net and the top-5 CTR share (the ch-09 concentration idiom:
-    the 5 largest names' share of the marginal-Total-VaR contributions — replaced Risk HHI)."""
+    """Book risk for a weight vector. `model_vol_1d` (σ = √(x'Fx + w'Δw)) is the desk's REFERENCE
+    risk number (2026-07-03 decision); the scenario VaR/ES quantiles are the LIMIT metrics;
+    `total_var_99` is the legacy house composite, kept but demoted. Plus gross/net and the top-5
+    CTR share (the ch-09 concentration idiom: the 5 largest names' share of the
+    marginal-Total-VaR contributions — replaced Risk HHI)."""
     wv, Lv, sv = w.to_numpy(), L.to_numpy(), s.to_numpy()
     x = Lv.T @ wv
     pnl = R @ x
     n = len(pnl)
     svar = float(np.sum(wv * wv * sv))
     specvol = svar ** 0.5
+    F = np.cov(R, rowvar=False)
+    model_vol = float(np.sqrt(max(x @ F @ x + svar, 0.0)))
     var99 = float(-np.quantile(pnl, 0.01))
     var975 = float(-np.quantile(pnl, 0.025))
     es = lambda a: float(-np.mean(np.sort(pnl)[:max(1, int(np.ceil((1 - a) * n)))]))
@@ -1345,7 +1349,8 @@ def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarra
         tot = float(np.sum(mtv))
         if tot:
             top5 = float(np.sort(mtv)[::-1][:5].sum() / tot)
-    return {"scenario_var_99": var99, "scenario_var_975": var975,
+    return {"model_vol_1d": model_vol,
+            "scenario_var_99": var99, "scenario_var_975": var975,
             "es_975": es(0.975), "es_99": es(0.99), "specific_vol": specvol,
             "total_var_99": total99, "top5_ctr_share": top5,
             "gross": float(np.sum(np.abs(wv))), "net": float(np.sum(wv))}
@@ -2558,7 +2563,10 @@ block. Read the measures as follows:
   the single worst scenario. Scenario PnL vol: dispersion of scenario P&L. Scenario mean PnL: ~0
   for historical sets, the shock P&L for hypotheticals.
 - Specific vol / Specific variance: the diagonal idiosyncratic block. Total VaR 99 / Total ES 97.5:
-  factor risk combined in quadrature with the idiosyncratic tail.
+  factor risk combined in quadrature with the idiosyncratic tail — a HOUSE COMPOSITE, kept for
+  continuity. The desk's REFERENCE risk number is model vol σ = √(x'Fx + w'Δw) with its
+  factor/specific split; the LIMITS are written on Scenario VaR 99 / ES 97.5 (Kupiec-backtested).
+  Quote Total VaR only when the view offers nothing better.
 - Marginal Scenario VaR 99 / Marginal Scenario ES 97.5 / Marginal Total VaR 99: a member's ADDITIVE
   contribution to the book number (the contributions sum to the book total). "% of ..." is that
   share, summing to 100%. Incremental VaR: the risk RELEASED by removing a member — diversification-
@@ -2730,9 +2738,11 @@ as a weight overlay; monthly calendar, 2016–2024, Barra-style factor model (li
 The payload mirrors the daily loop — read it in this order:
 1. `limits` — the hard desk limits. LEAD with any breach (value vs limit), then ambers. All
    green = one line.
-2. `risk` + `variance_split` — the decomposition. total_var_99/es_975 are 1-day losses;
-   factor_share is x'Fx / (x'Fx + w'Δw); top_ctv are contributions to variance (negative =
-   hedges the book); top5_ctr_share is the 5 largest names' share of Total VaR.
+2. `risk` + `variance_split` — the decomposition. `model_vol_1d` (σ = √(x'Fx + w'Δw)) is the
+   REFERENCE risk number — lead the risk read with it and its factor_share split; scenario
+   VaR/ES are the limit metrics; total_var_99 is a legacy house composite, quote it only
+   against its limit history. top_ctv are contributions to variance (negative = hedges the
+   book); top5_ctr_share is the 5 largest names' share of Total VaR.
 3. `reconcile` — realized PnL vs the start-of-period risk bands (the risk-understood check).
    `flagged` rows/positions are outside their base band; each carries a driver read: an
    exposure/weight migration is a band ARTIFACT (frozen at T), a factor_move is systematic,
@@ -2782,8 +2792,9 @@ async def overview_analysis(body: OverviewAnalysisBody):
         try:
             L, w, s, R = _book_inputs(d, body.book)
             risk = _risk_from_weights(w, L, s, R)
-            out["risk"] = {k: risk[k] for k in ("total_var_99", "scenario_var_99", "es_975",
-                                                "specific_vol", "top5_ctr_share", "gross", "net")}
+            out["risk"] = {k: risk[k] for k in ("model_vol_1d", "scenario_var_99", "es_975",
+                                                "specific_vol", "top5_ctr_share", "gross", "net",
+                                                "total_var_99")}
             F = np.cov(R, rowvar=False)
             e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
             tv = e["factor_var"] + e["specific_var"]
@@ -2855,9 +2866,10 @@ calendar (2016–2024) for one scenario set. The book is the Soros 13F overlay o
 factor model. Numbers are fractions of book value; VaR/ES/vol are 1-day losses.
 
 The payload:
-- `risk_series` — monthly book measures (Total VaR 99, Scenario VaR 99, Scenario ES 97.5,
-  Specific vol). The trend matters more than the level: where the series sits NOW vs its own
-  history, and when it last shifted regime.
+- `risk_series` — monthly book measures (Scenario VaR 99, Scenario ES 97.5, Specific vol, and
+  the legacy Total VaR 99 composite — read the scenario measures as primary; the desk's
+  reference number is model vol, which has no cube time series). The trend matters more than
+  the level: where the series sits NOW vs its own history, and when it last shifted regime.
 - `exposure_series` — net factor exposures by month (quarterly-sampled) + per-factor start/end.
   Exposure paths are the mandate made visible: a persistent move is the book changing character,
   not noise. Whether drift is intentional (rotation) or re-pricing belongs to the drift

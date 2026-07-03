@@ -125,8 +125,15 @@ his limit is written against; nothing else in the tool depends on the removed it
 
 **Status: steps 1–2 APPLIED 2026-07-03** (Vite UI + API + limits.json; endpoints parked, not
 deleted; Streamlit untouched except the two panels that read the renamed `top5_ctr_share` key).
-Live: Top-5 risk share 29.5% vs warn 0.40 / limit 0.50 — green, headroom visible. Step 3
-(Total VaR 99 → model vol + split) awaits Chris. Step 4 open (re-audit on ch 11–15 publish).
+Live: Top-5 risk share 29.5% vs warn 0.40 / limit 0.50 — green, headroom visible.
+
+**Step 3 APPLIED 2026-07-03** (decision: vol is the reference): `model_vol_1d` (σ = √(x'Fx +
+w'Δw)) leads `_risk_from_weights`, the Overview heroes ("Model vol (1d) — the reference",
+1.44%/d live) and the What-if table; the desk limits moved to **Scenario VaR 99** (same
+warn/limit as the old composite) + ES 97.5 + Top-5 risk share; `/reverse_stress` defaults to
+the Scenario VaR 99 limit; Total VaR 99 stays as a measure, labelled "(legacy)" and quoted
+last; all CHRIS_VOICE prompts state the hierarchy (vol = reference, VaR/ES = limits, Total =
+house composite). Step 4 open (re-audit on ch 11–15 publish).
 
 **Stock-level breach analysis, APPLIED 2026-07-03:** the linkage positions now carry the
 factor/specific split + drivers (`weight_migration` / `specific_move` / `factor_move` / `mixed`,

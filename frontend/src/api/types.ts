@@ -90,6 +90,7 @@ export interface DrawdownResult {
 }
 
 export interface WhatIfRisk {
+  model_vol_1d: number;               // the reference risk number (σ = √(x'Fx + w'Δw))
   scenario_var_99: number; scenario_var_975: number;
   es_975: number; es_99: number; specific_vol: number;
   total_var_99: number; top5_ctr_share: number | null; gross: number; net: number;
