@@ -17,6 +17,7 @@ import type {
   PnlLinkageRow, PnlSeriesPoint,
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
+import { StreamPanel } from "../components/StreamPanel";
 import { HowToRead, QueryState, RagDot } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
@@ -538,6 +539,39 @@ function PnlTab() {
               convention: <em>cumulative arithmetic</em> paths (daily sums), so its endpoint need
               not equal the linked headline. Cariño is one of several exact linking schemes
               (Menchero, GRAP differ only in how cross-terms are shared).
+              {(() => {
+                const top = a.factors[0];
+                if (!top) return null;
+                const sig = a.factors.filter((r) => r.t_stat !== null && Math.abs(r.t_stat) > 2);
+                const est = top.avg_exposure !== null
+                  ? top.avg_exposure * top.cum_factor_return : null;
+                return (
+                  <>
+                    {" "}The factor table, column by column: <em>avg exposure</em> is the book&rsquo;s
+                    mean net loading x̄_k over the window on the drifting buy-and-hold weight path
+                    (not the frozen x(T) the reconcile bands use; Market reads{" "}
+                    {num(a.factors.find((r) => r.factor === "Market")?.avg_exposure ?? 1, 2)}, below
+                    1, because unpriced weight carries no loading). <em>Cum factor return</em> is
+                    what the factor itself did — portfolio-agnostic, the was-there-anything-to-harvest
+                    column. <em>Contribution</em> is the money, Σ x_k,t·f_k,t Cariño-linked — and
+                    note it is NOT avg&nbsp;exposure × cum&nbsp;return
+                    ({top.factor}: {est !== null ? signedPct(est, 1) : "—"} naive vs{" "}
+                    {signedPct(top.contribution, 1)} actual): the gap is timing covariance, whether
+                    the book carried more exposure on the factor&rsquo;s good days.
+                    {" "}<em>% of total</em> is contribution ÷ the geometric headline — happily
+                    beyond 100% when another source gave money back. <em>t-stat</em> is the mean
+                    daily contribution over its standard error — t = IR·√T humility per factor: a
+                    big contribution with |t| &lt; 2 is one good year, not proof
+                    {sig.length
+                      ? <> (only {sig.map((r) => `${r.factor} ${signedNum(r.t_stat!, 1)}`).join(", ")}
+                        clear{sig.length === 1 ? "s" : ""} |t| &gt; 2 this window)</>
+                      : <> (no factor clears |t| &gt; 2 this window)</>}. Two reads no single
+                    column gives: exposure without return (a tilt that paid nothing) and return
+                    without exposure (a factor that ran while the book stood flat — missed, or
+                    hedged by design).
+                  </>
+                );
+              })()}
             </HowToRead>
 
             <StackedHero series={a.series} />
@@ -752,6 +786,17 @@ function PnlTab() {
           </div>
         )}
       </QueryState>
+
+      <hr className="rule" />
+
+      {/* ---- attribution commentary in the desk risk-manager voice (CHRIS_VOICE) ---- */}
+      <div style={{ maxWidth: "46rem" }}>
+        <h2>Risk-manager read</h2>
+        <StreamPanel path="/pnl_attribution/analysis"
+          body={{ frm: from ?? null, to: to ?? null, horizon }}
+          cacheKey={`pnlattr:${from ?? ""}:${to ?? ""}:${horizon}`}
+          label="Generate attribution read" />
+      </div>
     </>
   );
 }

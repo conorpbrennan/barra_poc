@@ -3270,7 +3270,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
     # reconcile (risk↔PnL) — reuse the linkage route's computation, trimmed to verdicts + drivers
     try:
         lk = await pnl_attribution_linkage(T=None, horizon=3, book=body.book,
-                                           vol_mult=1.25, rho=0.75)
+                                           vol_mult=1.25, rho=0.75, min_weight=0.001)
         def trim(r):
             o = {"name": r["name"], "z": r.get("z"), "verdict": r["verdict"]}
             if r.get("driver"):
@@ -3374,6 +3374,109 @@ async def trends_analysis(body: TrendsAnalysisBody):
                 model="claude-opus-4-8", max_tokens=3000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": TRENDS_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": payload}],
+            ) as stream:
+                yield from stream.text_stream
+        except anthropic.APIError as e:
+            yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
+    return StreamingResponse(gen(), media_type="text/markdown")
+
+
+# ============================================================================ pnl attribution (LLM)
+# The PnL-attribution lens narrated: the Cariño-linked window split, the by-factor table, the
+# residual RAG diagnostics, and the linkage verdicts — same no-tools Messages-API pattern.
+
+PNLATTR_SYSTEM = CHRIS_VOICE + """
+You are writing a short read of the book's REALIZED PnL ATTRIBUTION over one window — the
+Soros 13F overlay on a Barra-style factor model. Returns are fractions (0.12 = 12%). The parts
+are Cariño-linked: factor contributions + specific sum to the geometric window return EXACTLY.
+
+The payload:
+- `headline` — realized geometric return, linked factor total, linked specific total. Specific is
+  stock-selection money the factor block can't explain. Understand ALL of it: an unexplained GAIN
+  gets investigated exactly like a loss — it is risk that happened to pay.
+- `factors` — per factor: avg_exposure (book's mean net loading over the window),
+  cum_factor_return (what the factor itself did — portfolio-agnostic), contribution (the money,
+  linked), pct_of_total, t_stat (mean daily contribution / SE — t = IR·√T humility: a big
+  contribution with |t| < 2 is one good year, not proof; only |t| > 2 is a reliable flow).
+  Read exposure-without-return (a tilt that paid nothing) and return-without-exposure (a factor
+  that ran while the book stood flat) as findings, not trivia.
+- `residual_checks` — the RAG diagnostics on the specific stream (IR, realized/predicted specific
+  vol, autocorrelation, residual-vs-factor regression, bias stats, residual HHI, hit rate).
+  Correlated residuals = a missing factor. A red here outranks any contribution number.
+- `linkage` — the risk↔PnL reconcile verdicts at T (factor rows + positions outside their ex-ante
+  bands, with driver reads: exposure_migration is a band artifact, not an event; hidden_beta means
+  suspect the loading, not the factor).
+- `coverage` — priced share of the book; name the unpriced weight if material.
+
+Hard rules:
+- Reason ONLY from the payload; cite the figure next to every claim. Never invent a name or value.
+- It's usually just beta: if Market dominates the factor total, say so first and plainly.
+- Exposure ≠ risk contribution ≠ PnL contribution — do not conflate them.
+- Artifacts before alarms: check exposure_migration / coverage / thin-t before calling an event.
+
+Output: tight GitHub-flavoured markdown. One-line headline (where the money came from and whether
+to believe it). Short sections: factor flows (with t-stat humility), the specific stream (residual
+verdicts), reconcile breaches worth a look. End with "**Do next:**" — the one or two checks a desk
+risk manager would run first. 130–260 words."""
+
+
+class PnlAttrAnalysisBody(BaseModel):
+    frm: str | None = None
+    to: str | None = None
+    horizon: int = 3
+    notes: str | None = None
+
+
+@app.post("/pnl_attribution/analysis")
+async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
+    """Streamed CHRIS_VOICE read of the PnL-attribution lens: the linked window split, factor
+    table, residual RAG and linkage verdicts. Same no-tools pattern and rate limit as /analysis."""
+    _rate_limit()
+    client = _anthropic()          # 502 before the work if there's no key
+    # NB internal calls must pass EVERY Query-defaulted param explicitly — a bare call would
+    # receive the FastAPI Query objects, not their values (the /overview min_weight lesson)
+    attr = await pnl_attribution(body.frm, body.to, book="Soros", by=None)
+    resid = await pnl_attribution_residual(body.frm, body.to, book="Soros")
+    link = await pnl_attribution_linkage(None, body.horizon, book="Soros",
+                                         vol_mult=1.25, rho=0.75, min_weight=0.001)
+
+    def rnd(v):
+        return round(v, 5) if isinstance(v, (int, float)) else v
+    payload = json.dumps({
+        "window": {"from": attr["from"], "to": attr["to"], "n_days": attr["n_days"]},
+        "headline": {k: rnd(v) for k, v in attr["headline"].items()},
+        "factors": [{k: rnd(v) for k, v in r.items()} for r in attr["factors"]],
+        "coverage": {"mean_priced_share": rnd(attr["coverage"]["mean_priced_share"]),
+                     "unpriced": attr["coverage"]["unpriced"][:5]},
+        "residual_checks": [{k: rnd(v) for k, v in c.items()} for c in resid["checks"]],
+        "residual_status": resid["status"],
+        "linkage": {
+            "T": link["T"], "to": link["to"],
+            "factor_breaches": [
+                {"name": r["name"], "z": rnd(r["z"]), "verdict": r["verdict"],
+                 "driver": (r.get("driver") or {}).get("kind"),
+                 "text": (r.get("driver") or {}).get("text")}
+                for r in link["rows"] + [link["book_total"]] if r["verdict"] != "within"],
+            "position_breaches": [
+                {"name": p["name"], "weight": rnd(p["weight"]), "z": rnd(p["z"]),
+                 "verdict": p["verdict"], "driver": (p.get("driver") or {}).get("kind"),
+                 "hidden_beta": (p.get("driver") or {}).get("hidden_beta"),
+                 "text": (p.get("driver") or {}).get("text")}
+                for p in link["positions"] if p["verdict"] != "within"],
+            "breach_comovement": (link.get("breach_comovement") or {}).get("text"),
+            "dust_excluded": link.get("dust_excluded"),
+        },
+        "desk_notes": body.notes or "",
+    }, default=str)
+
+    def gen():
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-8", max_tokens=3000,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": PNLATTR_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": payload}],
             ) as stream:

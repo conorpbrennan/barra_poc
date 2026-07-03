@@ -45,7 +45,12 @@ just-beta; exposure ≠ risk contribution; correlated residuals = missing factor
 humility; artifacts before alarms). It deliberately never signs a name or claims a specific
 identity. **Any new LLM endpoint must be written as `NEW_SYSTEM = CHRIS_VOICE + """..."""`** —
 `test_analysis.py::t_all_llm_prompts_carry_chris_voice` fails otherwise. Current prompts:
-`ANALYST_SYSTEM`, `OVERVIEW_SYSTEM`, `TRENDS_SYSTEM`, `WHATCHANGED_SYSTEM`, `ASK_SYSTEM`.
+`ANALYST_SYSTEM`, `OVERVIEW_SYSTEM`, `TRENDS_SYSTEM`, `WHATCHANGED_SYSTEM`, `ASK_SYSTEM`,
+`PNLATTR_SYSTEM` (`POST /pnl_attribution/analysis {frm?, to?, horizon?, notes?}` — the
+PnL-attribution lens narrated: linked window split, factor table with t-stat humility,
+residual RAG, linkage breach verdicts; StreamPanel at the bottom of the Attribution PnL tab,
+cached per window+horizon). NB internal calls to Query-defaulted routes must pass EVERY such
+param explicitly or they receive FastAPI Query objects (the /overview min_weight lesson).
 `POST /trends/analysis {set?, notes?}` is the Trends-lens read: the monthly book-measure series
 + quarterly-sampled factor-exposure paths + the limits config, narrated as regimes / current
 level vs history / drift / headroom, ending with a "Watch:". UI: "Risk-manager read" StreamPanel
