@@ -402,7 +402,15 @@ to the ex-ante risk decomposition. Three layers:
   same correlation-stress mode (optional `vol_mult`/`rho` → `correlation_stress` block).
   `/analysis` folds in a trailing-12m headline. UI: Streamlit `render_attribution` (Risk tab —
   period presets, vega-lite stacked hero, RAG table, reconcile SVG) and the Vite Attribution lens
-  "PnL attribution" tab (same views, hand-rolled SVG). Tests: `test_attribution.py` (+ a panel
+  "PnL attribution" tab (same views, hand-rolled SVG). The Vite reconcile is **drillable**:
+clicking a positions-table row (or a factor dot on the band chart — linked selection) opens an
+inline hairline drawer (one at a time) that explains the driver from the same guarded `/pivot`
+the grid uses — per-factor `Factor contribution` bars over the window [T, to) (fwd-month
+convention; the bars sum to the row's realized exactly), the T loadings beside each bar with an
+"N of M loadings" thin-set warning (the hidden-beta suspect), the inverse who-carried-it view by
+Issuer for factor rows, and an "open in Pivot →" link — the Pivot lens applies a one-shot
+`?drill=` param ({rows, cols?, measures, filters}) after dims load, then strips it from the URL.
+Tests: `test_attribution.py` (+ a panel
   test in `test_pivot_app.py`, React tests in `Attribution.test.tsx`).
 
 ## Estimation universe — index membership (`/universe`)
