@@ -269,7 +269,14 @@ Second wave (plan items #6–#10, same day):
   units of the pure factor-k portfolio), ranked by vol saved, plus the single-instrument
   minimum-variance market hedge `h* = −(Fx)_m/F_mm` (beats full neutralization — it nets the
   correlated style covariance too). Specific vol is the floor no factor hedge touches.
-  `_hedge_table` pure. What-if lens panel.
+  **Served from the cube measures** since the Tier-1 migration (`Vol ex factor` — book σ minus
+  the factor's P&L vector with the FULL specific block kept, the factor-aware incremental;
+  `Min-variance hedge ratio` = −cov/(x·vol²), exposure units, x cancels algebraically;
+  `Vol at min-variance hedge`); `_hedge_table` (pure) retained as the live `verification`
+  cross-check (~1e-17). `/stress`/`/reverse_stress` factor vols likewise now come from the
+  cube's `Factor return vol` (std of the ShockVec — the old pandas `wide.std()` estimator;
+  in-cube identity `Scenario PnL vol == |Net exposure|·Factor return vol` is tested). What-if
+  lens panel.
 - **`GET /factor_portfolio?factor=&date=`** — ch-07's dual made visible: reconstructs
   `P = (X'W²X)⁻¹X'W²` on the funnel survivors (≈ estimation universe; W = the builder's
   exp(Size/4) sqrt-cap proxy) and serves one factor's pure portfolio: top longs/shorts, gross,

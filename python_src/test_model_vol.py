@@ -179,6 +179,43 @@ def t_incremental_model_vol_ties_to_whatif():
     assert 0 < cube[top["position"]] < float(_book_cell("Model vol")["Model vol"])
 
 
+@integ
+def t_factor_return_vol_identity():
+    """In-cube identity at every Factor member: Scenario PnL vol == |Net exposure| ·
+    Factor return vol (std(x·f) = |x|·std(f)) — pins the raw-vol measure that /stress and
+    /reverse_stress now consume via _factor_vols."""
+    j = _pivot(rows="Factor", measures="Scenario PnL vol,Net exposure,Factor return vol",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    checked = 0
+    for r in j["records"]:
+        if any(r.get(k) is None for k in ("Scenario PnL vol", "Net exposure", "Factor return vol")):
+            continue
+        lhs = float(r["Scenario PnL vol"])
+        rhs = abs(float(r["Net exposure"])) * float(r["Factor return vol"])
+        assert abs(lhs - rhs) < 1e-14, (r["Factor"], lhs, rhs)
+        assert float(r["Factor return vol"]) > 0
+        checked += 1
+    assert checked >= 10, f"only {checked} factors checked"
+
+
+@integ
+def t_hedge_served_from_cube():
+    """/hedge now serves the cube measures; the numpy _hedge_table cross-check (`verification`)
+    must sit at float precision, and the D6 identity holds: the min-variance market hedge beats
+    (or equals) full Market neutralization."""
+    import requests
+    j = requests.get(f"{API}/hedge", params={"date": DATE}, timeout=120).json()
+    assert j.get("source") == "cube"
+    v = j["verification"]
+    assert v["vol_base_abs_diff"] < 5e-10, v
+    assert v["max_vol_after_abs_diff"] < 5e-10, v
+    assert v["h_star_abs_diff"] is not None and v["h_star_abs_diff"] < 5e-8, v
+    mkt_row = next(r for r in j["rows"] if r["factor"] == "Market")
+    assert j["market_hedge"]["vol_after"] <= mkt_row["vol_after"] + 1e-12
+    # no factor hedge beats the specific floor
+    assert all(r["vol_after"] >= j["specific_vol"] - 1e-12 for r in j["rows"])
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")

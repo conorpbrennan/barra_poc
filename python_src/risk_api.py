@@ -114,6 +114,9 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # diversification-aware incremental (vol released by removing the member):
                  "Model vol", "Marginal Model vol", "% of Model vol", "Incremental Model vol",
                  "Factor variance contribution",
+                 # Tier-1 migrations: raw factor vol + the D6 hedge family (by-Factor views):
+                 "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
+                 "Vol at min-variance hedge",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -132,6 +135,8 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Scenario PnL vol", "Total ES 97.5", "Model vol",
             "Marginal Model vol", "% of Model vol", "Incremental Model vol",
             "Factor variance contribution",
+            "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
+            "Vol at min-variance hedge",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -1156,12 +1161,15 @@ async def drawdown(set: str = "HistFull", date: str | None = None, book: str = "
 # breaches a loss) stress are computed in the API from exposures + vols — no cube rebuild.
 
 def _factor_vols() -> dict:
-    """Per-factor return vol, matching build_scenarios: std over the dropna'd daily factor-return
-    panel. Cached on S."""
+    """Per-factor return vol — served from the cube's `Factor return vol` measure (std of the
+    HistFull ShockVec; identical estimator to the old pandas wide.std(), one source of truth
+    with the grid). Cached on S. Call from a threadpool context (cube query)."""
     if "factor_vols" not in S:
-        fr = S["frames"]["factor_returns"]
-        wide = fr.pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
-        S["factor_vols"] = {str(f): float(wide[f].std()) for f in wide.columns}
+        cube = S["cube"]; l, m = cube.levels, cube.measures
+        df = (cube.query(m["Factor return vol"], levels=[l["Factor"]],
+                         filter=l["ScenarioSet"] == "HistFull").reset_index())
+        S["factor_vols"] = {str(r["Factor"]): float(r["Factor return vol"])
+                            for _, r in df.iterrows()}
     return S["factor_vols"]
 
 
@@ -1259,10 +1267,11 @@ def _corr_stress_result(date: str, book: str, vol_mult: float, rho: float) -> di
 @app.post("/stress")
 async def stress(body: StressBody):
     """Custom one-day stress: book P&L under user-defined per-factor sigma shocks (and a per-factor
-    contribution breakdown). dPnL = Σ x_k·(sigma_k·vol_k) — the same math as the baked-in Hypo sets.
+    contribution breakdown). dPnL = Σ x_k·(sigma_k·vol_k) — the same math as the baked-in Hypo sets;
+    vols come from the cube's `Factor return vol` measure (via _factor_vols).
     Optional vol_mult/rho add a correlation-stress read (vols up, correlations toward 1)."""
-    vols = _factor_vols()
-    bad = [f for f in body.shocks if f not in vols]
+    known = set(S["frames"]["factor_meta"]["Factor"].astype(str))
+    bad = [f for f in body.shocks if f not in known]
     if bad:
         raise HTTPException(400, f"unknown factor(s): {bad}")
     if not body.shocks:
@@ -2418,27 +2427,67 @@ def _hedge_table(x: np.ndarray, F: np.ndarray, svar: float, factors: list[str]) 
 
 @app.get("/hedge")
 async def hedge(date: str | None = None, book: str = "Soros"):
-    """What hedging each factor would do: book daily vol before/after zeroing each net exposure
-    (the pure-factor-portfolio hedge), ranked by vol saved, plus the minimum-variance market
-    hedge h* = −β. Specific risk is untouched by construction — factor hedges can't remove it."""
+    """What hedging each factor would do — SERVED FROM THE CUBE measures (`Vol ex factor` per
+    factor = vol after zeroing that net exposure with the specific block kept; `Min-variance
+    hedge ratio` / `Vol at min-variance hedge` = the D6 single-instrument hedge), ranked by vol
+    saved. The retained numpy `_hedge_table` is recomputed on every call as an independent
+    cross-check (`verification`). Specific risk is untouched by construction."""
     def run():
         d = date or _latest_date()
+        # numpy reference — the independent implementation, kept as a live cross-check
         L, w, s, R = _book_inputs(d, book)
         if not float(np.abs(w.to_numpy()).sum()):
             raise HTTPException(404, f"no {book} positions at {d}")
         F = np.cov(R, rowvar=False)
         x = L.to_numpy().T @ w.to_numpy()
         svar = float(np.sum(w.to_numpy() ** 2 * s.to_numpy()))
-        res = _hedge_table(x, F, svar, list(L.columns))
-        res.update({
-            "date": d, "book": book, "specific_vol": float(np.sqrt(svar)),
+        ref = _hedge_table(x, F, svar, list(L.columns))
+        ref_after = {r["factor"]: r["vol_after"] for r in ref["rows"]}
+        # cube-served numbers (HistFull = the model σ)
+        cube = S["cube"]; l, m = cube.levels, cube.measures
+        flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
+        if "Book" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Book"] == book)
+        bk = cube.query(m["Model vol"], m["Specific vol"], filter=flt)
+        if not len(bk):
+            raise HTTPException(404, f"no cube cell at {d} / HistFull")
+        vol_base = float(bk.iloc[0]["Model vol"])
+        spec_vol = float(bk.iloc[0]["Specific vol"])
+        dfF = (cube.query(m["Net exposure"], m["Vol ex factor"],
+                          m["Min-variance hedge ratio"], m["Vol at min-variance hedge"],
+                          levels=[l["Factor"]], filter=flt).reset_index())
+        rows = sorted(
+            [{"factor": str(r["Factor"]), "exposure": float(r["Net exposure"]),
+              "hedge_units": -float(r["Net exposure"]),
+              "vol_after": float(r["Vol ex factor"]),
+              "vol_reduction": vol_base - float(r["Vol ex factor"])}
+             for _, r in dfF.iterrows() if pd.notna(r["Vol ex factor"])],
+            key=lambda r: -r["vol_reduction"])
+        mkt = None
+        mrow = dfF[dfF["Factor"] == "Market"]
+        if len(mrow) and pd.notna(mrow.iloc[0]["Min-variance hedge ratio"]):
+            after = float(mrow.iloc[0]["Vol at min-variance hedge"])
+            mkt = {"h_star": float(mrow.iloc[0]["Min-variance hedge ratio"]),
+                   "vol_after": after, "vol_reduction": vol_base - after}
+        verification = {
+            "vol_base_abs_diff": abs(vol_base - ref["vol_base"]),
+            "max_vol_after_abs_diff": max((abs(r["vol_after"] - ref_after.get(r["factor"], 0.0))
+                                           for r in rows), default=0.0),
+            "h_star_abs_diff": (abs(mkt["h_star"] - ref["market_hedge"]["h_star"])
+                                if mkt and ref.get("market_hedge") else None),
+        }
+        return {
+            "date": d, "book": book, "source": "cube",
+            "vol_base": vol_base, "specific_vol": spec_vol,
+            "rows": rows, "market_hedge": mkt,
+            "verification": verification,
             "note": ("hedge_units = −x_k of the pure factor-k portfolio (ch 07's f̂ = Pr dual) — "
                      "implementable in principle, but pure portfolios carry real leverage/turnover "
                      "cost. The market h* is the D6 single-instrument minimum-variance hedge "
                      "(h* = −β of the book on the Market factor). Vol is model vol σ² = x'Fx + "
-                     "w'Δw; the specific block survives any factor hedge."),
-        })
-        return res
+                     "w'Δw; the specific block survives any factor hedge. Served from the cube "
+                     "measures; `verification` is the live numpy cross-check."),
+        }
     return await run_in_threadpool(run)
 
 

@@ -437,6 +437,35 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # By Factor: per factor this IS the ch-09 CTV = x_k(Fx)_k (cross-terms 50/50, negative =
     # hedge) and Σ_factor = the factor variance x'Fx. /contributions serves it.
     m["Factor variance contribution"] = _cov_book
+
+    # ---- Tier-1 cube migrations (docs/cube-measure-opportunities.md) -----------------------
+    # Factor return vol: std of the RAW factor-return vector (the ShockVec itself, exposure-
+    # free) — per Factor on HistFull this is vol_k = std(f_k), the same wide.std() estimator
+    # /stress and /reverse_stress used from pandas; on Evt:* sets it reads the window vol.
+    # In-cube identity: Scenario PnL vol == |Net exposure| * Factor return vol at any Factor
+    # member (std(x·f) = |x|·std(f)).
+    _shock_vec = tt.agg.single_value(t_scn["ShockVec"])
+    m["Factor return vol"] = tt.array.std(_shock_vec)
+    m["Factor return vol"].formatter = "DOUBLE[0.00%]"
+    # Vol ex factor: book sigma with the current cell's FACTOR P&L removed but the FULL specific
+    # block kept — by FACTOR this is the hedge table's vol-after-neutralizing-k (zeroing x_k
+    # cannot touch specific risk; NB Incremental Model vol strips the cell's specific, which is
+    # right for NAMES and wrong here — the fan-out trap, handled explicitly).
+    _svar_book = tt.total(m["Specific variance"], h["Security"], h["FactorDim"])
+    m["Vol ex factor"] = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + _svar_book)
+    m["Vol ex factor"].formatter = "DOUBLE[0.00%]"
+    # Min-variance hedge ratio (appendix D6), in EXPOSURE units: h* = −(Fx)_k/F_kk. Via the
+    # polarization cov: cov(book, v_k) = x_k·(Fx)_k and var(f_k) = F_kk, so
+    # h* = −cov/(x_k·vol_k²) — algebraically x_k cancels out of (Fx)_k, so a near-zero exposure
+    # still reads the true ratio (0/0 -> blank only at exactly zero).
+    m["Min-variance hedge ratio"] = (-_cov_book
+        / (m["Net exposure"] * m["Factor return vol"] ** 2))
+    m["Min-variance hedge ratio"].formatter = "DOUBLE[0.000]"
+    # Vol at min-variance hedge: book sigma after ADDING h* units of the pure factor-k return
+    # stream (specific block untouched) — the D6 single-instrument hedge priced per slice.
+    _hedged_vec = book_pnl_vec + m["Min-variance hedge ratio"] * _shock_vec
+    m["Vol at min-variance hedge"] = tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book)
+    m["Vol at min-variance hedge"].formatter = "DOUBLE[0.00%]"
     # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
     # vector minus this cell's, its specific variance minus this cell's), subtract from the book
     # sigma. NOT additive (vol is sub-additive) — it answers "how much vol does removing this

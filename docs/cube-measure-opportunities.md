@@ -11,6 +11,11 @@ weights, shock vectors, specific var), (b) the math is per-cell algebra / array 
 aggregation — no matrix inverses, no rolling windows, no cross-member order statistics, and
 (c) a slice, drill, or what-if of the number is actually useful to the desk.
 
+**Status: Tier 1 BUILT 2026-07-03** — `Factor return vol` (feeds `_factor_vols` → `/stress`,
+`/reverse_stress`; in-cube identity tested), `Vol ex factor`, `Min-variance hedge ratio`,
+`Vol at min-variance hedge` (serve `/hedge`, `_hedge_table` kept as the live cross-check;
+verification ~1e-17). Tier 2 and the liquidity note remain open.
+
 ## Tier 1 — clear wins, small and mechanical
 
 **1. `Factor return vol` measure** (replaces `_factor_vols()` in `/stress`, `/reverse_stress`)
