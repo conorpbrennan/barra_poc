@@ -315,6 +315,14 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         wgt * wgt * tt.agg.single_value(t_sv["SpecificVar"]),
         scope=tt.OriginScope({l["Date"], l["Position"]}))
     m["Specific vol"] = tt.math.sqrt(m["Specific variance"])
+    # gross/net book weight from the JOINED Positions Weight (branch-sensitive like everything
+    # else; one term per (Date, Position) like Specific variance). In-cube identity: Net weight
+    # == Net exposure at Factor=Market (the unit Market loading makes x_Market = Σ weights).
+    m["Net weight"] = tt.agg.sum(wgt, scope=tt.OriginScope({l["Date"], l["Position"]}))
+    m["Gross weight"] = tt.agg.sum(tt.math.abs(wgt),
+                                   scope=tt.OriginScope({l["Date"], l["Position"]}))
+    for _mn in ("Net weight", "Gross weight"):
+        m[_mn].formatter = "DOUBLE[0.000]"
     # ---- model vol: THE reference risk number (2026-07-03), sigma = sqrt(x'Fx + w'dw) ---------
     # Factor half = std of the scenario P&L vector (atoti 'sample' mode == np.cov ddof=1), so
     # sliced to HistFull this IS the model sigma on the same full-history covariance the API uses

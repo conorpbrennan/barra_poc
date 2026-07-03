@@ -234,6 +234,25 @@ def t_top5_risk_share_cube():
     assert abs(float(lt["value"]) - top5) < 1e-12, (lt["value"], top5)
 
 
+@integ
+def t_gross_net_weight_measures():
+    """Gross/Net weight measures: the in-cube identity Net weight == Net exposure at
+    Factor=Market (unit Market loading makes x_Market = Σw), Gross >= |Net|, the 13F book is
+    fully invested (net ≈ 1), and /whatif serves them from the cube with the numpy weights
+    inside the tight verification bound."""
+    import requests
+    r = _book_cell("Net weight,Gross weight")
+    net, gross = float(r["Net weight"]), float(r["Gross weight"])
+    assert abs(net - 1.0) < 1e-9 and gross >= abs(net) - 1e-12, (net, gross)
+    j = _pivot(rows="Factor", measures="Net exposure",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    mkt = next(float(x["Net exposure"]) for x in j["records"] if x["Factor"] == "Market")
+    assert abs(net - mkt) < 1e-12, (net, mkt)
+    w = requests.post(f"{API}/whatif", json={"trades": []}, timeout=120).json()
+    assert abs(w["before"]["net"] - net) < 1e-12
+    assert "error" not in w["verification"] and w["verification"]["max_abs_diff_vols"] < 5e-10
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")

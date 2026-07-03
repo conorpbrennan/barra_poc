@@ -124,6 +124,8 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # concentration: 5 largest names' share of Total VaR (tt.rank over the flat
                  # PositionRank hierarchy; set-dependent like the marginals):
                  "Top-5 risk share",
+                 # gross/net book weight (scenario-independent, branch-sensitive):
+                 "Gross weight", "Net weight",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -1623,8 +1625,9 @@ async def contributions(date: str | None = None, book: str = "Soros"):
 _CUBE_RISK_KEYS = {"model_vol_1d": "Model vol", "scenario_var_99": "Scenario VaR 99",
                    "scenario_var_975": "Scenario VaR 97.5", "es_975": "Scenario ES 97.5",
                    "es_99": "Scenario ES 99", "specific_vol": "Specific vol",
-                   "total_var_99": "Total VaR 99", "top5_ctr_share": "Top-5 risk share"}
-_WHATIF_AUX_KEYS = ("gross", "net")                     # plain weight arithmetic — numpy
+                   "total_var_99": "Total VaR 99", "top5_ctr_share": "Top-5 risk share",
+                   "gross": "Gross weight", "net": "Net weight"}
+_WHATIF_AUX_KEYS: tuple = ()                            # every key is cube-served now
 
 
 def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
@@ -1672,7 +1675,7 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
             cube_after = _cube_risk_block(date, book, scenario=branch)
         else:
             cube_after = dict(cube_before)
-        _vk = ("model_vol_1d", "specific_vol")
+        _vk = ("model_vol_1d", "specific_vol", "gross", "net")
         _tk_ = ("scenario_var_99", "scenario_var_975", "es_975", "es_99", "total_var_99")
         verification = {
             "max_abs_diff_vols": max(abs(c[k] - r[k]) for c, r in
