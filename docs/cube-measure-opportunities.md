@@ -98,15 +98,15 @@ lifecycle, cleanup, concurrency of parallel what-ifs); do it after 1–3 prove u
 | Endpoint(s) | Python math | Why it stays |
 |---|---|---|
 | `/backtest` | rolling equal/EWMA/FHS VaR thresholds, Kupiec, Basel | rolling windows + sequential EWMA recursion — not array algebra; the CLAUDE.md exception class verbatim |
-| `/drawdown` | cumprod equity curve, running max | scan/prefix operations — no cube primitive |
+| `/drawdown` | cumprod equity curve, running max | **NARROWED**: `tt.array.prefix_sum` exists (a scan primitive), so a cumulative-P&L curve IS expressible — the missing piece is specifically a running-MAX over the vector, which max-drawdown needs. Still Python |
 | `/calibration` | rolling bias stat, `_pred_book_vols` | rolling window + **point-in-time covariance** (F built on history ≤ t; the cube's scenario vector is deliberately the full history — Date slices exposures, not the shock cache) |
 | `/pnl_attribution` + `/residual` | Cariño linking, IR, autocorrelation, residual-vs-factor regression, bias stats | time-series reductions and regressions — the designed split; the additive drill already lives in the cube |
 | `/pnl_attribution/linkage` | bands `|x_k|·σ_k(≤T)·√h`, `_stressed_cov`, driver reads | same point-in-time-covariance reason (band σ at T ≠ full-history σ), plus the ρ-blend matrix op; the *realized* side already ties to the cube's attribution measures |
 | `/stress` conditional | `E[f|s] = F[:,S]F[S,S]⁻¹s` | matrix solve |
 | `/factor_portfolio` | `P = (X'W²X)⁻¹X'W²` | matrix inverse |
 | `/hedge` multi-instrument | `−Cov(r_H)⁻¹Cov(r_H, r_p)` | matrix inverse (single-instrument h* moves in Tier 1) |
-| `/limits` Top-5 risk share | top-k across members | cross-member ORDER statistics — atoti's `n_lowest` ranks within a vector, not across members (Risk HHI worked because it is algebraic; top-5 is not) |
-| `/exposure_profile` | histogram, quantiles of the loading cross-section | cross-member order statistics again |
+| `/limits` Top-5 risk share | top-k across members | **CORRECTED 2026-07-04**: `tt.rank` DOES rank across members — top-5 is cube-expressible (rank Marginal Total VaR over Position, sum shares where rank ≤ 5). Stays in Python by CHOICE (one scalar, no drill payoff, `_risk_from_weights` already verified) — move it only if /limits ever goes fully cube-served |
+| `/exposure_profile` | histogram, quantiles of the loading cross-section | **CORRECTED**: `tt.agg.quantile` aggregates across members, so the quantiles are expressible; the histogram bins/tail lists remain pandas-natural. Display-only view, no slice/drill benefit — stays by choice |
 | `/pnl_attribution/names` | winners/losers ranking, sign persistence | ranking + sequential sign runs |
 | `/universe`, `/funnel`, `/span`, `/drift` | PIT classification, Mahalanobis, funnel stages | offline precomputes over artifacts by design (network-fetched inputs, not cube facts) |
 | `/regression`, `/factor_cov` | WLS t-stats artifact; factor correlation MATRIX | builder-side artifact; pairwise cross-member correlation matrix has no member×member axis in the cube |
