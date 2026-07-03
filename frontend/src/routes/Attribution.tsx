@@ -517,6 +517,29 @@ function PnlTab() {
                 Cariño-linked, parts sum to the geometric return exactly
               </span>
             </p>
+
+            <HowToRead>
+              Three return conventions meet here, one per axis. <em>Across sources</em> (factors +
+              specific) the split is <em>arithmetic</em>: each period, realized = Σ factor
+              contributions + specific — an exact identity (the model&rsquo;s own reconstruction
+              R = L·f + ε, tied at machine precision). <em>Across time</em> the book compounds
+              {" "}<em>geometrically</em>: R_G = Π(1+r_t) − 1, and plain time-sums of the
+              arithmetic contributions miss the compounding cross-terms (two +10% days sum to
+              +20% but compound to +21% — the extra 1% belongs to no single source).
+              {" "}<em>Cariño linking</em> is the bridge: scale each period&rsquo;s contributions
+              by <code>k_t = ln(1+r_t)/r_t</code>, normalise by <code>K = ln(1+R_G)/R_G</code> —
+              log-returns are additive in time, so the cross-terms get shared out proportionally
+              and the linked parts sum to the geometric return <em>exactly</em>, no plug — here
+              factor {signedPct(a.headline.factor, 1)} + specific {signedPct(a.headline.specific, 1)}
+              {" "}= {signedPct(a.headline.realized_geometric, 1)} realized. So factor-additivity survives
+              compounding — the by-factor table&rsquo;s contribution column foots to the headline —
+              and each linked part is an honest share of the compounded total, which is why the
+              parts can each be larger than the headline. NB the chart below uses the third
+              convention: <em>cumulative arithmetic</em> paths (daily sums), so its endpoint need
+              not equal the linked headline. Cariño is one of several exact linking schemes
+              (Menchero, GRAP differ only in how cross-terms are shared).
+            </HowToRead>
+
             <StackedHero series={a.series} />
             <p className="muted small" style={{ margin: "0.2rem 0 1rem" }}>
               Cumulative arithmetic contributions — where the money came from. The ink line is
