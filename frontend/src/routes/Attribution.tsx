@@ -14,7 +14,7 @@ import type {
   ContributionsResult, PnlAttributionResult, PnlLinkageResult, PnlSeriesPoint,
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
-import { QueryState, RagDot } from "../components/ui";
+import { HowToRead, QueryState, RagDot } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
 const INK = "#111";
@@ -521,6 +521,22 @@ function EulerTab() {
             </span>
           </p>
 
+          <HowToRead>
+            Both tables recover the same {pct(c.vol_1d, 2)} book vol, but in different units —
+            that is the one trap here. The <em>position</em> table is the direct read: CTR = w·MCR
+            is an exact Euler split of σ, so the CTR column simply sums to
+            {" "}{pct(c.vol_1d, 2)}. The <em>factor</em> table works in variance: CTV_k = x_k·(Fx)_k
+            sums to factor variance x&prime;Fx, not vol — to recover σ, add back the specific block
+            and take the square root:
+            {" "}<code>√(Σ CTV + specific) = √({signedNum(c.sum_ctv * 1e4, 2)} +
+            {" "}{signedNum(c.specific_variance * 1e4, 2)} bp²) = {pct(c.vol_1d, 2)}</code>
+            {" "}(the recovery row under the table). Never compare a CTR with a CTV directly —
+            vol units vs variance units. Cross-factor covariance is split 50/50 inside CTV, so a
+            negative CTV line is a genuine hedge; MCR is a rate (risk per unit weight), nothing
+            to sum. All of it is model vol on the full factor-return history — distinct from the
+            scenario-VaR views.
+          </HowToRead>
+
           <h2>Factors — contribution to variance (CTV)</h2>
           <table className="tufte">
             <thead><tr><th className="label">Factor</th><th>Exposure</th><th>CTV</th>
@@ -544,11 +560,17 @@ function EulerTab() {
                 <td>{signedNum(c.specific_variance * 1e4, 2)}bp²</td>
                 <td>{pct(c.specific_variance / c.total_variance, 1)}</td>
               </tr>
+              <tr style={{ fontWeight: 600 }}>
+                <td className="label">√ total = model vol</td><td></td>
+                <td>{pct(Math.sqrt(c.total_variance), 2)}</td>
+                <td className="muted small">= {pct(c.vol_1d, 2)} hero</td>
+              </tr>
             </tbody>
           </table>
           <p className="muted small">
             CTV_k = x_k·(Fx)_k — cross-terms split 50/50; a negative line hedges the book.
-            Sums to factor variance; plus specific = total variance = vol².
+            Sums to factor variance; plus specific = total variance; √ recovers the
+            {" "}{pct(c.vol_1d, 2)} book vol.
           </p>
 
           <h2>Positions — contribution to risk (CTR)</h2>
