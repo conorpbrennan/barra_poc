@@ -124,6 +124,11 @@ export interface StressResult {
   date: string; book: string; shocks: Record<string, number>;
   total_pnl: number; loss: number; components: StressComponent[];
   conditional?: { total_pnl: number; loss: number; components: ConditionalComponent[]; note: string };
+  correlation_stress?: {
+    vol_mult: number; rho_blend: number;
+    base_vol_1d: number; stressed_vol_1d: number;
+    base_var99_normal: number; stressed_var99_normal: number;
+  };
 }
 export interface ReverseStressFactor {
   factor: string; exposure: number; vol: number;

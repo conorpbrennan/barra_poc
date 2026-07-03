@@ -35,6 +35,9 @@ export function Stress() {
 
   const [shocks, setShocks] = useState<Record<string, number>>({});
   const [conditional, setConditional] = useState(true);
+  const [corrStress, setCorrStress] = useState(false);
+  const [volMult, setVolMult] = useState(1.25);
+  const [rhoBlend, setRhoBlend] = useState(0.75);
   const [result, setResult] = useState<StressResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -45,7 +48,8 @@ export function Stress() {
     setBusy(true); setErr(null);
     try {
       setResult(await apiSend<StressResult>("POST", "/stress",
-        { shocks: active, date, book, conditional }));
+        { shocks: active, date, book, conditional,
+          ...(corrStress ? { vol_mult: volMult, rho: rhoBlend } : {}) }));
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
 
@@ -66,7 +70,10 @@ export function Stress() {
         single-factor σ-move that produces a target loss, smallest move = most vulnerable.
         Caveats: linear (no convexity), one-day horizon, vols and correlations from the full
         history (a hot-regime factor reads too calm — check the vol ratio in the Model lens),
-        and no shock touches specific risk.
+        and no shock touches specific risk. The <em>stressed vols &amp; correlations</em> option
+        adds a third read: book vol under F′ (vols ×m, correlations blended toward 1) — the same
+        stress as the reconcile chart&rsquo;s stressed band; the base→stressed gap is the
+        diversification the book is leaning on.
       </HowToRead>
 
       <h2>Custom shock (σ per factor)</h2>
@@ -97,6 +104,23 @@ export function Stress() {
             onChange={(e) => setConditional(e.target.checked)} />
           correlated (conditional) — co-moving factors move too
         </label>
+        <label className="row small muted" style={{ gap: "0.3rem" }}>
+          <input type="checkbox" checked={corrStress}
+            onChange={(e) => setCorrStress(e.target.checked)} />
+          stressed vols &amp; correlations
+        </label>
+        {corrStress && (
+          <>
+            <label className="row small muted" style={{ gap: "0.3rem" }}>
+              vols ×<input type="number" step={0.05} min={1} style={{ width: "3.6rem" }}
+                value={volMult} onChange={(e) => setVolMult(Number(e.target.value))} />
+            </label>
+            <label className="row small muted" style={{ gap: "0.3rem" }}>
+              ρ→1 blend<input type="number" step={0.05} min={0} max={1} style={{ width: "3.6rem" }}
+                value={rhoBlend} onChange={(e) => setRhoBlend(Number(e.target.value))} />
+            </label>
+          </>
+        )}
         {err && <span className="err small">{err}</span>}
       </div>
 
@@ -129,6 +153,24 @@ export function Stress() {
               ))}
             </tbody>
           </table>
+          {result.correlation_stress && (
+            <div style={{ margin: "0.8rem 0" }}>
+              <h2>Correlation stress — the book under shocked vols &amp; correlations</h2>
+              <p className="small" style={{ margin: 0 }}>
+                Book daily vol {pct(result.correlation_stress.base_vol_1d, 2)} →{" "}
+                <strong>{pct(result.correlation_stress.stressed_vol_1d, 2)}</strong>{" "}
+                (vols ×{result.correlation_stress.vol_mult}, correlations blended{" "}
+                {result.correlation_stress.rho_blend} toward 1) · normal-approx VaR99{" "}
+                {pct(result.correlation_stress.base_var99_normal, 2)} →{" "}
+                {pct(result.correlation_stress.stressed_var99_normal, 2)}
+              </p>
+              <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+                Correlations only enter the aggregate: the book widens even where no single
+                factor does — that gap is the diversification the book is leaning on. Same
+                stress as the reconcile chart&rsquo;s stressed band.
+              </p>
+            </div>
+          )}
           {result.conditional && (
             <>
               <h2>Conditional propagation</h2>
