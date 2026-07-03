@@ -27,7 +27,7 @@ export function Trends() {
   return (
     <main className="lens">
       <h1>Trends</h1>
-      <p className="sub">Book risk over 2016–2024 · scenario {scenario}</p>
+      <p className="sub">Book risk over the full calendar · scenario {scenario}</p>
 
       <QueryState q={book}>
         {(data) => {

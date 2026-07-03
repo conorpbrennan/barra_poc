@@ -47,7 +47,7 @@ SEC_UA          = "Conor Brennan conorpbrennan@gmail.com"   # <-- REQUIRED: put 
 SOROS_CIK       = 1029160
 OPENFIGI_KEY    = os.environ.get("OPENFIGI_KEY") or None   # optional; raises batch/rate limits if set
 CACHE_DIR       = pathlib.Path(__file__).resolve().parent.parent / "tmp"   # repo-local HTTP cache
-START, END      = "2016-01-01", "2024-12-31"
+START, END      = "2016-01-01", "2026-06-30"   # END = last complete month-end (extended 2026-07-04)
 EWMA_HALFLIFE_D = 63              # trading days, for the specific-variance EWMA (matches v1)
 MCAP_FLOOR      = 1e7             # $10M; below this, shares data is assumed corrupt (see build_exposures)
 UNIVERSE_CAP    = 3500            # safety bound only; the universe is now index-seeded (see SEED_INDEX)

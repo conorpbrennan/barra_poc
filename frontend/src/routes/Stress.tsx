@@ -60,7 +60,7 @@ export function Stress() {
 
       <HowToRead>
         A shock is a per-factor move in σ units (that factor&rsquo;s own daily vol from the full
-        2016–2024 history; −2 = a two-sigma down day). The <em>naive</em> loss is
+        full sample history; −2 = a two-sigma down day). The <em>naive</em> loss is
         {" "}<code>ΔPnL = Σ x_k·(σ_k·vol_k)</code> — your shocked factors move, everything else
         held still; it matches the cube&rsquo;s Hypo:* sets to float precision. The
         {" "}<em>conditional</em> loss (keep it on — ch&nbsp;09: stress tests must use correlated

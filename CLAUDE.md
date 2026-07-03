@@ -204,7 +204,7 @@ the cube for the scenario/HHI measures across all ~108 dates in one plan materia
 vector per date and OOMs the Java heap, so it loops one date (one vector) at a time. The `by=Factor`
 path is a single query (Net exposure is additive, no vectors). The UI "📈 Risk trends" panel
 (`render_trends`) charts Scenario VaR 99 / ES 97.5, Risk HHI, and the top style-factor exposures over
-2016–2024. Tests: `test_trends.py`.
+the full sample. Tests: `test_trends.py`.
 
 ## Stress (`/stress`, `/reverse_stress`)
 
@@ -316,7 +316,11 @@ SET-DEPENDENT like the old Risk HHI — Hypo:MomentumCrash reads ~0.74/breach vs
 the documented Hypo-concentration mechanism; the numpy mtv variant remains in
 `_risk_from_weights` as the verification twin, diff ~3e-6 from tail-day conventions) —
 so **"before" matches the cube's reported figures exactly** and only the BEFORE→AFTER delta is the
-new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
+new information. No cube rebuild. The payload also discloses `unpriced` (held names with NO loadings that date —
+outside free-data coverage, e.g. a TSX-only entrant like MDA Space in the 2026 book) +
+`priced_weight`; holdings + unpriced recover the full 13F weight of 1, never silently absorbed
+(What-if lens shows the note; pinned by `t_whatif_holdings_sorted` / `t_gross_net_weight_measures`).
+Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
 "add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
 VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. **The before/after risk keys are SERVED from the cube**
@@ -606,7 +610,7 @@ differ only in how `exposures`, `factor_returns`, and `specific_var` are compute
   cross-sectional characteristic **z-scores** (Size, Value, Momentum, etc.). Factor returns
   and specific risk are **derived** from a monthly cross-sectional WLS regression of forward
   returns on lagged exposures — so exposures, factor returns, and specific risk are duals of
-  one regression. Monthly calendar, sample 2016–2024.
+  one regression. Monthly calendar, sample 2016 → the latest complete month-end (END in the builder; extended to 2026-06-30 on 2026-07-04).
 
 - **v1 — `barra_build_frames_v1.py`** (alternative). Exposures are per-name **time-series
   betas** regressed against *published* daily factor returns (JKP clusters, else Ken French

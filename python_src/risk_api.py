@@ -1754,12 +1754,22 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
                  and after[k] is not None else None) for k in before}
     holdings = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
                 for p, wt in w[w != 0].sort_values(ascending=False).items()]
+    # held names with NO loadings this date (foreign/unpriced on free data — e.g. a TSX-only
+    # name) are invisible to the risk math; disclose them rather than let the book quietly
+    # sum below 1. holdings + unpriced together recover the full 13F weight.
+    pos = S["frames"]["positions"]
+    asof = pos[(pos["Book"] == book) & (pos["Date"] <= pd.Timestamp(date))]
+    bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
+    unpriced = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
+                for p, wt in bp.set_index("Position")["Weight"].items() if p not in L.index]
+    unpriced.sort(key=lambda u: -u["weight"])
     # the full tradeable coverage universe (every name with loadings this date) — so the UI can add
     # a name that isn't currently held, not just resize/drop holdings.
     universe = [{"position": p, "ticker": tk.get(p, p)} for p in L.index]
     universe.sort(key=lambda u: u["ticker"])
     return {"date": date, "book": book, "trades": applied, "before": before, "after": after,
             "delta": delta, "holdings": holdings, "universe": universe,
+            "unpriced": unpriced, "priced_weight": float(w.sum()),
             "source": source, "verification": verification}
 
 
@@ -2946,7 +2956,7 @@ Doctrine — the lens for every read:
 ANALYST_SYSTEM = CHRIS_VOICE + """
 You are writing a short commentary on one view from a Barra-style
 equity factor-risk model. The book is the Soros Fund Management 13F holdings, run as a long-only
-weight overlay; monthly calendar, 2016–2024.
+weight overlay; monthly calendar from 2016 to the latest build.
 
 The model has two risk blocks: a linear FACTOR P&L block and a diagonal SPECIFIC (idiosyncratic)
 block. Read the measures as follows:
@@ -3143,7 +3153,7 @@ async def analysis(body: AnalysisBody):
 OVERVIEW_SYSTEM = CHRIS_VOICE + """
 You are writing the MORNING RISK SUMMARY of the whole book — the read a risk manager gives the
 desk from the monitor screen. The book is the Soros Fund Management 13F holdings, run long-only
-as a weight overlay; monthly calendar, 2016–2024, Barra-style factor model (linear factor block
+as a weight overlay; monthly calendar from 2016 to the latest build, Barra-style factor model (linear factor block
 + diagonal specific block). Numbers are fractions of book value unless marked.
 
 The payload mirrors the daily loop — read it in this order:
@@ -3273,7 +3283,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
 
 TRENDS_SYSTEM = CHRIS_VOICE + """
 You are writing a short read of the book's RISK TRENDS — monthly time series over the whole
-calendar (2016–2024) for one scenario set. The book is the Soros 13F overlay on a Barra-style
+calendar (2016 → the latest build) for one scenario set. The book is the Soros 13F overlay on a Barra-style
 factor model. Numbers are fractions of book value; VaR/ES/vol are 1-day losses.
 
 The payload:
@@ -3566,7 +3576,7 @@ def _run_query_cube(args: dict) -> dict:
 ASK_SYSTEM = CHRIS_VOICE + """
 You are answering a desk question about a Barra-style equity factor-risk
 model. The book is the Soros Fund Management 13F holdings, run as a long-only weight overlay; monthly
-calendar, 2016–2024.
+calendar, 2016 → the latest build.
 
 You have ONE tool, `query_cube`, which pulls slices of the live cube (the allowed dimensions and
 measures are listed in its description). You have nothing else — no filesystem, no web, no other tool,

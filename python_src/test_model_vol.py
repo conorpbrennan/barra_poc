@@ -238,18 +238,22 @@ def t_top5_risk_share_cube():
 def t_gross_net_weight_measures():
     """Gross/Net weight measures: the in-cube identity Net weight == Net exposure at
     Factor=Market (unit Market loading makes x_Market = Σw), Gross >= |Net|, the 13F book is
-    fully invested (net ≈ 1), and /whatif serves them from the cube with the numpy weights
-    inside the tight verification bound."""
+    fully invested up to disclosed coverage (net == /whatif priced_weight — held names with no
+    loadings, e.g. a TSX-only entrant, are reported in `unpriced`, never silently absorbed),
+    and /whatif serves them from the cube with the numpy weights inside the tight bound."""
     import requests
     r = _book_cell("Net weight,Gross weight")
     net, gross = float(r["Net weight"]), float(r["Gross weight"])
-    assert abs(net - 1.0) < 1e-9 and gross >= abs(net) - 1e-12, (net, gross)
+    assert gross >= abs(net) - 1e-12, (net, gross)
     j = _pivot(rows="Factor", measures="Net exposure",
                filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     mkt = next(float(x["Net exposure"]) for x in j["records"] if x["Factor"] == "Market")
     assert abs(net - mkt) < 1e-12, (net, mkt)
     w = requests.post(f"{API}/whatif", json={"trades": []}, timeout=120).json()
     assert abs(w["before"]["net"] - net) < 1e-12
+    assert abs(net - w["priced_weight"]) < 1e-9, (net, w["priced_weight"])
+    unpriced_w = sum(u["weight"] for u in w["unpriced"])
+    assert abs(net + unpriced_w - 1.0) < 1e-6, (net, unpriced_w)
     assert "error" not in w["verification"] and w["verification"]["max_abs_diff_vols"] < 5e-10
 
 

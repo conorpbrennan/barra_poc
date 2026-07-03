@@ -141,6 +141,13 @@ export function WhatIf() {
           <div style={{ display: "flex", gap: "2.5rem", flexWrap: "wrap", alignItems: "flex-start" }}>
             <div>
               <h2 style={{ marginTop: 0 }}>Holdings ({holdings.length})</h2>
+              {(boot.data?.unpriced?.length ?? 0) > 0 && (
+                <p className="muted small" style={{ maxWidth: "26rem" }}>
+                  Not priced by the model this date (no loadings — outside free-data coverage):{" "}
+                  {boot.data!.unpriced!.map((u) => `${u.ticker} ${pct(u.weight)}`).join(", ")}.
+                  Book risk reads on the remaining {pct(boot.data?.priced_weight ?? 1)} of weight.
+                </p>
+              )}
               {presets.length > 0 && (
                 <div className="row" style={{ flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
                   <span className="muted small">Presets</span>

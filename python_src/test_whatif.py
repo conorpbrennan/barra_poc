@@ -59,11 +59,16 @@ def t_whatif_noop_zero_delta():
 
 @integ
 def t_whatif_holdings_sorted():
-    """Holdings come back sorted by weight, descending, summing to ~1 (long-only overlay)."""
+    """Holdings come back sorted by weight, descending. Priced holdings + the disclosed
+    `unpriced` names (held but no loadings that date — e.g. a TSX-only entrant) recover the
+    full 13F weight of 1; the unpriced share must stay small and never be silently absorbed."""
     j = _whatif([])
     ws = [h["weight"] for h in j["holdings"]]
     assert ws == sorted(ws, reverse=True), "holdings not weight-sorted"
-    assert abs(sum(ws) - 1.0) < 1e-6, sum(ws)
+    unpriced_w = sum(u["weight"] for u in j["unpriced"])
+    assert abs(sum(ws) + unpriced_w - 1.0) < 1e-6, (sum(ws), unpriced_w)
+    assert abs(sum(ws) - j["priced_weight"]) < 1e-9
+    assert unpriced_w < 0.05, f"unpriced weight {unpriced_w:.4%} — coverage problem, investigate"
 
 
 @integ

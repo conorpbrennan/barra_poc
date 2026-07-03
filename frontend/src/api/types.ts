@@ -102,6 +102,8 @@ export interface WhatIfResult {
   before: WhatIfRisk; after: WhatIfRisk; delta: Partial<WhatIfRisk>;
   holdings: { position: string; ticker: string; weight: number }[];
   universe: { position: string; ticker: string }[];
+  unpriced?: { position: string; ticker: string; weight: number }[]; // held, no loadings this date
+  priced_weight?: number;
   source?: string;                    // "cube" (scenario branch) | "numpy_fallback"
   verification?: { max_abs_diff_vols: number; max_rel_diff_tails: number } | { error: string };
 }
