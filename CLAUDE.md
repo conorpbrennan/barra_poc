@@ -596,6 +596,25 @@ EarnYield stay NaN (no fundamentals). Disclosed: builder prints the count, `/dq`
 "size-curve proxy loadings" check (held names with Size but no Value ⇒ imputed; WARN above 25%
 weight), `FACTOR_RECIPES` and the CRO report document it.
 
+**GICS industry block (2026-07-04): Market + 11 styles + 11 industries.** `regress_factors`
+adds eleven 0/1 sector dummies to the daily cross-section under the **Barra constraint
+Σ_s c_s·f_s = 0** (c = the sector's WLS weight mass in the estimation fit), imposed by
+substituting the reference (heaviest) sector out of the design — `D̃_j = D_j − (c_j/c_ref)·D_ref`
+— so **Market remains the weighted-market intercept**, industries are pure relative-sector
+returns, and the transformed design predicts every name correctly (the residual path is
+unchanged; the reference sector's return is recovered from the constraint and emitted to the
+scenario cache but omitted from the t-stat table). Each name carries an `Ind:<Sector>` LEAF
+loading of 1.0 (the dual of the dummies) so sector P&L flows the scenario engine and the cube
+drills factor risk by industry; `factor_meta` gains `FactorGroup="Industry"`; "Unknown" sectors
+carry no dummy. Sector is joined onto `sec` BEFORE the regression (one `sectors_for_ciks`
+fetch, reused by the securities dimension). Results: daily cross-sectional R² 0.19 → 0.30,
+Leverage's hidden-beta flag clears (the utilities carriers absorbed), industries admit strongly
+(Energy 51%). **`/factor_portfolio` mirrors the same constrained design** — raw dummies + the
+intercept are exactly collinear on an all-known-sector fit cross-section and the solve error
+lands in the Market row (self-exposure read −0.11 pre-fix); the reference sector has no free
+portfolio row and 400s with a clear message; pure `Ind:*` portfolios are requestable
+(dollar-neutral, like styles).
+
 **RateBeta (2026-07-04): the missing rates/duration factor.** The post-respec audit's three
 remaining flags (Leverage/Liquidity/MegaCap) shared one carrier list — hto/tsm/ida/cms/amzn:
 utilities, a hotel REIT, rate-sensitive mega-caps — the missing-factor signature. `RateBeta` =

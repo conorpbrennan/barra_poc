@@ -2849,7 +2849,8 @@ async def factor_portfolio(factor: str, date: str | None = None):
         d0 = _snap_exposure_date(exp, date)
         Ld = (exp[exp["Date"] == d0]
               .pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first"))
-        styles = [c for c in Ld.columns if c != "Market"]
+        styles = [c for c in Ld.columns if c != "Market" and not str(c).startswith("Ind:")]
+        ind_cols = [c for c in Ld.columns if str(c).startswith("Ind:")]
         keep = Ld[styles].notna().sum(axis=1) >= 6            # mirror the builder's floor
         Ld = Ld[keep]
         fit_idx = Ld.index
@@ -2863,13 +2864,34 @@ async def factor_portfolio(factor: str, date: str | None = None):
                 fit_idx, approx_fit = cand, "funnel survivors (≈ estimation universe)"
         Xd = Ld.loc[fit_idx, styles].fillna(0.0)
         cols = [c for c in styles if Xd[c].std() > 0.05]      # builder's degeneracy guard
-        if factor != "Market" and factor not in cols:
-            raise HTTPException(400, f"factor not in the fit at {d0.date()}: {factor}")
         if "Size" not in cols:
             raise HTTPException(404, "Size missing from the fit — cannot form the WLS weights")
-        X = np.column_stack([np.ones(len(Xd)), Xd[cols].values])
         W2 = np.exp(Xd["Size"].values / 2.0)                  # (exp(Size/4))² — the builder's W²
-        names = ["Market"] + cols
+        # Industry dummies enter under the builder's Barra constraint (Σ c_s·f_s = 0, reference
+        # sector substituted out) — raw dummies + the intercept are EXACTLY collinear on a fit
+        # cross-section where every name has a sector, and the solve error lands in the Market
+        # row (observed: Market self-exposure −0.11 pre-fix). The reference sector's portfolio
+        # is implied, not a free row, so it is not requestable here.
+        Dd = (Ld.loc[fit_idx, ind_cols].fillna(0.0).values
+              if ind_cols else np.zeros((len(Xd), 0)))
+        cmass = (W2[:, None] * Dd).sum(axis=0)
+        ok_c = cmass > 0
+        inds = [c for c, k_ in zip(ind_cols, ok_c) if k_]
+        Dd, cmass = Dd[:, ok_c], cmass[ok_c]
+        if len(inds) >= 2:
+            iref = int(np.argmax(cmass))
+            nr = [j for j in range(len(inds)) if j != iref]
+            Dt = Dd[:, nr] - np.outer(Dd[:, iref], cmass[nr] / cmass[iref])
+            ind_names = [inds[j] for j in nr]
+        else:
+            iref, Dt, ind_names = None, np.zeros((len(Xd), 0)), []
+        X = np.column_stack([np.ones(len(Xd)), Xd[cols].values, Dt])
+        names = ["Market"] + cols + ind_names
+        if factor not in names:
+            detail = (f"reference sector at {d0.date()} — its return is implied by the "
+                      f"constraint, no free portfolio row" if iref is not None
+                      and factor == inds[iref] else f"factor not in the fit at {d0.date()}")
+            raise HTTPException(400, f"{detail}: {factor}")
         try:
             P = np.linalg.solve(X.T @ (X * W2[:, None]), (X * W2[:, None]).T)
         except np.linalg.LinAlgError:

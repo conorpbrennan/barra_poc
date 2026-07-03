@@ -794,23 +794,34 @@ tests to every factor:</p>
     <td>the remaining Leverage / Liquidity / MegaCap flags shared one carrier list (hto, tsm,
     ida, cms, amzn — utilities, a REIT, rate-sensitive mega-caps): correlated residuals with
     one theme = a missing factor, read as rates/duration</td>
-    <td class="num">the factor is strongly priced — |t| &gt; 2 on 50% of days, 4th after
-    Market/Beta/Momentum — and its own hidden beta is near-clean (−0.06); but the shared
-    carriers' co-movement <em>persists</em>, so duration was only part of the theme</td></tr>
+    <td class="num">the factor is strongly priced — |t| &gt; 2 on 41% of days — and its own
+    hidden beta is near-clean; but the shared carriers' co-movement <em>persisted</em>, so
+    duration was only part of the theme</td></tr>
+<tr><td><strong>GICS industry block added</strong> — eleven 0/1 sector dummies in the daily
+    cross-section, under the Barra constraint Σ c<sub>s</sub>·f<sub>s</sub> = 0 (c = the
+    sector's WLS weight mass; the reference sector is substituted out of the design and its
+    return recovered from the constraint), so Market remains the weighted-market intercept and
+    industries are pure relative-sector returns; each name carries an <code>Ind:&lt;Sector&gt;</code>
+    leaf loading of 1.0 so sector P&amp;L flows the scenario engine</td>
+    <td>the persistent flags' carriers after RateBeta were two utilities and a hotel REIT —
+    sector co-movement with <em>no industry factors</em> to absorb it, only the market
+    intercept</td>
+    <td class="num">daily cross-sectional R² 0.19 → 0.30; Leverage's flag clears (breadth
+    41% → 25%, the utilities leave its carrier list); all eleven industries test ok/watch;
+    industries admit strongly (Energy 51%, Industrials 43%, IT 41% of days)</td></tr>
 </table>
-<p><strong>Where it stands.</strong> Residual-vs-factor R² 0.51 → ~0.40 (it reads 0.40 rather
-than 0.37 because the imputation made a fifth of the book <em>visible</em> to the diagnostics —
-names whose whole risk previously hid in "specific"). Beta and Momentum test clean; Size,
-Value, EarnYield and RateBeta are on watch. The persistent flags — Leverage, Liquidity,
-MegaCap, and the utilities pair inside NonLinSize/ResidVol — still share the hto / tsm / ida /
-cms carrier list <em>after</em> their duration exposure is modelled. The remaining read is
-structural: this model has <strong>no industry factors</strong> beyond the market intercept, so
-sector co-movement (two utilities, a hotel REIT) has nowhere to go but the residual. Industry
-factors are the other half of a production Barra model; adding even a GICS-sector block is the
-next scope decision, and the sector data is already on <code>securities</code>. On admission:
-RateBeta enters at 50% of days; MegaCap (15%) and NonLinSize (20%) sit below the one-third rule
-that removed Growth and stay on probation — kept because each measurably fixed a residual
-pathology the admission rate alone doesn't see.</p>
+<p><strong>Where it stands.</strong> The model is now structurally a production-shaped Barra
+model: Market + 11 styles + 11 GICS industries, estimated jointly under the proper constraint.
+Daily cross-sectional R² 0.19 → 0.30 over the day's changes. Beta, EarnYield, Momentum and all
+eleven industries test clean-to-watch on the hidden-beta audit; Leverage, Size, Value, ResidVol,
+NonLinSize and RateBeta sit on watch. The two remaining flags — Liquidity (Σw·β +0.63) and
+MegaCap (−0.64) — are carried by the mega-cap/liquidity complex itself (tsm, googl, amzn, msft;
+~20% of the book): a genuinely hard modelling problem, not an omission. On admission: styles
+ceded ground to industries by design (industries reclaimed the sector-correlated content styles
+had been absorbing — Value 37% → 22%, RateBeta 50% → 41%); MegaCap (14%), NonLinSize (18%) and
+EarnYield (15%) sit below the one-third rule that removed Growth and stay on probation — kept
+because each measurably fixed a residual pathology the admission rate alone doesn't see. Judge
+the styles again after two more quarters of data, now that industries hold what's theirs.</p>
 <p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
 <em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
 erased real information (the mega-cap tail), the answer was a new bounded regressor computed

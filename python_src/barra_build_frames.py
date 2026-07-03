@@ -752,6 +752,9 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     # returns (a held-but-not-estimation name still needs a specific-risk forecast). Falls back to
     # the full cross-section when no estimation flag is present (legacy / UNCAP_COVERAGE off).
     est_pos = set(sec.loc[sec["is_estimation"], "figi"]) if "is_estimation" in sec else set(sec["figi"])
+    # GICS industry block (2026-07-04): sector membership drives 0/1 dummies in the daily
+    # cross-section — see the constrained-design comment in the monthly loop below.
+    fig2sect = sec.set_index("figi")["Sector"].to_dict() if "Sector" in sec else {}
     # Daily return matrix (days x tickers). One-day moves beyond ±50% are treated as data
     # errors (Yahoo adjclose split/glitch artifacts) and masked, not clipped: a fake -90%
     # would otherwise land in one day's regression and contaminate every factor return.
@@ -780,9 +783,31 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
         cols = list(Xe.columns)
         figs_all = Xd.index
         tk_all = tk_all[figs_all].values
-        Xm_all = np.column_stack([np.ones(len(figs_all)), Xd[cols].values])   # all coverage names
-        Xm_est = Xm_all[em]                                                   # estimation subset
+        Xs_all = np.column_stack([np.ones(len(figs_all)), Xd[cols].values])   # [1 | styles], coverage
         W = np.sqrt(np.exp(Xe["Size"].values) ** 0.5)                        # Barra: weight ~ sqrt(mktcap)
+        # GICS industry dummies under the Barra constraint Σ_s c_s·f_s = 0 (c = each sector's
+        # WLS weight mass in the estimation fit). Imposed by substituting the reference
+        # (heaviest) sector out of the design — D̃_j = D_j − (c_j/c_ref)·D_ref — so Market
+        # REMAINS the weighted-market intercept and industries are pure relative-sector
+        # returns. The transformed design predicts every name correctly (a ref-sector name's
+        # fitted industry return IS the recovered f_ref), so the residual line is unchanged.
+        # "Unknown" sectors carry no dummy: priced by Market + styles alone.
+        sects_all = np.array([fig2sect.get(f, "Unknown") for f in figs_all])
+        inds = sorted({s for s in sects_all[em] if s != "Unknown"})
+        D_all = (np.column_stack([(sects_all == s).astype(float) for s in inds])
+                 if inds else np.zeros((len(figs_all), 0)))
+        cmass = (W[:, None] ** 2 * D_all[em]).sum(axis=0) if inds else np.array([])
+        ok_c = cmass > 0
+        inds = [s for s, k_ in zip(inds, ok_c) if k_]
+        D_all, cmass = D_all[:, ok_c], cmass[ok_c]
+        if len(inds) >= 2:
+            iref = int(np.argmax(cmass))
+            nr = [j for j in range(len(inds)) if j != iref]
+            Dt_all = D_all[:, nr] - np.outer(D_all[:, iref], cmass[nr] / cmass[iref])
+        else:
+            iref, nr, Dt_all = None, [], np.zeros((len(figs_all), 0))
+        Xm_all = np.column_stack([Xs_all, Dt_all])                            # all coverage names
+        Xm_est = Xm_all[em]                                                   # estimation subset
         days = R.index[(R.index > d0) & (R.index <= d1)]
         Rsub = R.loc[days, tk_all]
         for d in days:
@@ -811,10 +836,17 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
                         tvals = np.where(se > 0, beta / se, np.nan)
                 except np.linalg.LinAlgError:
                     tvals = None
-            for j, (name, b) in enumerate(zip(["Market"] + cols, beta)):
+            names = ["Market"] + cols + [f"Ind:{inds[j]}" for j in nr]
+            for j, (name, b) in enumerate(zip(names, beta)):
                 fac_rows.append({"Date": d, "Factor": name, "Return": b})
                 t_j = (float(tvals[j]) if tvals is not None and np.isfinite(tvals[j]) else None)
                 reg_rows.append({"Date": d, "Factor": name, "TStat": t_j, "R2": r2, "N": n_})
+            if iref is not None:
+                # the reference sector's return is implied by the constraint, not a free
+                # parameter — emitted to the scenario cache, omitted from the t-stat table
+                k1 = 1 + len(cols)
+                f_ref = -float(np.dot(cmass[nr], beta[k1:]) / cmass[iref])
+                fac_rows.append({"Date": d, "Factor": f"Ind:{inds[iref]}", "Return": f_ref})
             # specific residual for EVERY coverage name with a return that day (estimation + held)
             resid_all = y_all - Xm_all @ beta
             ok_a = ~np.isnan(y_all)
@@ -889,6 +921,11 @@ def build_frames():
 
     # --- exposures (leaf) + factor cache + specific risk -------------------
     exposures = build_exposures(sec, prices, funda, cal, mkt, rates)
+    # GICS sector joined BEFORE the regression (2026-07-04): the industry block needs it as
+    # dummy membership; the securities dimension reuses the same column below (one fetch).
+    gics = sectors_for_ciks(sec["cik"])
+    sec = sec.merge(gics[["CIK", "Sector"]].rename(columns={"CIK": "cik"}), on="cik", how="left")
+    sec["Sector"] = sec["Sector"].fillna("Unknown")
     factor_returns, specific_var, specific_returns, reg_stats = \
         regress_factors(exposures, prices, sec)
     # regression-health side artifact (daily weighted R² + per-factor t-stats). Written here,
@@ -905,6 +942,19 @@ def build_frames():
     mkt_load = (exposures[["Date", "Position"]].drop_duplicates()
                 .assign(Factor="Market", Loading=1.0))
     exposures = pd.concat([exposures, mkt_load], ignore_index=True)
+    # Industry LEAF loadings (2026-07-04): each name loads 1.0 on its GICS sector — the dual of
+    # the regression dummies — so sector P&L flows through the scenario engine and the cube can
+    # drill factor risk by industry. Restricted to industries that actually earned a factor
+    # return (all 11 in practice); "Unknown" sectors carry no industry loading.
+    ind_facs = sorted({f for f in factor_returns["Factor"].unique() if str(f).startswith("Ind:")})
+    have_ind = {f[4:] for f in ind_facs}
+    sect_map = sec.set_index("figi")["Sector"].to_dict()
+    ind_load = (exposures.loc[exposures["Factor"] == "Market", ["Date", "Position"]]
+                .assign(Sector=lambda x: x["Position"].map(sect_map)))
+    ind_load = ind_load[ind_load["Sector"].isin(have_ind)]
+    ind_load = (ind_load.assign(Factor="Ind:" + ind_load["Sector"], Loading=1.0)
+                [["Date", "Position", "Factor", "Loading"]])
+    exposures = pd.concat([exposures, ind_load], ignore_index=True)
 
     # --- Soros weights, as-of joined onto the monthly calendar -------------
     # Each calendar date carries exactly the latest filing's book: the as-of join
@@ -941,20 +991,18 @@ def build_frames():
     # --- dimensions --------------------------------------------------------
     securities = sec.rename(columns={"figi": "Position", "ticker": "Ticker",
                                      "cusip": "CUSIP", "title": "Issuer"})
-    securities = securities[["Position", "Ticker", "cik", "CUSIP", "Issuer"]] \
+    securities = securities[["Position", "Ticker", "cik", "CUSIP", "Issuer", "Sector"]] \
         .rename(columns={"cik": "CIK"})
-    # GICS sector from the free SEC SIC map, CIK-keyed (see sectors_for_ciks / sic_to_gics)
-    gics = sectors_for_ciks(securities["CIK"])
-    securities = securities.merge(gics[["CIK", "Sector"]], on="CIK", how="left")
-    securities["Sector"] = securities["Sector"].fillna("Unknown")
+    # GICS sector already on sec (joined before regress_factors for the industry block)
     # Country of incorporation from the same SEC submissions JSON (US state -> 'US', foreign -> country);
     # names with no CIK keep the US default. See countries_for_ciks. ~21% of the Soros book by weight is
     # genuinely non-US (Alibaba/JD China, Canadian energy/industrials, Sanofi), so this is not cosmetic.
     ctry = countries_for_ciks(securities["CIK"])
     securities = securities.merge(ctry[["CIK", "Country"]], on="CIK", how="left")
     securities["Country"] = securities["Country"].fillna("US")
-    factor_meta = pd.DataFrame({"Factor": ["Market"] + STYLE_FACTORS,
-                                "FactorGroup": ["Market"] + ["Style"] * len(STYLE_FACTORS)})
+    factor_meta = pd.DataFrame({"Factor": ["Market"] + STYLE_FACTORS + ind_facs,
+                                "FactorGroup": (["Market"] + ["Style"] * len(STYLE_FACTORS)
+                                                + ["Industry"] * len(ind_facs))})
 
     return exposures, positions, securities, factor_meta, factor_returns, specific_var, specific_returns
 
