@@ -121,6 +121,8 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # custom stress on a StressShock scenario (reads 0 on the Base branch — pass
                  # the /pivot `shocks` param to price a transient shock):
                  "Custom stress PnL",
+                 # tail-fatness: share of scenario days beyond ±2σ of the cell's own vol:
+                 "Exceedance rate 2s",
                  # concentration: 5 largest names' share of Total VaR (tt.rank over the flat
                  # PositionRank hierarchy; set-dependent like the marginals):
                  "Top-5 risk share",
@@ -146,6 +148,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Factor variance contribution",
             "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
             "Vol at min-variance hedge", "Custom stress PnL", "Top-5 risk share",
+            "Exceedance rate 2s",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",

@@ -253,6 +253,32 @@ def t_gross_net_weight_measures():
     assert "error" not in w["verification"] and w["verification"]["max_abs_diff_vols"] < 5e-10
 
 
+@integ
+def t_exceedance_rate_cube():
+    """Exceedance rate 2s: recomputed in numpy from the /scenario_pnl path it must match at
+    1e-12; the equity book reads fat (above the ~4.6% normal expectation is typical but not
+    forced — assert a sane range); degenerate (blank) on the length-1 Hypo sets; drills by
+    sector with every cell in [0, 1]."""
+    import requests
+    r = _book_cell("Exceedance rate 2s,Scenario PnL vol,Scenario n")
+    rate = float(r["Exceedance rate 2s"])
+    assert 0.005 < rate < 0.20, rate
+    sp = requests.get(f"{API}/scenario_pnl",
+                      params={"date": DATE, "set": "HistFull"}, timeout=60).json()
+    pnl = [p["pnl"] for p in sp["points"]]
+    import statistics
+    sd = statistics.stdev(pnl)
+    ref = sum(1 for v in pnl if v < -2 * sd or v > 2 * sd) / len(pnl)
+    assert abs(rate - ref) < 1e-12, (rate, ref)
+    hypo = _book_cell("Exceedance rate 2s", scen="Hypo:MomentumCrash").get("Exceedance rate 2s")
+    assert hypo is None or (isinstance(hypo, float) and hypo != hypo), hypo
+    j = _pivot(rows="Sector", measures="Exceedance rate 2s",
+               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+    cells = [float(x["Exceedance rate 2s"]) for x in j["records"]
+             if x.get("Exceedance rate 2s") is not None]
+    assert len(cells) >= 5 and all(0 <= c <= 1 for c in cells)
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")

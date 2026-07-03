@@ -249,6 +249,22 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # plain dispersion of the scenario P&L (per-observation sigma, same units as the returns): the
     # non-tail risk number that pairs with VaR/ES and feeds the diversification read below.
     m["Scenario PnL vol"] = tt.array.std(m["Scenario PnL vector"])
+    # ---- exceedance rate (ch-08's simple calibration diagnostic, per CELL so it drills) ------
+    # share of scenario days beyond ±2 of the cell's own vol. There is no elementwise compare
+    # or abs for array measures, but elementwise / IS supported, so the exact 0/1 indicator is
+    # positive_values(v−t)/(v−t): 1 above the threshold, 0/negative = 0 below (NaN only if an
+    # element equals the threshold EXACTLY — measure-zero on continuous P&L).
+    # NB negative_values/positive_values are LENGTH-PRESERVING (zero-fill, not filter) — a
+    # len()-based count reads n and is wrong. Normal tails ≈ 4.6%; fatter reads higher.
+    # Degenerate (blank) on length-1 Hypo sets (sample vol undefined).
+    _v2 = 2.0 * m["Scenario PnL vol"]
+    _up = m["Scenario PnL vector"] - _v2
+    _dn = m["Scenario PnL vector"] + _v2
+    m["Exceedance rate 2s"] = (
+        (tt.array.sum(tt.array.positive_values(_up) / _up)
+         + tt.array.sum(tt.array.negative_values(_dn) / _dn))
+        / m["Scenario n"])
+    m["Exceedance rate 2s"].formatter = "DOUBLE[0.00%]"
     for k in ("Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5",
               "Scenario ES 99", "Scenario PnL vol"):
         m[k].formatter = "DOUBLE[0.00%]"
