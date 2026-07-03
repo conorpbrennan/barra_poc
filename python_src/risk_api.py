@@ -200,9 +200,13 @@ async def meta():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         dates = sorted({str(pd.Timestamp(d).date()) for d in
                         cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index})
-        sets = sorted({str(s) for s in cube.query(m["contributors.COUNT"], levels=[l["ScenarioSet"]]).index})
+        all_sets = sorted({str(s) for s in cube.query(m["contributors.COUNT"], levels=[l["ScenarioSet"]]).index})
+        # PIT:* truncated-history sets are plumbing for as-of risk (one per month-end) — kept
+        # out of the main dropdown list; still addressable by name in any filter.
+        sets = [s for s in all_sets if not s.startswith("PIT:")]
+        pit_sets = [s for s in all_sets if s.startswith("PIT:")]
         factors = sorted(S["frames"]["factor_meta"]["Factor"].tolist())
-        return {"dates": dates, "scenario_sets": sets, "factors": factors,
+        return {"dates": dates, "scenario_sets": sets, "pit_sets": pit_sets, "factors": factors,
                 "ts_measures": TS_MEASURES, "by_levels": list(BY_LEVELS),
                 # the cube's baked-in hypothetical shock definitions ({set: {Factor: sigma}}) —
                 # served so the Stress lens presets and the cube's Hypo:* sets share ONE source
@@ -401,6 +405,8 @@ async def dims():
                 members[d] = sorted({str(pd.Timestamp(x).date()) for x in vals})
             else:
                 members[d] = sorted({str(x) for x in vals})
+        # PIT:* plumbing sets stay out of the pivot's slicer list (addressable by name)
+        members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
         return {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
                 "scenario_dependent": sorted(SCEN_DEP), "members": members,
                 "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
@@ -2025,10 +2031,15 @@ def _monthly(series: pd.Series) -> pd.Series:
 
 def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
     """Per month-start d0: predicted DAILY book vol sqrt(x'Fx + Σw²σ²), predicted daily specific
-    vol, and per-factor daily vol |x_k|·σ_k — F/σ estimated on history up to d0 (no look-ahead)."""
+    vol, and per-factor daily vol |x_k|·σ_k — all POINT-IN-TIME (history ≤ d0, no look-ahead).
+    SERVED FROM THE CUBE's PIT:* truncated-history sets (Model vol / Specific vol / per-factor
+    Scenario PnL vol at (Date=d0, ScenarioSet=PIT:d0)); the numpy F(≤t) implementation is
+    recomputed alongside as the live cross-check (max diffs stashed in
+    S["pred_vols_verification"], served by /calibration), and is the per-month fallback where a
+    PIT set is absent (early months under the 60-obs floor)."""
     f = S["frames"]
     frw = f["factor_returns"].pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
-    book_v, spec_v, fac_v = {}, {}, {}
+    ref_book, ref_spec, ref_fac = {}, {}, {}
     for d0 in months:
         pos = f["positions"]
         w_ = pos[(pos["Book"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
@@ -2046,9 +2057,37 @@ def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
         F = hist[facs].cov().to_numpy()
         sv = f["specific_var"][f["specific_var"]["Date"] == d0].set_index("Position")["SpecificVar"]
         svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
-        book_v[d0] = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
-        spec_v[d0] = float(np.sqrt(svar))
-        fac_v[d0] = {f_: abs(float(x[f_])) * float(hist[f_].std()) for f_ in facs}
+        ref_book[d0] = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
+        ref_spec[d0] = float(np.sqrt(svar))
+        ref_fac[d0] = {f_: abs(float(x[f_])) * float(hist[f_].std()) for f_ in facs}
+    # cube-served PIT values, numpy as fallback + cross-check
+    book_v, spec_v, fac_v = dict(ref_book), dict(ref_spec), {k: dict(v) for k, v in ref_fac.items()}
+    diffs = {"book": 0.0, "specific": 0.0, "factor": 0.0, "months_from_cube": 0}
+    try:
+        cube = S["cube"]; l, mm = cube.levels, cube.measures
+        have_book = "Book" in {n for _, n in cube.hierarchies}
+        for d0 in list(ref_book):
+            pit = f"PIT:{pd.Timestamp(d0).date()}"
+            flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (l["ScenarioSet"] == pit)
+            if have_book:
+                flt &= (l["Book"] == book)
+            q = cube.query(mm["Model vol"], mm["Specific vol"], filter=flt)
+            if not len(q) or pd.isna(q.iloc[0]["Model vol"]):
+                continue                                   # no PIT set for this month — numpy stands
+            qf = cube.query(mm["Scenario PnL vol"], levels=[l["Factor"]], filter=flt).reset_index()
+            bv, sv_ = float(q.iloc[0]["Model vol"]), float(q.iloc[0]["Specific vol"])
+            fv = {str(r["Factor"]): float(r["Scenario PnL vol"]) for _, r in qf.iterrows()
+                  if not pd.isna(r["Scenario PnL vol"])}
+            diffs["book"] = max(diffs["book"], abs(bv - ref_book[d0]))
+            diffs["specific"] = max(diffs["specific"], abs(sv_ - ref_spec[d0]))
+            diffs["factor"] = max([diffs["factor"]] + [abs(fv[k] - v) for k, v in ref_fac[d0].items()
+                                                       if k in fv])
+            book_v[d0], spec_v[d0] = bv, sv_
+            fac_v[d0] = {k: fv.get(k, ref_fac[d0].get(k)) for k in ref_fac[d0]}
+            diffs["months_from_cube"] += 1
+    except Exception as e:
+        diffs["error"] = f"{e.__class__.__name__}: {e}"
+    S["pred_vols_verification"] = diffs
     return book_v, spec_v, fac_v
 
 
@@ -2519,6 +2558,9 @@ async def calibration(window: int = Query(24, ge=6, le=60, description="rolling 
         key = ("pred_vols_full", book, str(months[-1].date()) if months else "")
         if S.get("pred_vols_key") != key:
             S["pred_vols"], S["pred_vols_key"] = _pred_book_vols(months, book), key
+            # pin THIS computation's cross-check to the cache (the stash is last-writer-wins
+            # and /pnl_attribution/residual also calls _pred_book_vols on its own window)
+            S["pred_vols_verif_cal"] = S.get("pred_vols_verification")
         book_v, spec_v, _fv = S["pred_vols"]
         ndays = c["Realized"].resample("ME").count()
 
@@ -2542,6 +2584,8 @@ async def calibration(window: int = Query(24, ge=6, le=60, description="rolling 
             }
         return {
             "window": window, "book": book, "expected_exceedance_2s": 0.0455,
+            "source": "cube",
+            "pit_verification": S.get("pred_vols_verif_cal"),
             "series": out,
             "note": ("b ≈ 1 = calibrated; b > 1 = risk under-forecast (the dangerous direction); "
                      "the band is the 95% acceptance range 1 ± √(2/window). Exceedances are "

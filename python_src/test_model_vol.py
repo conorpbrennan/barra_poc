@@ -279,6 +279,44 @@ def t_exceedance_rate_cube():
     assert len(cells) >= 5 and all(0 <= c <= 1 for c in cells)
 
 
+@integ
+def t_pit_sets_identities():
+    """The PIT:* truncated-history sets: (a) hidden from /meta's main dropdown but served as
+    pit_sets; (b) the LAST PIT set == HistFull (full panel) — Model vol identical; (c) at an
+    EARLIER month t, Model vol under PIT:t differs from HistFull-at-t (the honest-as-of point)
+    and the per-factor Scenario PnL vol under PIT:t ties a numpy std of the history ≤ t
+    recomputed from /timeseries-free first principles via /scenario_pnl on HistFull."""
+    import requests
+    meta = requests.get(f"{API}/meta", timeout=30).json()
+    assert meta["pit_sets"] and not any(s.startswith("PIT:") for s in meta["scenario_sets"])
+    last_pit = meta["pit_sets"][-1]
+    a = _book_cell("Model vol")
+    b = _book_cell("Model vol", scen=last_pit)
+    assert abs(float(a["Model vol"]) - float(b["Model vol"])) < 1e-15, (a, b)
+    # earlier month: PIT vol must differ from the anachronistic full-history read
+    t_mid = "2019-12-31"
+    hist_mid = _pivot(rows="ScenarioSet", measures="Model vol",
+                      filters={"Book": ["Soros"], "Date": [t_mid], "ScenarioSet": ["HistFull"]})
+    pit_mid = _pivot(rows="ScenarioSet", measures="Model vol",
+                     filters={"Book": ["Soros"], "Date": [t_mid],
+                              "ScenarioSet": [f"PIT:{t_mid}"]})
+    hv = float(hist_mid["records"][0]["Model vol"])
+    pv = float(pit_mid["records"][0]["Model vol"])
+    assert abs(hv - pv) > 1e-5, (hv, pv)      # 2019 PIT vol excludes COVID/2022 — must differ
+    # per-factor PIT vol ties numpy: std of the HistFull daily book path ≤ t at the factor level
+    sp = requests.get(f"{API}/scenario_pnl",
+                      params={"date": t_mid, "set": "HistFull",
+                              "filters": json.dumps({"Factor": ["Momentum"]})}, timeout=60).json()
+    import statistics
+    pnl = [(p["date"], p["pnl"]) for p in sp["points"]]
+    upto = [v for d_, v in pnl if d_ <= t_mid]
+    ref = statistics.stdev(upto)
+    q = _pivot(rows="Factor", measures="Scenario PnL vol",
+               filters={"Book": ["Soros"], "Date": [t_mid], "ScenarioSet": [f"PIT:{t_mid}"]})
+    mom = next(float(r["Scenario PnL vol"]) for r in q["records"] if r["Factor"] == "Momentum")
+    assert abs(mom - ref) < 5e-12, (mom, ref)
+
+
 def main():
     p = f = 0
     print("=== integration (live backend) ===")

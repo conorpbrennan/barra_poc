@@ -52,6 +52,24 @@ and concurrency/memory policy for long-lived named scenarios.
 
 The liquidity note remains open (lens parked).
 
+**Wave 3 BUILT 2026-07-04** (the post-revisit sweep, each stage validated before the next):
+- **Gross/Net weight** measures — `/whatif` is now fully cube-served (aux keys gone); identity
+  `Net weight == Net exposure @ Market` pinned.
+- **Exceedance rate 2s** — ch-08's tail diagnostic per CELL (drills by sector/name). Two array
+  semantics recorded: negative/positive_values are LENGTH-PRESERVING (zero-fill), and there is
+  no elementwise compare/abs — but elementwise `/` exists, so the exact 0/1 indicator is
+  `positive_values(v−t)/(v−t)`. Tied to a numpy recompute at 1e-12.
+- **Stressed model vol** — the correlation stress as a closed form (`m²[(1−b)x'Fx + b(Σxσ)²]`,
+  no matrix algebra) on a CorrStress parameter simulation; `/stress`'s correlation block is
+  cube-served (numpy `_stressed_cov` cross-check < 5e-10); per-slice stressed vol is new
+  capability. Base-scenario identity == Model vol at 1e-15.
+- **PIT:* truncated-history sets** — one per month-end (≥60 obs), hidden from `/meta`/`/dims`
+  dropdowns (served as `pit_sets`). Identities: PIT:last == HistFull (1e-15); 2019 PIT vol ≠
+  the anachronistic full-history read; per-factor PIT vol == numpy std(history ≤ t) at 5e-12.
+  `_pred_book_vols` (the /calibration engine) is cube-served from them — 103/108 months, numpy
+  F(≤t) cross-check ~1e-17 pinned per-cache (the stash is last-writer-wins; /residual shares
+  the function). Follow-up available: the linkage bands' σ(≤T) is the same estimator.
+
 ## Tier 1 — clear wins, small and mechanical
 
 **1. `Factor return vol` measure** (replaces `_factor_vols()` in `/stress`, `/reverse_stress`)

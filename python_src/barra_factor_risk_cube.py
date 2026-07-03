@@ -56,6 +56,14 @@ def load_frames(folder: pathlib.Path = OUT) -> dict[str, pd.DataFrame]:
     return frames
 
 
+def _pit_month_ends(wide: pd.DataFrame, min_obs: int = 60) -> list[pd.Timestamp]:
+    """The month-ends that get a PIT:* truncated-history set: every calendar month-end covered
+    by the factor-return panel with at least `min_obs` prior trading days (a PIT set needs
+    enough history for the sample estimators to mean anything)."""
+    ends = pd.date_range(wide.index.min(), wide.index.max(), freq="ME")
+    return [t for t in ends if (wide.index <= t).sum() >= min_obs]
+
+
 def build_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
     """One table keyed (ScenarioSet, Factor) -> ShockVec. Vectors share length WITHIN a set."""
     wide = (factor_ret[factor_ret["Factor"].isin(style)]
@@ -77,6 +85,16 @@ def build_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
         for f in wide.columns:
             rows.append({"ScenarioSet": name, "Factor": f,
                          "ShockVec": [float(shock.get(f, 0.0)) * float(vol[f])]})
+    # 4) POINT-IN-TIME sets: history truncated at each month-end ("PIT:YYYY-MM-DD"). These make
+    #    the cube's risk measures honest as-of a date: Model vol at (Date=t, ScenarioSet=PIT:t)
+    #    uses only information available at t — the full-history HistFull quietly uses later
+    #    data when charted back in time. ~10MB total; /meta hides them from the main dropdown
+    #    (served as `pit_sets`). The LAST PIT set is the full panel == HistFull by construction.
+    for t in _pit_month_ends(wide):
+        w = wide.loc[:t]
+        name = f"PIT:{t.date()}"
+        for f in wide.columns:
+            rows.append({"ScenarioSet": name, "Factor": f, "ShockVec": w[f].to_numpy().tolist()})
     return pd.DataFrame(rows)
 
 
@@ -100,6 +118,8 @@ def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFr
     last = days(wide.index[-1:])                       # length-1 stamp for hypothetical sets
     for name in HYPO_SHOCKS:
         rows.append({"ScenarioSet": name, "DateVec": last})
+    for t in _pit_month_ends(wide):                    # PIT sets: axis mirrors the truncation
+        rows.append({"ScenarioSet": f"PIT:{t.date()}", "DateVec": days(wide.loc[:t].index)})
     return pd.DataFrame(rows)
 
 

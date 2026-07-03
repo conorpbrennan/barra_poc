@@ -94,6 +94,18 @@ def t_calibration_shape():
 
 
 @integ
+def t_calibration_pit_served_from_cube():
+    """/calibration's predicted vols now come from the cube's PIT:* sets, with the numpy F(≤t)
+    engine as the live cross-check: most months cube-served, diffs at float precision."""
+    import requests
+    j = requests.get(f"{API}/calibration", params={"window": 24}, timeout=180).json()
+    v = j.get("pit_verification") or {}
+    assert "error" not in v, v
+    assert v.get("months_from_cube", 0) >= 90, v          # ~105 of 108 months carry a PIT set
+    assert v["book"] < 5e-10 and v["specific"] < 5e-10 and v["factor"] < 5e-10, v
+
+
+@integ
 def t_calibration_window_shrinks_series():
     """A longer window means fewer rolling points."""
     import requests
