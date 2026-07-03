@@ -294,8 +294,8 @@ def build() -> None:
     builder writes six parquet frames; the Atoti cube reads those and nothing else. No factor-return
     series is bought or downloaded — they are estimated in-house (§3).</li>
 <li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
-    — Size / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol / Momentum
-    / Liquidity from prices — standardised by median / MAD on the estimation universe (winsorised ±3
+    — Size / MegaCap / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol /
+    Momentum / Liquidity from prices — standardised by median / MAD on the estimation universe (winsorised ±3
     there, left uncapped on coverage so off-index names read their true loadings).</li>
 <li><strong>Risk.</strong> Every scenario is the same calculation
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
@@ -544,7 +544,10 @@ about.</p>
     version was cross-sectionally a second Size (factor-return ρ ≈ −0.8).
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
-    log(mcap+1)³; <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
+    log(mcap+1)³; <code>MegaCap</code> = a spline knot in the size curve — the hinge of raw
+    log-mcap above the estimation 90th percentile, orthogonalised to Size and NonLinSize, so the
+    very largest names keep the differentiation the ±3 winsor removes from Size;
+    <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
     mcap; <code>Leverage</code> = assets / equity. (<code>Growth</code> was dropped 2026-07-04:
     |t|&gt;2 on only 9% of regression days and a loading on only 21% of held weight.)
     Market cap = split-adjusted close × shares outstanding (DEI cover-page count).

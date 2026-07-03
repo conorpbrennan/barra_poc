@@ -561,8 +561,17 @@ and the remaining hidden beta is a real **mega-cap regime driver** (amzn/googl/a
 it) the linear+cubic size terms don't span; and **Growth covered only 21.3% of held weight**,
 which combined with `/regression`'s 9% |t|>2 admission rate led to **Growth being dropped from
 the model on 2026-07-04** (removed from `STYLE_FACTORS`, the fundamentals descriptor block, the
-precompute/frontend STYLE lists, `FACTOR_RECIPES`, and the CRO report — the model now carries
-nine style factors + Market).
+precompute/frontend STYLE lists, `FACTOR_RECIPES`, and the CRO report).
+
+The mega-cap cluster got its own fix the same day: **`MegaCap`, a spline knot in the size
+curve** — the hinge of RAW log-mcap above the estimation 90th percentile (raw, because the ±3
+estimation winsor is a leverage bound, not a validity judgment: it deliberately flattens the top
+tail of Size, which is why NVDA ≈ a $600B name at +3 and the mega regime landed in residuals),
+scaled by the estimation hinge std, then orthogonalized to Size + NonLinSize on the estimation
+fit (lstsq) so it carries exactly the tail shape the linear+cubic terms can't span. Standardized
+on the estimation residual mean/std WITHOUT a winsor (inputs bounded by construction),
+`COVERAGE_CAP` backstop, NaN for no-mcap names. Special-cased out of the generic `_split_z` loop
+in `build_exposures` (it must hinge on raw values). The model carries ten style factors + Market.
 
 ## In-UI docs (static serving)
 

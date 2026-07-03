@@ -40,7 +40,7 @@ import pandas as pd
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_drift.parquet"
 
-STYLE = ["Beta", "Momentum", "Size", "Value",
+STYLE = ["Beta", "Momentum", "Size", "Value", "MegaCap",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 SOURCES = ["entered", "exited", "reweighted", "loading_drift"]
 

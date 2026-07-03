@@ -51,7 +51,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_funnel.parquet"
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "universe_filters.json"
 
-STYLE = ["Beta", "Momentum", "Size", "Value",
+STYLE = ["Beta", "Momentum", "Size", "Value", "MegaCap",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 # fixed funnel order; the first stage a name fails is its verdict.
 STAGES = ["listing", "size", "history", "trading frequency", "liquidity", "completeness",

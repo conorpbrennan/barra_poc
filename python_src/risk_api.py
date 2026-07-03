@@ -2671,6 +2671,9 @@ FACTOR_RECIPES = {
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
     "Size": "log market cap (close × PIT shares)",
     "NonLinSize": "log-mcap cubed, orthogonalized to Size on the estimation fit",
+    "MegaCap": "spline knot in the size curve: hinge of raw log-mcap above the estimation 90th "
+               "percentile, orthogonalized to Size + NonLinSize (2026-07-04 — the ±3 winsor "
+               "flattened the top tail, so the mega-cap regime landed in residuals)",
     "Value": "book-to-price: PIT equity / mcap",
     "EarnYield": "earnings yield: PIT net income / mcap",
     "Leverage": "assets / equity (PIT)",

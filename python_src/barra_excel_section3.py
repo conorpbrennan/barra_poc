@@ -92,6 +92,9 @@ def raw_descriptors(sec, prices, funda, mkt, cal):
         frecs.append(pd.DataFrame({
             "ticker": row["ticker"], "Date": cal,
             "Size": np.log(mcap + 1), "NonLinSize": np.log(mcap + 1) ** 3,
+            # raw stage only — the builder hinges this at the estimation q90 and
+            # orthogonalizes to Size + NonLinSize cross-sectionally (2026-07-04)
+            "MegaCap": np.log(mcap + 1),
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),

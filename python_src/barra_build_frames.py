@@ -66,7 +66,11 @@ MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta re
 
 # Growth dropped 2026-07-04: |t|>2 on only 9% of regression days (the admission bar)
 # and a loading on only 21.3% of held weight (asset-growth needs two XBRL vintages).
-STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value",
+# MegaCap added 2026-07-04: spline knot in the size curve — hinge of RAW log-mcap above the
+# estimation 90th percentile, orthogonalized to Size + NonLinSize. The ±3 estimation winsor
+# bounds leverage but flattens the top tail (NVDA ≈ a $600B name at Size +3), so the mega-cap
+# regime landed in residuals (the audit's Size +1.04 / NonLinSize −2.19 hidden-beta cluster).
+STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "MegaCap",
                  "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -593,6 +597,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             "ticker": row["ticker"], "Date": cal,
             "Size": np.log(mcap + 1),
             "NonLinSize": np.log(mcap + 1) ** 3,
+            "MegaCap": np.log(mcap + 1),                 # hinged per-date in build_exposures
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),
@@ -619,7 +624,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
     for d, g in raw.groupby("Date"):
         g = g.copy()
         em = g["is_estimation"]
-        for f in [c for c in STYLE_FACTORS if c in g]:
+        for f in [c for c in STYLE_FACTORS if c in g and c != "MegaCap"]:
             g[f] = _split_z(g[f].astype(float), em)
         if {"NonLinSize", "Size"}.issubset(g):           # remove the part explained by Size
             ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
@@ -635,6 +640,33 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             sz, lq = g["Size"].fillna(0.0), g["Liquidity"].fillna(0.0)
             b = np.polyfit(sz[ref], lq[ref], 1)
             g["Liquidity"] = _split_z(g["Liquidity"] - (b[0] * g["Size"] + b[1]), em)
+        if {"MegaCap", "Size", "NonLinSize"}.issubset(g):
+            # MegaCap = spline knot in the size curve. Hinge the RAW log-mcap (still raw here —
+            # excluded from the z loop above) at the estimation 90th percentile so the top tail
+            # keeps the differentiation the ±3 winsor removes from Size, then take the residual
+            # against Size + NonLinSize on the estimation fit: what's left is exactly the tail
+            # shape the linear + cubic terms can't span. Standardized on the estimation
+            # residual's mean/std WITHOUT a winsor (inputs are bounded by construction: the
+            # hinge is a few log units, Size/NonLinSize are capped z-scores — no corrupt-data
+            # channel), COVERAGE_CAP as the backstop. NaN (no-mcap) names stay NaN.
+            ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
+            raw_lm = g["MegaCap"].astype(float)
+            knot = raw_lm[ref].quantile(0.90)
+            h = (raw_lm - knot).clip(lower=0.0)
+            sd = h[ref].std()
+            if sd > 1e-12:
+                hz = h / sd
+                X = np.column_stack([np.ones(int(ref.sum())),
+                                     g.loc[ref, "Size"].fillna(0.0),
+                                     g.loc[ref, "NonLinSize"].fillna(0.0)])
+                bt, *_ = np.linalg.lstsq(X, hz[ref].fillna(0.0), rcond=None)
+                resid = hz - (bt[0] + bt[1] * g["Size"].fillna(0.0)
+                              + bt[2] * g["NonLinSize"].fillna(0.0))
+                mu, s2 = resid[ref].mean(), resid[ref].std()
+                g["MegaCap"] = (((resid - mu) / s2).clip(-COVERAGE_CAP, COVERAGE_CAP)
+                                if s2 > 1e-12 else np.nan)
+            else:
+                g["MegaCap"] = np.nan
         out.append(g)
     panel = pd.concat(out, ignore_index=True)
     long = panel.melt(id_vars=["figi", "Date"], value_vars=STYLE_FACTORS,
