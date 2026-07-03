@@ -68,20 +68,20 @@ NDX_PROXY       = "qqq"           # Nasdaq-100 ETF: the NdxBeta (mega-complex co
 
 # Growth dropped 2026-07-04: |t|>2 on only 9% of regression days (the admission bar)
 # and a loading on only 21.3% of held weight (asset-growth needs two XBRL vintages).
-# MegaCap added 2026-07-04: spline knot in the size curve — hinge of RAW log-mcap above the
-# estimation 90th percentile, orthogonalized to Size + NonLinSize. The ±3 estimation winsor
-# bounds leverage but flattens the top tail (NVDA ≈ a $600B name at Size +3), so the mega-cap
-# regime landed in residuals (the audit's Size +1.04 / NonLinSize −2.19 hidden-beta cluster).
 # RateBeta added 2026-07-04: partial duration beta (stock return on the TLT return residualized
 # against the market, 252d window). The audit's Leverage/Liquidity/MegaCap flags shared one
 # carrier list (hto/tsm/ida/cms/amzn — utilities, a REIT, rate-sensitive mega-caps): correlated
 # residuals with one theme = a missing rates/duration factor.
 # NdxBeta added 2026-07-04: partial mega-complex beta (QQQ residualized against the market,
-# same construction). Post-industries the last two flags (Liquidity/MegaCap) were carried by
-# amzn/googl/msft/tsm — the mega complex co-moves as a GROUP beyond any smooth function of
-# log-mcap (MegaCap grades size; the regime is club membership), and tsm's imputed size can't
-# see its home-market volume. A realized-comovement descriptor prices the club directly.
-STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "MegaCap", "RateBeta", "NdxBeta",
+# same construction) — the mega complex co-moves as a GROUP beyond any smooth function of
+# log-mcap, and tsm's imputed size can't see its home-market volume. A realized-comovement
+# descriptor prices the club directly.
+# MegaCap (spline knot in the size curve, added earlier on 2026-07-04) was DROPPED the same
+# day: NdxBeta took over the club's pricing (MegaCap admission fell to 13%, weakest in the
+# model) and its one remaining hidden-beta flag was carried by imputed-size names whose hinge
+# loading the log-ADV fit cannot estimate (tsm's Taipei volume) — a descriptor that only
+# misprices the names it was built for earns no seat.
+STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
                  "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -633,7 +633,6 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             "ticker": row["ticker"], "Date": cal,
             "Size": np.log(mcap + 1),
             "NonLinSize": np.log(mcap + 1),              # cubed AFTER standardization (USE4)
-            "MegaCap": np.log(mcap + 1),                 # hinged per-date in build_exposures
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             # Leverage = Liabilities/Assets (2026-07-04 respec). Assets/(Equity+1) is unbounded
@@ -684,9 +683,8 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
                 b = np.polyfit(g.loc[fit, "_logadv"], g.loc[fit, "Size"], 1)
                 imput = b[0] * g.loc[need, "_logadv"] + b[1]
                 g.loc[need, "Size"] = imput
-                g.loc[need, "MegaCap"] = imput           # raw log-mcap feeds the hinge
                 n_imputed += int(need.sum())
-        for f in [c for c in STYLE_FACTORS if c in g and c not in ("MegaCap", "NonLinSize")]:
+        for f in [c for c in STYLE_FACTORS if c in g and c != "NonLinSize"]:
             g[f] = _split_z(g[f].astype(float), em)
         if "Size" in g:
             # NonLinSize = cube of the STANDARDIZED Size (Barra USE4), then the Size-residual.
@@ -709,33 +707,6 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             sz, lq = g["Size"].fillna(0.0), g["Liquidity"].fillna(0.0)
             b = np.polyfit(sz[ref], lq[ref], 1)
             g["Liquidity"] = _split_z(g["Liquidity"] - (b[0] * g["Size"] + b[1]), em)
-        if {"MegaCap", "Size", "NonLinSize"}.issubset(g):
-            # MegaCap = spline knot in the size curve. Hinge the RAW log-mcap (still raw here —
-            # excluded from the z loop above) at the estimation 90th percentile so the top tail
-            # keeps the differentiation the ±3 winsor removes from Size, then take the residual
-            # against Size + NonLinSize on the estimation fit: what's left is exactly the tail
-            # shape the linear + cubic terms can't span. Standardized on the estimation
-            # residual's mean/std WITHOUT a winsor (inputs are bounded by construction: the
-            # hinge is a few log units, Size/NonLinSize are capped z-scores — no corrupt-data
-            # channel), COVERAGE_CAP as the backstop. NaN (no-mcap) names stay NaN.
-            ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
-            raw_lm = g["MegaCap"].astype(float)
-            knot = raw_lm[ref].quantile(0.90)
-            h = (raw_lm - knot).clip(lower=0.0)
-            sd = h[ref].std()
-            if sd > 1e-12:
-                hz = h / sd
-                X = np.column_stack([np.ones(int(ref.sum())),
-                                     g.loc[ref, "Size"].fillna(0.0),
-                                     g.loc[ref, "NonLinSize"].fillna(0.0)])
-                bt, *_ = np.linalg.lstsq(X, hz[ref].fillna(0.0), rcond=None)
-                resid = hz - (bt[0] + bt[1] * g["Size"].fillna(0.0)
-                              + bt[2] * g["NonLinSize"].fillna(0.0))
-                mu, s2 = resid[ref].mean(), resid[ref].std()
-                g["MegaCap"] = (((resid - mu) / s2).clip(-COVERAGE_CAP, COVERAGE_CAP)
-                                if s2 > 1e-12 else np.nan)
-            else:
-                g["MegaCap"] = np.nan
         out.append(g)
     panel = pd.concat(out, ignore_index=True)
     if n_imputed:

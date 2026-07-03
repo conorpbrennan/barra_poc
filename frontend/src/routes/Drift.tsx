@@ -8,7 +8,7 @@ import { QueryState } from "../components/ui";
 import { signedNum, num } from "../lib/format";
 import type { Rec } from "../api/types";
 
-const STYLE = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "MegaCap", "RateBeta", "NdxBeta", "Leverage"];
+const STYLE = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "RateBeta", "NdxBeta", "Leverage"];
 
 export function Drift() {
   const [split, setSplit] = useState("2021-01-01");

@@ -297,8 +297,8 @@ def build() -> None:
     builder writes six parquet frames; the Atoti cube reads those and nothing else. No factor-return
     series is bought or downloaded — they are estimated in-house (§3).</li>
 <li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
-    — Size / MegaCap / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol /
-    Momentum / Liquidity / RateBeta from prices — standardised by median / MAD on the estimation universe (winsorised ±3
+    — Size / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol /
+    Momentum / Liquidity / RateBeta / NdxBeta from prices — standardised by median / MAD on the estimation universe (winsorised ±3
     there, left uncapped on coverage so off-index names read their true loadings).</li>
 <li><strong>Risk.</strong> Every scenario is the same calculation
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
@@ -560,9 +560,9 @@ about.</p>
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
     the cube of the <em>standardised</em> Size loading (USE4 convention — cubing raw log-mcap
     leaves a quadratic U-shape after the Size fit, which pinned small/mid-caps together;
-    respecified 2026-07-04), orthogonalised to Size; <code>MegaCap</code> = a spline knot in the size curve — the hinge of raw
-    log-mcap above the estimation 90th percentile, orthogonalised to Size and NonLinSize, so the
-    very largest names keep the differentiation the ±3 winsor removes from Size;
+    respecified 2026-07-04), orthogonalised to Size (<code>MegaCap</code>, a spline knot above
+    the estimation q90, was added and dropped the same day — 2026-07-04 — once NdxBeta took over
+    the mega club's pricing; §7·b);
     <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
     mcap; <code>Leverage</code> = total liabilities / total assets (respecified 2026-07-04 from
     assets/equity, which is unbounded as equity → 0 — insurers read 40×, distressed names 100×+ —
@@ -843,20 +843,30 @@ tests to every factor:</p>
     residual-vs-factor R² 0.40 → 0.26 — the largest single drop of the programme; NdxBeta
     admits at 43% of days with a near-clean own hidden beta; collinearity stays clean (no
     NdxBeta ~ Ind:IT pair); RateBeta clears to ok</td></tr>
+<tr><td><strong>MegaCap dropped</strong> (added earlier the same day)</td>
+    <td>NdxBeta took over the mega club's pricing — MegaCap's admission fell to 13%, weakest in
+    the model — and its one remaining flag was carried by <em>imputed-size</em> names whose
+    hinge loading the log-ADV fit cannot estimate (tsm's volume trades in Taipei). A descriptor
+    that only misprices the names it was built for earns no seat.</td>
+    <td class="num">Liquidity fully clean (−0.03); span inside-share 72% → 85% (the hinge's
+    extreme loadings were pushing the megas past the cloud edge by construction); daily fit R²
+    unchanged at 0.30. Cost: residual R² 0.26 → 0.32 and a modest new Momentum flag (−0.22,
+    same mega carriers) — the hinge was doing real work for the correctly-measured megas</td></tr>
 </table>
-<p><strong>Where it stands.</strong> The model is now structurally a production-shaped Barra
-model: Market + 12 styles + 11 GICS industries, estimated jointly under the proper constraint.
-Over the programme: daily cross-sectional R² 0.19 → 0.30, residual-vs-factor R² 0.51 → 0.26.
-<strong>One flag remains — MegaCap (Σw·β −0.60)</strong> — and it is precisely localised: the
-carriers are tsm (+3.9) and tko (+1.9), both <em>imputed-size</em> names. The log-ADV
-imputation understates mega-ness where US-listed volume underrepresents global size (tsm's
-volume is in Taipei); NdxBeta prices their comovement, but the MegaCap characteristic loading
-itself stays misestimated for them — a free-data boundary, disclosed, not a spec fault.
-Everything else tests ok/watch. On admission: MegaCap fell to 13% (weakest in the model) as
-NdxBeta took over the club's pricing — it has moved from probation to first candidate for
-removal at the next review; NonLinSize (18%), EarnYield (14%), Leverage (16%), Value (18%) and
-Liquidity (19%) also sit below the one-third rule and are judged again after two more quarters
-of data, now that industries and the comovement betas hold what's theirs.</p>
+<p><strong>Where it stands.</strong> The model is Market + 11 styles + 11 GICS industries,
+estimated jointly under the proper constraint. Over the programme: daily cross-sectional R²
+0.19 → 0.30, residual-vs-factor R² 0.51 → 0.32. The MegaCap drop was a measured trade, both
+sides disclosed. <em>Gained:</em> Liquidity tests fully clean (Σw·β −0.03); the span
+inside-share diagnostic recovered 72% → 85% (MegaCap's deliberately extreme hinge loadings were
+pushing nvda/googl/aapl past the estimation cloud's edge by construction); no more misestimated
+hinge loadings on imputed-size names; the daily fit R² gave up nothing (0.30 before and after).
+<em>Cost:</em> residual-vs-factor R² 0.26 → 0.32, and a modest new Momentum flag (Σw·β −0.22,
+carriers tsm/googl/tko/msft) — the hinge <em>was</em> doing real work for the
+correctly-measured megas, and part of the club's variance now leans on Momentum's factor. The
+open watch list is therefore one modest flag (Momentum, mega carriers) plus the sub-one-third
+admission cohort — Liquidity (19%), NonLinSize (19%), Value (18%), Leverage (16%), EarnYield
+(14%) — all judged again after two more quarters of data, now that industries and the
+comovement betas hold what's theirs.</p>
 <p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
 <em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
 erased real information (the mega-cap tail), the answer was a new bounded regressor computed

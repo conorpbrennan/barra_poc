@@ -95,9 +95,6 @@ def raw_descriptors(sec, prices, funda, mkt, cal):
             # raw stage only — since 2026-07-04 the builder computes NonLinSize as the CUBE OF
             # THE STANDARDIZED Size (USE4), orthogonalized to Size; the workbook shows raw m³
             "NonLinSize": np.log(mcap + 1) ** 3,
-            # raw stage only — the builder hinges this at the estimation q90 and
-            # orthogonalizes to Size + NonLinSize cross-sectionally (2026-07-04)
-            "MegaCap": np.log(mcap + 1),
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             "Leverage": (fa["Liabilities"].where(fa["Liabilities"].notna(),

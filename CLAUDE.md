@@ -625,8 +625,15 @@ to QQQ (`NDX_PROXY`) residualized against the market, the RateBeta construction.
 collinearity clean (no NdxBeta~Ind:IT pair), RateBeta cleared to ok. The ONE remaining flag is
 MegaCap (−0.60), localized to the imputed-size names (tsm +3.9, tko +1.9) — the log-ADV
 imputation understates mega-ness where US volume underrepresents global size, a free-data
-boundary, disclosed. MegaCap's admission fell to 13% as NdxBeta took over the club's pricing —
-first drop candidate at the next review. Twelve style factors + 11 industries + Market.
+boundary, disclosed. MegaCap's admission fell to 13% as NdxBeta took over the club's pricing.
+
+**MegaCap DROPPED (2026-07-04, same day it was added)** — admission 13% (weakest) and its one
+remaining flag was carried by imputed-size names whose hinge loading the log-ADV fit cannot
+estimate. A measured trade, both sides in §7·b: gained Liquidity fully clean (−0.03), span
+inside-share 72% → 85% (the hinge's extreme loadings pushed the megas past the cloud edge BY
+CONSTRUCTION — the earlier span note is thereby resolved), fit R² unchanged; cost residual R²
+0.26 → 0.32 and a modest new Momentum flag (−0.22, mega carriers) — the hinge was doing real
+work for the correctly-measured megas. **Eleven style factors + 11 industries + Market.**
 
 **RateBeta (2026-07-04): the missing rates/duration factor.** The post-respec audit's three
 remaining flags (Leverage/Liquidity/MegaCap) shared one carrier list — hto/tsm/ida/cms/amzn:
