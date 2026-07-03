@@ -329,6 +329,30 @@ def t_linkage_bands_behave():
 
 
 @integ
+def t_linkage_materiality_floor():
+    """z is scale-invariant, so dust positions are floored out of the surprises table (default
+    10bp) but DISCLOSED in dust_excluded; min_weight=0 admits them back."""
+    import requests
+    lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
+    assert abs(lk["min_weight"] - 0.001) < 1e-12
+    assert all(p["weight"] >= lk["min_weight"] for p in lk["positions"]), \
+        [p["name"] for p in lk["positions"] if p["weight"] < lk["min_weight"]]
+    d = lk["dust_excluded"]
+    assert d["n"] >= 0 and all(r["weight"] < lk["min_weight"] for r in d["names"])
+    # co-movement set draws from the floored table only
+    if lk["breach_comovement"]:
+        dust_names = {r["name"] for r in d["names"]}
+        assert not dust_names & set(lk["breach_comovement"]["names"])
+    lk0 = requests.get(f"{API}/pnl_attribution/linkage",
+                       params={"min_weight": 0}, timeout=60).json()
+    assert lk0["dust_excluded"]["n"] == 0
+    # with the floor off, any disclosed dust breach must be eligible for the table again
+    if d["n"]:
+        names0 = {p["name"] for p in lk0["positions"]}
+        assert d["names"][0]["name"] in names0 or len(lk0["positions"]) == 15
+
+
+@integ
 def t_cube_measures_foot():
     """Σ Factor contribution over Factor rows == the grand total (additive), and at book level
     Realized PnL == Factor contribution + Specific PnL."""

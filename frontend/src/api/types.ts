@@ -269,6 +269,9 @@ export interface PnlLinkageResult {
   stress: { vol_mult: number; rho_blend: number };
   book_total: PnlLinkageRow; rows: PnlLinkageRow[];
   positions: PnlLinkagePosition[];
+  min_weight?: number;                // materiality floor on w(T) for the surprises table
+  dust_excluded?: { n: number;
+    names: { name: string; weight: number; z: number; verdict: string }[] };
   breach_comovement: BreachComovement | null;
   surprises: PnlLinkageRow[];
   note: string;

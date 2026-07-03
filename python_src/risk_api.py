@@ -2238,12 +2238,19 @@ async def pnl_attribution_linkage(T: str | None = None,
                                   horizon: int = Query(3, ge=1, le=24, description="months"),
                                   book: str = "Soros",
                                   vol_mult: float = Query(1.25, gt=0),
-                                  rho: float = Query(0.75, ge=0, le=1)):
+                                  rho: float = Query(0.75, ge=0, le=1),
+                                  min_weight: float = Query(
+                                      0.001, ge=0, le=0.1,
+                                      description="materiality floor on w(T) for the position "
+                                                  "surprises (z is scale-invariant, so dust "
+                                                  "positions would otherwise crowd the table); "
+                                                  "sub-floor breaches are disclosed, not dropped")):
     """§4 linkage: the risk decomposition at T read against the realized PnL over T→T+horizon.
     Per factor (plus Specific and the book total): the start-of-period ±2σ BASE band, a STRESSED
     band (vols ×vol_mult, correlations blended toward 1 by rho — correlations only enter the
     aggregate, so the book band widens more than any factor's), the realized contribution (dot),
-    the surprise z-score, and a within/stress/investigate verdict. Plus per-position surprises."""
+    the surprise z-score, and a within/stress/investigate verdict. Plus per-position surprises
+    (weight ≥ min_weight; sub-floor breaches listed in `dust_excluded`)."""
     def run():
         art = _attr_artifact()
         c = (art[art["Kind"] == "contribution"]
@@ -2410,6 +2417,7 @@ async def pnl_attribution_linkage(T: str | None = None,
                         f"factor half also points at a mis-measured loading (hidden beta).")
             return base + "."
         positions = []
+        dust = []    # sub-floor names that still breached — disclosed, never silently dropped
         for p, sd_i in zip(w_.index, name_sd):
             if p not in na.index or sd_i <= 0:
                 continue
@@ -2423,6 +2431,13 @@ async def pnl_attribution_linkage(T: str | None = None,
                    "weight_window_avg": w_win,
                    "realized": r_i, "factor_pnl": fac_i, "specific_pnl": spec_i,
                    "sd_base": float(sd_i), "z": r_i / float(sd_i), "verdict": verdict}
+            # materiality floor: z is scale-invariant (band σ ∝ weight), so a 1bp position can
+            # out-rank real holdings on |z| while being unable to move the book. Below the floor
+            # the row skips the table (and the co-movement set) but a breach is still disclosed.
+            if w_t < min_weight:
+                if verdict != "within":
+                    dust.append(row)
+                continue
             if verdict != "within":
                 drv = _pnl._position_driver(r_i, fac_i, spec_i, w_t, w_win, float(sd_i))
                 if drv is not None:
@@ -2440,6 +2455,7 @@ async def pnl_attribution_linkage(T: str | None = None,
                     row["driver"] = drv
             positions.append(row)
         positions.sort(key=lambda r: -abs(r["z"]))
+        dust.sort(key=lambda r: -abs(r["z"]))
         # co-movement among the idiosyncratic breaches (Chris's missing-factor test, the cheap
         # version): if the specific/mixed breach names' daily residuals co-move over the window,
         # that's one common driver the model has no factor for — not several stock events
@@ -2477,6 +2493,11 @@ async def pnl_attribution_linkage(T: str | None = None,
             "n_days": int(h), "book": book,
             "stress": {"vol_mult": vol_mult, "rho_blend": rho},
             "book_total": book_row, "rows": rows, "positions": positions[:15],
+            "min_weight": min_weight,
+            "dust_excluded": {"n": len(dust),
+                              "names": [{"name": r["name"], "weight": r["weight"],
+                                         "z": r["z"], "verdict": r["verdict"]}
+                                        for r in dust[:10]]},
             "breach_comovement": comove,
             "surprises": [r for r in rows + [book_row] if r["verdict"] == "investigate"],
             "note": ("Bands are the start-of-period risk made visible: half-width = 2σ where σ² = "

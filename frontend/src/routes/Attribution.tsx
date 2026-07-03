@@ -338,7 +338,7 @@ function FragRow({ row: p, open, onToggle, lk, dates }: {
             ▸</span>
           {p.name.toUpperCase()}
         </td>
-        <td>{pct(p.weight, 1)}</td>
+        <td>{pct(p.weight, 2)}</td>
         <td>{signedPct(p.realized, 2)}</td>
         <td className="muted">{signedPct(p.factor_pnl, 2)}</td>
         <td className="muted">{signedPct(p.specific_pnl, 2)}</td>
@@ -685,6 +685,16 @@ function PnlTab() {
                     })}
                   </tbody>
                 </table>
+                {(lk.dust_excluded?.n ?? 0) > 0 && (
+                  <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
+                    {lk.dust_excluded!.n} name{lk.dust_excluded!.n > 1 ? "s" : ""} under the{" "}
+                    {pct(lk.min_weight ?? 0.001, 2)} materiality floor also breached (dust —
+                    can&rsquo;t move the book, excluded):{" "}
+                    {lk.dust_excluded!.names.map((d) =>
+                      `${d.name.toUpperCase()} ${pct(d.weight, 2)} ${signedNum(d.z, 1)}σ`)
+                      .join(", ")}
+                  </p>
+                )}
                 {(() => {
                   const flagged = lk.positions.filter((p) => p.driver);
                   if (!flagged.length) return null;
