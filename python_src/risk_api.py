@@ -179,7 +179,10 @@ async def meta():
         sets = sorted({str(s) for s in cube.query(m["contributors.COUNT"], levels=[l["ScenarioSet"]]).index})
         factors = sorted(S["frames"]["factor_meta"]["Factor"].tolist())
         return {"dates": dates, "scenario_sets": sets, "factors": factors,
-                "ts_measures": TS_MEASURES, "by_levels": list(BY_LEVELS)}
+                "ts_measures": TS_MEASURES, "by_levels": list(BY_LEVELS),
+                # the cube's baked-in hypothetical shock definitions ({set: {Factor: sigma}}) —
+                # served so the Stress lens presets and the cube's Hypo:* sets share ONE source
+                "hypo_shocks": HYPO_SHOCKS}
     return await run_in_threadpool(run)
 
 

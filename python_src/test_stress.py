@@ -85,6 +85,22 @@ def t_stress_conditional_block():
 
 
 @integ
+def t_meta_serves_hypo_shocks():
+    """/meta serves the cube's HYPO_SHOCKS definitions (the Stress-lens presets' single source):
+    every set present, every entry {Factor: sigma} with factors the cube knows."""
+    import requests
+    j = requests.get(f"{API}/meta", timeout=30).json()
+    hs = j.get("hypo_shocks")
+    assert hs and set(hs) == {"Hypo:ValueRotation", "Hypo:RiskOff", "Hypo:MomentumCrash"}, hs
+    facs = set(j["factors"])
+    for name, shocks in hs.items():
+        assert shocks, name
+        for f_, sig in shocks.items():
+            assert f_ in facs and isinstance(sig, (int, float)), (name, f_, sig)
+    assert hs["Hypo:MomentumCrash"] == {"Momentum": -3.0}
+
+
+@integ
 def t_stress_matches_cube_hypo():
     """Custom /stress {Momentum:-3} == the cube's Hypo:MomentumCrash mean P&L (a length-1 vector),
     since both are Σ x_k·(σ_k·vol_k) with the same vols — validates the linear stress math."""

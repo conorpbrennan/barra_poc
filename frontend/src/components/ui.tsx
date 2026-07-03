@@ -29,3 +29,15 @@ export function Field({ label, children }: { label: string; children: ReactNode 
 export function H2({ children }: { children: ReactNode }) {
   return <h2>{children}</h2>;
 }
+
+// "How to read this" — the per-lens explainer: a collapsed disclosure (details on demand, Tufte)
+// holding a short reading guide: the formula, the conventions, the caveats. Keep it to a few
+// sentences; the full treatment lives in the static docs.
+export function HowToRead({ children }: { children: ReactNode }) {
+  return (
+    <details className="howto">
+      <summary>How to read this</summary>
+      <div>{children}</div>
+    </details>
+  );
+}

@@ -1,12 +1,14 @@
 // Stress lens (render_stress): custom one-day shock (per-factor sigma → book P&L + contribution
 // breakdown, POST /stress) and reverse stress (GET /reverse_stress — the single-factor move that
-// breaches a target loss, ranked by vulnerability).
+// breaches a target loss, ranked by vulnerability). Presets fill the sigma inputs: the cube's
+// own Hypo:* definitions (served by /meta, one source), the primer's ch-09 worked example, and
+// the reverse-stress weakest factor at its breach size.
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { useMeta, useReverseStress } from "../api/hooks";
 import { apiSend } from "../api/client";
 import { LabelBar } from "../components/svg";
-import { QueryState } from "../components/ui";
+import { QueryState, HowToRead } from "../components/ui";
 import { pct, num, signedPct } from "../lib/format";
 import type { StressResult } from "../api/types";
 
@@ -14,6 +16,22 @@ export function Stress() {
   const { date, book } = useApp();
   const { data: meta } = useMeta();
   const factors = (meta?.factors ?? []).filter((f) => f !== "Market");
+  // presets: the cube's Hypo sets (verified to match /stress to float precision) + ch 09's example
+  const rvq = useReverseStress(undefined, date, book);
+  const presets: { label: string; shocks: Record<string, number>; note?: string }[] = [
+    ...Object.entries(meta?.hypo_shocks ?? {}).map(([set, sh]) => ({
+      label: set.replace("Hypo:", ""), shocks: sh,
+      note: `the cube's ${set} scenario`,
+    })),
+    { label: "Value −2σ (primer ch 09)", shocks: { Value: -2 },
+      note: "the It's Just Beta ch-09 worked example — compare naive vs conditional" },
+    ...(rvq.data?.weakest?.sigma_to_breach != null ? [{
+      label: `Weakest @ limit (${rvq.data.weakest.factor})`,
+      shocks: { [rvq.data.weakest.factor]:
+        Math.round(rvq.data.weakest.sigma_to_breach! * 10) / 10 },
+      note: "the reverse-stress weakest factor at its breach-sized move",
+    }] : []),
+  ];
 
   const [shocks, setShocks] = useState<Record<string, number>>({});
   const [conditional, setConditional] = useState(true);
@@ -36,7 +54,31 @@ export function Stress() {
       <h1>Stress test</h1>
       <p className="sub">Hypothetical one-day shocks · {book} · as-of {date}</p>
 
+      <HowToRead>
+        A shock is a per-factor move in σ units (that factor&rsquo;s own daily vol from the full
+        2016–2024 history; −2 = a two-sigma down day). The <em>naive</em> loss is
+        {" "}<code>ΔPnL = Σ x_k·(σ_k·vol_k)</code> — your shocked factors move, everything else
+        held still; it matches the cube&rsquo;s Hypo:* sets to float precision. The
+        {" "}<em>conditional</em> loss (keep it on — ch&nbsp;09: stress tests must use correlated
+        shocks) propagates the shock through the factor covariance,
+        {" "}<code>E[f|shock] = F·F_SS⁻¹·s</code>, so co-moving factors move too — on this book it
+        is usually several times the naive number. Reverse stress inverts the question: the
+        single-factor σ-move that produces a target loss, smallest move = most vulnerable.
+        Caveats: linear (no convexity), one-day horizon, vols and correlations from the full
+        history (a hot-regime factor reads too calm — check the vol ratio in the Model lens),
+        and no shock touches specific risk.
+      </HowToRead>
+
       <h2>Custom shock (σ per factor)</h2>
+      <div className="row" style={{ flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
+        <span className="muted small">Presets</span>
+        {presets.map((p) => (
+          <button key={p.label} title={p.note}
+            onClick={() => { setShocks(p.shocks); setResult(null); setErr(null); }}>
+            {p.label}
+          </button>
+        ))}
+      </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem 1.4rem", maxWidth: "44rem" }}>
         {factors.map((f) => (
           <label key={f} className="row" style={{ width: "12rem", justifyContent: "space-between" }}>

@@ -6,7 +6,7 @@ import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
 import { useWhatif, useHedge } from "../api/hooks";
 import { apiSend } from "../api/client";
-import { QueryState } from "../components/ui";
+import { QueryState, HowToRead } from "../components/ui";
 import { pct, num, signedPct, signedNum } from "../lib/format";
 import type { WhatIfResult } from "../api/types";
 
@@ -101,6 +101,20 @@ export function WhatIf() {
     <main className="lens">
       <h1>Pre-trade what-if</h1>
       <p className="sub">Resize / drop / add names; recompute book risk before → after · as-of {date}</p>
+
+      <HowToRead>
+        Edits are <em>absolute target weights</em> (0.05 = 5% of book; 0 drops the name; names
+        from the coverage universe can be added). The other weights are <em>not</em>
+        renormalized — resizing one name changes gross and net, which is the point: you are
+        trading, not rebasing. &ldquo;Before&rdquo; reproduces the cube&rsquo;s reported figures
+        exactly, so <strong>only the before→after delta is new information</strong>. Model vol
+        (1d) is the reference risk number; Scenario VaR/ES are the limit metrics; Total VaR 99
+        is the legacy composite. The hedge panel below prices removing each factor with −x
+        units of its pure factor portfolio (implementable in principle; purity costs leverage
+        and turnover) and the min-variance market hedge h* = −β; no factor hedge touches the
+        specific floor. Caveats: no transaction costs, one-day risk horizon, same full-history
+        vols as everywhere else.
+      </HowToRead>
 
       <QueryState q={boot}>
         {() => (

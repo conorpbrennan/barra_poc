@@ -214,7 +214,13 @@ move too — the naive result holds them still and understates a real event. `GE
 inverts it: for a target loss `L`, the single-factor move
 `σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
 Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
-conditional toggle (naive vs conditional side by side + the propagation table). Tests: `test_stress.py`.
+conditional toggle (naive vs conditional side by side + the propagation table) plus **presets**
+that fill the σ inputs — the cube's `HYPO_SHOCKS` definitions (served via `/meta.hypo_shocks`,
+ONE source, guarded by `t_meta_serves_hypo_shocks`), the primer's ch-09 Value −2σ example, and
+the reverse-stress weakest factor at breach size. Both the Stress and What-if lenses carry a
+**"How to read this" disclosure** (`HowToRead` in `components/ui.tsx` — the per-lens explainer
+pattern: formula, conventions, caveats in a collapsed `<details>`; extend to other lenses as
+needed). Tests: `test_stress.py`.
 
 ## Euler risk contributions (`/contributions`) & model trust (`/calibration`, `/regression`, `/factor_cov`)
 

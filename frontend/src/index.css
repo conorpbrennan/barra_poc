@@ -152,3 +152,12 @@ hr.rule { border: none; border-top: 1px solid var(--line); margin: 1.4rem 0; }
 .fieldbtn:hover { border-color: var(--accent); color: var(--accent); }
 .fieldbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .fieldbtn.on:hover { background: var(--accent-dk); color: #fff; }
+
+/* "How to read this" per-lens explainer (details on demand) */
+details.howto { margin: 0.2rem 0 0.9rem; max-width: 46rem; }
+details.howto summary { color: var(--faint); font-size: 12.5px; cursor: pointer;
+  user-select: none; width: fit-content; }
+details.howto summary:hover { color: var(--accent); }
+details.howto > div { font-size: 13px; color: var(--ink); line-height: 1.55;
+  border-left: 2px solid var(--line); padding: 0.3rem 0 0.3rem 0.8rem; margin-top: 0.4rem; }
+details.howto code { font-size: 12px; }

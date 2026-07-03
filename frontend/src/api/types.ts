@@ -10,6 +10,7 @@ export interface Meta {
   factors: string[];
   ts_measures: string[];
   by_levels: string[];
+  hypo_shocks?: Record<string, Record<string, number>>;
 }
 
 export interface Dims {
