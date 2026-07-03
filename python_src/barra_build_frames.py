@@ -600,7 +600,14 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             "MegaCap": np.log(mcap + 1),                 # hinged per-date in build_exposures
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
-            "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),
+            # Leverage = Liabilities/Assets (2026-07-04 respec). Assets/(Equity+1) is unbounded
+            # as equity→0 (insurers 40×, buyback/distressed names 100×+), so the winsor pinned
+            # 28 coverage names at one loading and turned the factor into a financials-sector
+            # dummy. Liab/A = 1 − 1/(A/E): same information, bounded ~[0,1], differentiates
+            # within the block A/E clipped flat. Liabilities falls back to Assets − Equity.
+            "Leverage": (fa["Liabilities"].where(fa["Liabilities"].notna(),
+                                                 fa["Assets"] - fa["Equity"]).values
+                         / (fa["Assets"].values + 1)),
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
     raw = pdsc.merge(fund, on=["ticker", "Date"], how="outer")

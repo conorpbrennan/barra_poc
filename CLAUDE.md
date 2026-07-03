@@ -596,6 +596,14 @@ EarnYield stay NaN (no fundamentals). Disclosed: builder prints the count, `/dq`
 "size-curve proxy loadings" check (held names with Size but no Value ⇒ imputed; WARN above 25%
 weight), `FACTOR_RECIPES` and the CRO report document it.
 
+**Leverage respec (2026-07-04): Liabilities/Assets, not Assets/Equity.** A/E is unbounded as
+equity→0 (insurers 40×, buyback/distressed names 100×+), so 28 coverage names pinned at one
+clipped loading and every S&P financial saturated at the estimation winsor — the factor
+degenerated into a financials-sector dummy, and the audit's Leverage hidden beta (−0.31 with
+amzn/aapl/ida/cms/hto carriers at moderate true ratios) was the residuals cancelling the
+manufactured tilt. Liab/A = 1 − 1/(A/E): same information, bounded ~[0,1], differentiates within
+the financials block. `Liabilities` falls back to `Assets − Equity` when the tag is missing.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

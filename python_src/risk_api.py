@@ -2679,7 +2679,8 @@ FACTOR_RECIPES = {
                "flattened the top tail, so the mega-cap regime landed in residuals)",
     "Value": "book-to-price: PIT equity / mcap",
     "EarnYield": "earnings yield: PIT net income / mcap",
-    "Leverage": "assets / equity (PIT)",
+    "Leverage": "liabilities / assets (PIT; bounded ~[0,1] — 2026-07-04 respec: assets/equity "
+                "was unbounded as equity→0 and saturated into a financials-sector dummy)",
     # Growth dropped 2026-07-04 (9% admission, 21.3% held-weight coverage)
 }
 

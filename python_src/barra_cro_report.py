@@ -550,7 +550,11 @@ about.</p>
     log-mcap above the estimation 90th percentile, orthogonalised to Size and NonLinSize, so the
     very largest names keep the differentiation the ±3 winsor removes from Size;
     <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
-    mcap; <code>Leverage</code> = assets / equity. (<code>Growth</code> was dropped 2026-07-04:
+    mcap; <code>Leverage</code> = total liabilities / total assets (respecified 2026-07-04 from
+    assets/equity, which is unbounded as equity → 0 — insurers read 40×, distressed names 100×+ —
+    so the winsor pinned them at one loading and the factor degenerated into a financials-sector
+    dummy; liabilities/assets is the same information through a bounded monotone transform).
+    (<code>Growth</code> was dropped 2026-07-04:
     |t|&gt;2 on only 9% of regression days and a loading on only 21% of held weight.)
     Market cap = split-adjusted close × shares outstanding (DEI cover-page count).
     <strong>Market-cap floor:</strong> if a name's mcap falls below ${MCAP_FLOOR:,.0f} that month

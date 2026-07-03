@@ -100,7 +100,9 @@ def raw_descriptors(sec, prices, funda, mkt, cal):
             "MegaCap": np.log(mcap + 1),
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
-            "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),
+            "Leverage": (fa["Liabilities"].where(fa["Liabilities"].notna(),
+                                                 fa["Assets"] - fa["Equity"]).values
+                         / (fa["Assets"].values + 1)),   # Liab/A respec 2026-07-04
             "mcap": mcap.values,
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
