@@ -123,6 +123,8 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "Custom stress PnL",
                  # tail-fatness: share of scenario days beyond ±2σ of the cell's own vol:
                  "Exceedance rate 2s",
+                 # correlation stress per cell (CorrStress params; Base = Model vol):
+                 "Stressed model vol",
                  # concentration: 5 largest names' share of Total VaR (tt.rank over the flat
                  # PositionRank hierarchy; set-dependent like the marginals):
                  "Top-5 risk share",
@@ -148,7 +150,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Factor variance contribution",
             "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
             "Vol at min-variance hedge", "Custom stress PnL", "Top-5 risk share",
-            "Exceedance rate 2s",
+            "Exceedance rate 2s", "Stressed model vol",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -1370,6 +1372,42 @@ def _corr_stress_result(date: str, book: str, vol_mult: float, rho: float) -> di
             "base_var99_normal": _Z99 * base, "stressed_var99_normal": _Z99 * stressed}
 
 
+def _corr_stress_cube(date: str, book: str, vol_mult: float, rho: float) -> dict:
+    """The correlation-stress read SERVED from the cube's `Stressed model vol` (a transient
+    CorrStress parameter scenario), with the numpy _corr_stress_result as the live cross-check.
+    Falls back to serving the numpy numbers on any cube failure."""
+    ref = _corr_stress_result(date, book, vol_mult, rho)
+    scen = f"corr-{uuid.uuid4().hex[:12]}"
+    sim = None
+    try:
+        cube = S["cube"]; l, mm = cube.levels, cube.measures
+        sim = S["session"].tables["CorrStress"]
+        sim.append((scen, float(vol_mult), float(rho)))
+        flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
+        if "Book" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Book"] == book)
+        base = cube.query(mm["Model vol"], filter=flt)
+        stressed = cube.query(mm["Stressed model vol"],
+                              filter=flt & (l["CorrStress"] == scen))
+        b, st = float(base.iloc[0, 0]), float(stressed.iloc[0, 0])
+        return {"vol_mult": vol_mult, "rho_blend": rho,
+                "base_vol_1d": b, "stressed_vol_1d": st,
+                "base_var99_normal": _Z99 * b, "stressed_var99_normal": _Z99 * st,
+                "source": "cube",
+                "verification": {"base_abs_diff": abs(b - ref["base_vol_1d"]),
+                                 "stressed_abs_diff": abs(st - ref["stressed_vol_1d"])}}
+    except Exception as e:
+        ref["source"] = "numpy_fallback"
+        ref["verification"] = {"error": f"{e.__class__.__name__}: {e}"}
+        return ref
+    finally:
+        if sim is not None:
+            try:
+                sim.drop(sim["Scenario"] == scen)
+            except Exception:
+                pass
+
+
 @app.post("/stress")
 async def stress(body: StressBody):
     """Custom one-day stress: book P&L under user-defined per-factor sigma shocks (and a per-factor
@@ -1434,7 +1472,7 @@ async def stress(body: StressBody):
         if body.conditional:
             res["conditional"] = _conditional_stress_result(body.shocks, d, body.book)
         if body.vol_mult is not None or body.rho is not None:
-            res["correlation_stress"] = _corr_stress_result(
+            res["correlation_stress"] = _corr_stress_cube(
                 d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
         return res
     return await run_in_threadpool(run)

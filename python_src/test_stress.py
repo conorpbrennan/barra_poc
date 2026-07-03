@@ -138,6 +138,33 @@ def t_pivot_shocks_param():
 
 
 @integ
+def t_corr_stress_served_from_cube():
+    """The correlation-stress block is served from the cube's Stressed model vol (closed-form
+    D J D expansion, no matrix algebra) on a transient CorrStress scenario: numpy _stressed_cov
+    cross-check at float precision, the Base-scenario identity (Stressed model vol == Model vol
+    at mult 1 / blend 0), and per-sector drill positive."""
+    import requests
+    s = requests.post(f"{API}/stress", json={"shocks": {"Value": -1},
+                                             "vol_mult": 1.25, "rho": 0.75}, timeout=60).json()
+    cs = s["correlation_stress"]
+    assert cs.get("source") == "cube", cs
+    assert cs["verification"]["base_abs_diff"] < 5e-10, cs["verification"]
+    assert cs["verification"]["stressed_abs_diff"] < 5e-10, cs["verification"]
+    assert cs["stressed_vol_1d"] > cs["base_vol_1d"]
+    d = s["date"]
+    q = {"rows": "ScenarioSet", "measures": "Stressed model vol,Model vol",
+         "filters": json.dumps({"Book": ["Soros"], "Date": [d], "ScenarioSet": ["HistFull"]})}
+    j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
+    r = j["records"][0]                      # Base scenario: mult 1, blend 0
+    assert abs(r["Stressed model vol"] - r["Model vol"]) < 1e-15, r
+    q2 = dict(q); q2["rows"] = "Sector"; q2["measures"] = "Stressed model vol"
+    j2 = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=60).json()
+    cells = [x["Stressed model vol"] for x in j2["records"]
+             if x.get("Stressed model vol") is not None]
+    assert len(cells) >= 5 and all(c > 0 for c in cells)
+
+
+@integ
 def t_stress_matches_cube_hypo():
     """Custom /stress {Momentum:-3} == the cube's Hypo:MomentumCrash mean P&L (a length-1 vector),
     since both are Σ x_k·(σ_k·vol_k) with the same vols — validates the linear stress math."""

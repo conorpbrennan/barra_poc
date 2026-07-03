@@ -520,6 +520,22 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Vol at min-variance hedge"] = tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book)
     m["Vol at min-variance hedge"].formatter = "DOUBLE[0.00%]"
 
+    # ---- Stressed model vol: the correlation stress as a PARAMETERIZED measure ----------------
+    # x'F'x under vols x m and correlations blended b toward 1 has a closed form needing no
+    # matrix algebra:  m^2 * [ (1-b) * x'Fx  +  b * (SUM_k x_k*sigma_k)^2 ]   (D J D expansion),
+    # and the specific block scales m^2. Same math as _stressed_cov, per CELL — so "this
+    # sector's vol when correlations go to 1" is a drill, which the API version can't do.
+    # Parameters live on the CorrStress simulation (Base: mult 1, blend 0 -> equals Model vol).
+    cube.create_parameter_simulation(
+        "CorrStress", measures={"Vol mult": 1.0, "Rho blend": 0.0})
+    _sxs = tt.agg.sum(m["Net exposure"] * m["Factor return vol"],
+                      scope=tt.OriginScope({l["Factor"]}))          # SUM_k x_k * sigma_k (signed)
+    m["Stressed model vol"] = m["Vol mult"] * tt.math.sqrt(
+        (1.0 - m["Rho blend"]) * m["Scenario PnL vol"] ** 2
+        + m["Rho blend"] * _sxs ** 2
+        + m["Specific variance"])
+    m["Stressed model vol"].formatter = "DOUBLE[0.00%]"
+
     # ---- Tier-2 prototype: custom stress as a PARAMETER SIMULATION ----------------------------
     # (docs/cube-measure-opportunities.md #3.) A per-Factor "Shock sigma" parameter, default 0 on
     # the Base scenario. /stress appends a TRANSIENT scenario per request (uuid rows into the
