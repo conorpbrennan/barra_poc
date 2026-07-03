@@ -632,6 +632,60 @@ function PnlTab() {
       <QueryState q={rq}>
         {(r) => (
           <div style={{ maxWidth: "52rem" }}>
+            <HowToRead>
+              {(() => {
+                const cv = (pre: string) =>
+                  r.checks.find((c) => c.name.startsWith(pre))?.value ?? null;
+                const cs = (pre: string) =>
+                  r.checks.find((c) => c.name.startsWith(pre))?.status ?? "—";
+                const ir = cv("Information ratio");
+                const vr = cv("Specific vol");
+                const l1 = cv("Lag-1"); const l2 = cv("Lag-2");
+                const r2 = cv("Residual-vs-factor");
+                const bb = cv("Bias stat — book"); const bs = cv("Bias stat — specific");
+                const topL = r.factor_regression.loadings[0];
+                const sig = irSignificance(ir, r.n_months);
+                return (
+                  <>
+                    The residual ε is what the factor block can&rsquo;t explain. The checks answer
+                    two questions in order — <em>is it large</em>, and <em>is it structured</em>? A
+                    large-but-random residual is idiosyncratic risk you may be taking on purpose; a
+                    STRUCTURED one means the model is missing something — that is the one to
+                    escalate. <em>Size:</em> the IR
+                    ({ir !== null ? signedNum(ir, 2) : "—"}, {cs("Information ratio")}) says whether
+                    selection paid and how consistently — but t = IR·√T first
+                    {sig ? <> (t ≈ {signedNum(sig.t, 1)} on {r.n_months} months — direction, not
+                      proof)</> : null}; the realized/predicted specific-vol ratio
+                    ({vr !== null ? num(vr, 2) : "—"}, {cs("Specific vol")}) is a risk-model check —
+                    far above 1 means the specific block in every VaR is too small, regardless of
+                    whether the picks paid. The bias stats read calibration as std of realized z
+                    (1 = calibrated, band ±√(2/W)): book {bb !== null ? num(bb, 2) : "—"} vs
+                    specific {bs !== null ? num(bs, 2) : "—"}
+                    {bb !== null && bs !== null && bb < 1 && bs > 1 &&
+                      <> — opposite directions: the factor block over-states while specific
+                        under-states, offsetting at book level, both wrong</>}.
+                    {" "}<em>Structure:</em> autocorrelation
+                    (lag-1 {l1 !== null ? signedNum(l1, 2) : "—"},
+                    lag-2 {l2 !== null ? signedNum(l2, 2) : "—"}) should be ≈0 — a memoryless
+                    residual is re-underwritten bets; persistence is one unhedged bet carried for
+                    months, or a stale 13F weight. Residual-vs-factor R²
+                    ({r2 !== null ? pct(r2, 0) : "—"}, {cs("Residual-vs-factor")}) is the loudest
+                    check: ε should be orthogonal to the factors by construction, so any material
+                    R² is P&L labelled &ldquo;specific&rdquo; that actually co-moves with factors —
+                    hidden beta at book level
+                    {topL && <>; the loadings line names the suspect
+                      ({topL.factor} β {signedNum(topL.beta, 2)}, t {signedNum(topL.t_stat, 1)})
+                    </>}. Diffuse concentration + a low hit rate reads as a broad systematic bleed
+                    (missing factor), not one bad pick. Read it as one story: fix the measurement
+                    before judging the picker — if the structure checks are red, part of
+                    &ldquo;specific&rdquo; is mis-labelled factor risk, and the size checks will
+                    move once the loadings are right. Thresholds are deliberately loose starting
+                    values and {r.n_months} monthly observations is thin — RAG here is triage, not
+                    verdict.
+                  </>
+                );
+              })()}
+            </HowToRead>
             <table className="tufte">
               <tbody>
                 {r.checks.map((c) => (
