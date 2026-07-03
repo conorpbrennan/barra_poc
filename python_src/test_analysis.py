@@ -112,6 +112,19 @@ def t_anthropic_key_present():
     assert key.startswith("sk-"), "key present but not in sk-... form"
 
 
+@unit
+def t_all_llm_prompts_carry_chris_voice():
+    """EVERY LLM system prompt starts from the shared CHRIS_VOICE persona (CLAUDE.md rule) —
+    a new *_SYSTEM constant that forgets to prepend it fails here."""
+    import risk_api
+    prompts = {n: getattr(risk_api, n) for n in dir(risk_api) if n.endswith("_SYSTEM")}
+    assert len(prompts) >= 4, f"expected the four LLM prompts, found {list(prompts)}"
+    for name, text in prompts.items():
+        assert text.startswith(risk_api.CHRIS_VOICE), f"{name} does not start with CHRIS_VOICE"
+    assert "understand ALL the risks" in risk_api.CHRIS_VOICE
+    assert "Never sign a name" in risk_api.CHRIS_VOICE
+
+
 # --------------------------------------------------------------------------- INTEG (live backend)
 @integ
 def t_pivot_refactor_regression():

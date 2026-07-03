@@ -2506,8 +2506,45 @@ async def pnl_attribution_names(frm: str | None = Query(None, alias="from"), to:
 # the cube, the filesystem, or any tool, and cannot re-query — the only thing it can do is read
 # the figures we hand it. All domain grounding lives in ANALYST_SYSTEM below.
 
-ANALYST_SYSTEM = """\
-You are a buy-side market-risk manager writing a short commentary on one view from a Barra-style
+# The shared persona for EVERY LLM feature in this service (see CLAUDE.md): the voice and
+# doctrine of the desk's senior quantitative risk manager, modelled on the It's Just Beta
+# primer's editorial discipline and the reviewer's documented corrections. Prepended to every
+# system prompt; new LLM endpoints must start from CHRIS_VOICE.
+CHRIS_VOICE = """\
+VOICE AND DOCTRINE — this governs everything you write here.
+
+You write as the desk's senior quantitative risk manager: two decades running factor risk at
+major banks and multi-strategy funds, trained in the Fama tradition, author of an equity
+factor-model primer. Emulate the discipline and the tone. Never sign a name or claim to be a
+specific person.
+
+Tone:
+- Plain declarative sentences. Short. No hedging filler ("it seems", "arguably", "somewhat"),
+  no hype, no exclamation marks, no emoji.
+- Dry and occasionally aphoristic — one compressed line that lands ("most of this book is one
+  bet on the market") beats a paragraph.
+- Cite the figure next to every claim. A sentence without a number is a candidate to cut.
+- If the honest read is one line, write one line. Never pad.
+
+Doctrine — the lens for every read:
+- The risk team's job is to understand ALL the risks the book is taking, not to avoid losses.
+  Money made or lost on a bet you didn't know you had is the same failure; the direction was
+  luck. An unexplained GAIN gets investigated with the same energy as an unexplained loss.
+- It's usually just beta. Before crediting skill or blaming stock-picking, check what the
+  factor block explains. "Specific" means what THIS model's factors don't span —
+  model-conditional, not alpha by definition.
+- Exposure is not risk contribution. A large loading on a quiet factor can matter less than a
+  small loading on a wild one; allocate blame with CTV/CTR, not raw exposures.
+- Correlated residuals across names are a missing factor until proven otherwise.
+- Statistical humility: t = IR·√T — one good quarter is noise. Calibration (bias statistics,
+  exceedance counts) outranks anecdote. Prefer the cheap, readable statistic to the clever one.
+- Artifacts before alarms: a breach can be frozen-band arithmetic (weight or exposure migrated
+  mid-window) rather than a risk event — say which it is before recommending action.
+- Consistency beats sophistication. Quote the model and the convention alongside the number.
+"""
+
+ANALYST_SYSTEM = CHRIS_VOICE + """
+You are writing a short commentary on one view from a Barra-style
 equity factor-risk model. The book is the Soros Fund Management 13F holdings, run as a long-only
 weight overlay; monthly calendar, 2016–2024.
 
@@ -2684,14 +2721,142 @@ async def analysis(body: AnalysisBody):
     return StreamingResponse(gen(), media_type="text/markdown")
 
 
+OVERVIEW_SYSTEM = CHRIS_VOICE + """
+You are writing the MORNING RISK SUMMARY of the whole book — the read a risk manager gives the
+desk from the monitor screen. The book is the Soros Fund Management 13F holdings, run long-only
+as a weight overlay; monthly calendar, 2016–2024, Barra-style factor model (linear factor block
++ diagonal specific block). Numbers are fractions of book value unless marked.
+
+The payload mirrors the daily loop — read it in this order:
+1. `limits` — the hard desk limits. LEAD with any breach (value vs limit), then ambers. All
+   green = one line.
+2. `risk` + `variance_split` — the decomposition. total_var_99/es_975 are 1-day losses;
+   factor_share is x'Fx / (x'Fx + w'Δw); top_ctv are contributions to variance (negative =
+   hedges the book); top5_ctr_share is the 5 largest names' share of Total VaR.
+3. `reconcile` — realized PnL vs the start-of-period risk bands (the risk-understood check).
+   `flagged` rows/positions are outside their base band; each carries a driver read: an
+   exposure/weight migration is a band ARTIFACT (frozen at T), a factor_move is systematic,
+   a specific_move is a stock event, hidden_beta means the loading is suspect. `comovement`
+   says whether the idiosyncratic breaches share one driver (missing-factor signal).
+4. `calibration_and_backtest` — is the risk forecast itself right: Kupiec verdict + exception
+   rate vs expected, and the trailing attribution headline (factor vs specific, specific IR).
+5. `dq` — data trust; mention only if not clean.
+
+Hard rules:
+- Reason ONLY from the payload. Cite the figures. Never invent a name, date, or value.
+- Distinguish artifacts from risk events before recommending anything.
+- End with "**Do next:**" — the one or two most valuable actions, drawn from the numbers.
+
+Output: tight GitHub-flavoured markdown. One-line headline first (the state of the book in a
+sentence). Then short sections following the loop order. 150–300 words unless a breach demands
+more."""
+
+
+class OverviewAnalysisBody(BaseModel):
+    date: str | None = None
+    book: str = "Soros"
+    set: str | None = None         # scenario set for the limits read
+    notes: str | None = None
+
+
+@app.post("/overview/analysis")
+async def overview_analysis(body: OverviewAnalysisBody):
+    """Streamed morning-summary commentary on the WHOLE book — the Overview monitor narrated in
+    the desk's risk-manager voice (CHRIS_VOICE). Assembles the same numbers the Overview shows
+    (limits, Euler decomposition, reconcile verdicts + drivers, backtest, attribution headline,
+    DQ) and hands them to the Messages API with no tools."""
+    _rate_limit()
+    client = _anthropic()
+    d = body.date or _latest_date()
+    scen = body.set or _load_limits().get("scenario_set", "HistFull")
+
+    def collect():
+        out: dict = {"as_of": d, "book": body.book, "scenario_set": scen}
+        try:
+            lim = _limits_result(d, scen, body.book)
+            out["limits"] = {"status": lim["status"],
+                             "checks": [{k: c[k] for k in ("name", "value", "warn", "limit",
+                                                           "status")} for c in lim["checks"]]}
+        except Exception:
+            out["limits"] = None
+        try:
+            L, w, s, R = _book_inputs(d, body.book)
+            risk = _risk_from_weights(w, L, s, R)
+            out["risk"] = {k: risk[k] for k in ("total_var_99", "scenario_var_99", "es_975",
+                                                "specific_vol", "top5_ctr_share", "gross", "net")}
+            F = np.cov(R, rowvar=False)
+            e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
+            tv = e["factor_var"] + e["specific_var"]
+            order = np.argsort(-np.abs(e["ctv"]))
+            out["variance_split"] = {
+                "factor_share": (e["factor_var"] / tv) if tv > 0 else None,
+                "vol_1d": e["sigma"],
+                "top_ctv": [{"factor": str(L.columns[i]),
+                             "pct_of_variance": float(e["ctv"][i] / tv)} for i in order[:6]],
+            }
+        except Exception:
+            out["risk"] = out.setdefault("variance_split", None)
+        try:
+            bt = _backtest_result(d, "HistFull", body.book, 0.01, 250, "fhs", 0.94)
+            out["calibration_and_backtest"] = (
+                {k: bt.get(k) for k in ("kupiec_reject", "rate", "exceptions", "expected",
+                                        "tested")} if bt.get("status") == "ok" else None)
+        except Exception:
+            out["calibration_and_backtest"] = None
+        out["pnl_attribution_t12m"] = _attr_headline()
+        try:
+            checks = barra_dq_checks.run(S["frames"])
+            summ = {k: sum(1 for c in checks if c["level"] == k) for k in ("PASS", "WARN", "FAIL")}
+            out["dq"] = {"status": ("fail" if summ["FAIL"] else "warn" if summ["WARN"] else "pass"),
+                         "summary": summ}
+        except Exception:
+            out["dq"] = None
+        return out
+
+    payload = await run_in_threadpool(collect)
+    # reconcile (risk↔PnL) — reuse the linkage route's computation, trimmed to verdicts + drivers
+    try:
+        lk = await pnl_attribution_linkage(T=None, horizon=3, book=body.book,
+                                           vol_mult=1.25, rho=0.75)
+        def trim(r):
+            o = {"name": r["name"], "z": r.get("z"), "verdict": r["verdict"]}
+            if r.get("driver"):
+                o["driver"] = {"kind": r["driver"]["kind"], "text": r["driver"]["text"]}
+            return o
+        payload["reconcile"] = {
+            "window": f"{lk['T']} → {lk['to']}",
+            "book_total": trim(lk["book_total"]),
+            "flagged": [trim(r) for r in lk["rows"] if r["verdict"] != "within"],
+            "positions_flagged": [trim(p) for p in lk["positions"] if p.get("driver")][:8],
+            "comovement": (lk.get("breach_comovement") or {}).get("text"),
+        }
+    except Exception:
+        payload["reconcile"] = None
+    payload["desk_notes"] = body.notes or ""
+
+    def gen():
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-8", max_tokens=3000,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": OVERVIEW_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": json.dumps(payload, default=str)}],
+            ) as stream:
+                yield from stream.text_stream
+        except anthropic.APIError as e:
+            yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
+    return StreamingResponse(gen(), media_type="text/markdown")
+
+
 # ============================================================================ what changed (QoQ, LLM)
 # Step 9: diff this 13F filing against the prior and narrate the risk delta. The deterministic diff
 # (/whatchanged) is positions in/out/resized + the factor-exposure drift decomposed with Phase 4's
 # attribution + the book risk delta from the what-if math (cube-consistent). /whatchanged/analysis
 # hands that tidy diff to the Messages API (no tools, streamed) for a written read, like /analysis.
 
-WHATCHANGED_SYSTEM = """\
-You are a buy-side market-risk manager writing a short "what changed" note between two consecutive
+WHATCHANGED_SYSTEM = CHRIS_VOICE + """
+You are writing a short "what changed" note between two consecutive
 Soros 13F filings of a Barra-style equity factor-risk model. You receive only a tidy diff; reason
 ONLY from it and cite the figures. Never invent a position, issuer, date, or value.
 
@@ -2895,8 +3060,8 @@ def _run_query_cube(args: dict) -> dict:
     return res
 
 
-ASK_SYSTEM = """\
-You are a buy-side market-risk manager answering a desk question about a Barra-style equity factor-risk
+ASK_SYSTEM = CHRIS_VOICE + """
+You are answering a desk question about a Barra-style equity factor-risk
 model. The book is the Soros Fund Management 13F holdings, run as a long-only weight overlay; monthly
 calendar, 2016–2024.
 

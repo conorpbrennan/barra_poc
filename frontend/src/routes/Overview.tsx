@@ -9,6 +9,7 @@ import {
   useContributions, usePnlLinkage,
 } from "../api/hooks";
 import { Sparkline, BulletGraph, LabelBar } from "../components/svg";
+import { StreamPanel } from "../components/StreamPanel";
 import { RagDot } from "../components/ui";
 import { pct, signedPct, num, ragLabel } from "../lib/format";
 import type { Rec } from "../api/types";
@@ -173,6 +174,17 @@ export function Overview() {
             </div>
           ) : <div className="muted small">{changed.isLoading ? "loading…" : "—"}</div>}
         </div>
+      </div>
+
+      <hr className="rule" />
+
+      {/* ---- morning risk summary, in the desk risk-manager voice (CHRIS_VOICE) ---- */}
+      <div style={{ maxWidth: "46rem" }}>
+        <h2>Risk-manager summary</h2>
+        <StreamPanel path="/overview/analysis"
+          body={{ date, book, set: scenario }}
+          cacheKey={`overview:${date}:${book}:${scenario}`}
+          label="Generate morning summary" />
       </div>
     </main>
   );

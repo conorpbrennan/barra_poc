@@ -34,6 +34,29 @@ cd python_src
 Both builders write the six frames to `data/` at the repo root (created on demand) and the
 cube reads from there (`OUT` / `out` constants, resolved relative to the script file).
 
+## LLM voice — CHRIS_VOICE (mandatory for every LLM feature)
+
+**Every LLM system prompt in `risk_api.py` starts from the shared `CHRIS_VOICE` persona block**
+(defined above `ANALYST_SYSTEM`): the voice and doctrine of the desk's senior quantitative risk
+manager, modelled on the It's Just Beta primer's editorial discipline (plain compressed
+sentences, cite the figure next to every claim, no filler) and the reviewer's documented
+corrections (understand ALL risks — unexplained gains investigated like losses; it's-usually-
+just-beta; exposure ≠ risk contribution; correlated residuals = missing factor; t = IR·√T
+humility; artifacts before alarms). It deliberately never signs a name or claims a specific
+identity. **Any new LLM endpoint must be written as `NEW_SYSTEM = CHRIS_VOICE + """..."""`** —
+`test_analysis.py::t_all_llm_prompts_carry_chris_voice` fails otherwise. Current prompts:
+`ANALYST_SYSTEM`, `OVERVIEW_SYSTEM`, `WHATCHANGED_SYSTEM`, `ASK_SYSTEM`.
+
+## Overview morning summary (`/overview/analysis`)
+
+`POST /overview/analysis {date?, book?, set?, notes?}` streams the whole-book morning read in
+the CHRIS_VOICE persona: assembles the monitor's own numbers (limits RAG, `_risk_from_weights`
+heroes + Euler variance split/top CTV, the trimmed reconcile verdicts + drivers + breach
+co-movement via the linkage route, Kupiec backtest headline, trailing-12m attribution headline,
+DQ counts) and narrates them in the daily-loop order, ending with a "Do next". Same plain
+Messages-API no-tools pattern and rate limit as `/analysis`. UI: the "Risk-manager summary"
+StreamPanel at the bottom of the Vite Overview (on-demand, cached per date/book/set).
+
 ## Risk-analyst commentary (`/analysis`)
 
 `risk_api.py` has a `POST /analysis` endpoint that writes a short risk-manager read of one
