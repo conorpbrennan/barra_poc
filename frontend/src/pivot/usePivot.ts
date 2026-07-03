@@ -22,6 +22,19 @@ export interface PivotConfig {
   heat: boolean;
   asPct: boolean;
   prec: number;
+  // hypothetical (transient cube branch/scenario per query; NOT persisted in saved views):
+  whatif: { position: string; ticker: string; weight: number }[];
+  shocks: Record<string, number>;
+}
+
+// the /pivot hypothetical query params for a config (shared by every query incl. drills)
+export function hypoParams(cfg: PivotConfig): Record<string, string> {
+  const p: Record<string, string> = {};
+  if (cfg.whatif.length) {
+    p.whatif = JSON.stringify(cfg.whatif.map(({ position, weight }) => ({ position, weight })));
+  }
+  if (Object.keys(cfg.shocks).length) p.shocks = JSON.stringify(cfg.shocks);
+  return p;
 }
 
 export interface DisplayRow {
@@ -51,6 +64,7 @@ async function queryLevel(
     measures: cfg.measures.join(","),
     filters: JSON.stringify(filters),
     totals: false,
+    ...hypoParams(cfg),
   });
 }
 
@@ -84,7 +98,7 @@ export function rowsFromRecords(records: Rec[], dim: string, colDim: string | un
 export function usePivot(initial: Partial<PivotConfig>) {
   const [cfg, setCfg] = useState<PivotConfig>({
     rows: ["Factor"], cols: [], measures: ["Net exposure"], filters: {},
-    totals: true, heat: true, asPct: false, prec: 3, ...initial,
+    totals: true, heat: true, asPct: false, prec: 3, whatif: [], shocks: {}, ...initial,
   });
 
   const [tree, setTree] = useState<Record<string, DisplayRow[]>>({}); // parentKey -> children
@@ -120,6 +134,7 @@ export function usePivot(initial: Partial<PivotConfig>) {
         const g = await apiGet<PivotResult>("/pivot", {
           rows: c.rows[0], measures: c.measures.join(","),
           filters: JSON.stringify(c.filters), totals: true,
+          ...hypoParams(c),
         });
         setGrand(g.grand ?? {});
       } else setGrand({});

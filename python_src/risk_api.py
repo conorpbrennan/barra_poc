@@ -514,6 +514,70 @@ def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=list(pos.columns))
 
 
+def _parse_hypo(whatif: str | None, shocks: str | None, fdict: dict):
+    """Validate the hypothetical params shared by /pivot and /analysis -> (trades, shocks).
+    400s BEFORE any cube/LLM work on bad JSON, unknown names, or a missing single-Date filter."""
+    wtrades_ = shk_ = None
+    if whatif:
+        try:
+            wtrades_ = json.loads(whatif)
+            assert isinstance(wtrades_, list) and all(
+                isinstance(t, dict) and "position" in t and "weight" in t for t in wtrades_)
+        except Exception:
+            raise HTTPException(400, 'whatif must be a JSON list of {"position", "weight"}')
+        if len(fdict.get("Date") or []) != 1:
+            raise HTTPException(400, "whatif needs exactly one Date filter")
+        secs = {str(p_) for p_ in S["frames"]["securities"]["Position"]}
+        bad = [t["position"] for t in wtrades_ if str(t["position"]) not in secs]
+        if bad:
+            raise HTTPException(400, f"unknown position(s): {bad}")
+    if shocks:
+        try:
+            shk_ = json.loads(shocks)
+            assert isinstance(shk_, dict) and shk_ and all(
+                isinstance(v, (int, float)) for v in shk_.values())
+        except Exception:
+            raise HTTPException(400, 'shocks must be a JSON object {"Factor": sigma}')
+        known = {str(f_) for f_ in S["frames"]["factor_meta"]["Factor"]}
+        bad = [f_ for f_ in shk_ if f_ not in known]
+        if bad:
+            raise HTTPException(400, f"unknown factor(s): {bad}")
+    return wtrades_, shk_
+
+
+def _hypothetical_pivot(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
+                        wtrades: list | None, shk: dict | None) -> dict:
+    """_pivot_result on a transient hypothetical: a what-if source-scenario branch (trades)
+    and/or a StressShock parameter scenario (sigmas) — created per call, dropped in finally.
+    Synchronous — call via run_in_threadpool."""
+    session = S["session"]
+    branch = stress_scen = None
+    sim = None
+    try:
+        if wtrades:
+            branch = f"pivot-wf-{uuid.uuid4().hex[:12]}"
+            book = (fdict.get("Book") or ["Soros"])[0]
+            session.tables["Positions"].scenarios[branch].load(
+                _whatif_branch_rows(fdict["Date"][0], book, wtrades))
+        if shk:
+            stress_scen = f"pivot-st-{uuid.uuid4().hex[:12]}"
+            sim = session.tables["StressShock"]
+            sim.append(*[(stress_scen, f_, float(v)) for f_, v in shk.items()])
+        return _pivot_result(rlist, clist, mlist, fdict, bool(totals),
+                             scenario=branch, stress_scenario=stress_scen)
+    finally:
+        if branch is not None:
+            try:
+                session.delete_scenario(branch)
+            except Exception:
+                pass
+        if sim is not None and stress_scen is not None:
+            try:
+                sim.drop(sim["Scenario"] == stress_scen)
+            except Exception:
+                pass
+
+
 @app.get("/pivot")
 async def pivot(rows: str = "", cols: str = "", measures: str = "",
                 date: str | None = None, set: str | None = None,
@@ -544,62 +608,11 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
     rlist, clist, mlist = _csv(rows), _csv(cols), _csv(measures)
     fdict = _parse_filters(filters, date, set)
     _validate_pivot(rlist, clist, mlist, fdict)
-    wtrades = shk = None
-    if whatif:
-        try:
-            wtrades = json.loads(whatif)
-            assert isinstance(wtrades, list) and all(
-                isinstance(t, dict) and "position" in t and "weight" in t for t in wtrades)
-        except Exception:
-            raise HTTPException(400, 'whatif must be a JSON list of {"position", "weight"}')
-        if len(fdict.get("Date") or []) != 1:
-            raise HTTPException(400, "whatif needs exactly one Date filter")
-        secs = {str(p) for p in S["frames"]["securities"]["Position"]}
-        bad = [t["position"] for t in wtrades if str(t["position"]) not in secs]
-        if bad:
-            raise HTTPException(400, f"unknown position(s): {bad}")
-    if shocks:
-        try:
-            shk = json.loads(shocks)
-            assert isinstance(shk, dict) and shk and all(
-                isinstance(v, (int, float)) for v in shk.values())
-        except Exception:
-            raise HTTPException(400, 'shocks must be a JSON object {"Factor": sigma}')
-        known = {str(f) for f in S["frames"]["factor_meta"]["Factor"]}
-        bad = [f for f in shk if f not in known]
-        if bad:
-            raise HTTPException(400, f"unknown factor(s): {bad}")
+    wtrades, shk = _parse_hypo(whatif, shocks, fdict)
     if not wtrades and not shk:
         return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals))
-
-    def run():
-        session = S["session"]
-        branch = stress_scen = None
-        sim = None
-        try:
-            if wtrades:
-                branch = f"pivot-wf-{uuid.uuid4().hex[:12]}"
-                book = (fdict.get("Book") or ["Soros"])[0]
-                session.tables["Positions"].scenarios[branch].load(
-                    _whatif_branch_rows(fdict["Date"][0], book, wtrades))
-            if shk:
-                stress_scen = f"pivot-st-{uuid.uuid4().hex[:12]}"
-                sim = session.tables["StressShock"]
-                sim.append(*[(stress_scen, f_, float(v)) for f_, v in shk.items()])
-            return _pivot_result(rlist, clist, mlist, fdict, bool(totals),
-                                 scenario=branch, stress_scenario=stress_scen)
-        finally:
-            if branch is not None:
-                try:
-                    session.delete_scenario(branch)
-                except Exception:
-                    pass
-            if sim is not None and stress_scen is not None:
-                try:
-                    sim.drop(sim["Scenario"] == stress_scen)
-                except Exception:
-                    pass
-    return await run_in_threadpool(run)
+    return await run_in_threadpool(_hypothetical_pivot, rlist, clist, mlist, fdict,
+                                   bool(totals), wtrades, shk)
 
 
 set_ = set   # preserve builtin; the endpoint shadows `set` with the query param
@@ -2907,6 +2920,10 @@ Hard rules:
 - If a `pnl_attribution` block is present (trailing-12m realized attribution): say where the return
   came from — factor bets vs stock-picking (`specific_share`) — and read the specific IR plainly
   (>0.3 reliable alpha, ~0 noise, negative destroys value). Price-only, dividends excluded.
+- If a `hypothetical` block is present, the WHOLE VIEW is priced under those what-if trades
+  and/or factor shocks on a transient scenario branch — SAY SO IN THE HEADLINE, and read the
+  numbers as the hypothetical book, not the held one. Limits/drawdown/attribution context blocks
+  remain the BASE book.
 - If a `warning` field is present, the requested scenario measures had no single-ScenarioSet context
   and those cells are blank — say so plainly rather than guessing. Scenario risk is only meaningful
   sliced to one ScenarioSet.
@@ -2970,6 +2987,8 @@ class AnalysisBody(BaseModel):
     totals: bool = False
     name: str | None = None        # view name, for the prompt header
     notes: str | None = None       # optional desk context typed by the user
+    whatif: str | None = None      # same JSON trades /pivot takes — commentary on a hypothetical
+    shocks: str | None = None      # same JSON sigmas /pivot takes
 
 
 @app.post("/analysis")
@@ -2982,8 +3001,13 @@ async def analysis(body: AnalysisBody):
     rlist, clist, mlist = _csv(body.rows), _csv(body.cols), _csv(body.measures)
     fdict = _parse_filters(body.filters, None, None)
     _validate_pivot(rlist, clist, mlist, fdict)
+    wtrades, shk = _parse_hypo(body.whatif, body.shocks, fdict)
     client = _anthropic()          # raise the 502 BEFORE the (slow) cube query if there's no key
-    data = await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(body.totals))
+    if wtrades or shk:
+        data = await run_in_threadpool(_hypothetical_pivot, rlist, clist, mlist, fdict,
+                                       bool(body.totals), wtrades, shk)
+    else:
+        data = await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(body.totals))
     # desk-limit status + drawdown for the view's own date/set/book (so the model can lead with a
     # breach and cite the path-drawdown lens VaR/ES miss). Headline only — the dd path is dropped.
     lim = dd = None
@@ -3006,6 +3030,7 @@ async def analysis(body: AnalysisBody):
     attr = await run_in_threadpool(_attr_headline)
     payload = json.dumps({
         "view": body.name or "(unnamed view)",
+        "hypothetical": ({"trades": wtrades, "shocks": shk} if (wtrades or shk) else None),
         "filters": fdict, "rows": rlist, "cols": clist, "measures": mlist,
         "warning": data.get("warning"),
         "limits": lim,

@@ -222,7 +222,12 @@ Total VaR 99 desk limit). The naive shock is **SERVED from the cube's StressShoc
 simulation** (`Custom stress PnL` — a transient uuid scenario per request, dropped in finally;
 numpy `_stress_result` retained as the live `verification` cross-check, < 1e-12, with a
 `numpy_fallback`). The grid can drill it too: **`/pivot` takes stateless `whatif` and `shocks`
-params** — the same guarded pivot on a transient hypothetical branch/scenario. UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
+params** — the same guarded pivot on a transient hypothetical branch/scenario — and the Vite
+Pivot lens has the control: a **Hypothetical bar** (amber strip; trade picker from holdings +
+universe, factor-σ shocks, removable chips; every query incl. drills and the grand corner
+carries the branch; cleared on saved-view load — views stay canonical). `/analysis` accepts the
+same `whatif`/`shocks` (shared `_parse_hypo`/`_hypothetical_pivot` helpers) so commentary
+prices the SAME hypothetical view and says so in its headline. UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
 conditional toggle (naive vs conditional side by side + the propagation table) plus **presets**
 that fill the σ inputs — the cube's `HYPO_SHOCKS` definitions (served via `/meta.hypo_shocks`,
 ONE source, guarded by `t_meta_serves_hypo_shocks`), the primer's ch-09 Value −2σ example, and

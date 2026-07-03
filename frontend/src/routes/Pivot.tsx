@@ -3,8 +3,8 @@
 // pure renderer — every number comes from a /pivot call behind the cube's allowlist guard.
 import { Suspense, lazy, useEffect, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { useDims } from "../api/hooks";
-import { usePivot, type PivotConfig } from "../pivot/usePivot";
+import { useDims, useMeta, useWhatif } from "../api/hooks";
+import { usePivot, hypoParams, type PivotConfig } from "../pivot/usePivot";
 import { FieldList } from "../pivot/FieldList";
 import { PivotGrid } from "../pivot/PivotGrid";
 // Vega is ~heavy; only load it when the user switches to chart mode.
@@ -14,12 +14,100 @@ import { StreamPanel } from "../components/StreamPanel";
 import { QueryState } from "../components/ui";
 import type { ViewState } from "../api/types";
 
+// ---- Hypothetical bar: price THIS pivot under what-if trades and/or factor shocks. Each query
+// runs on a transient cube branch/scenario (stateless server-side); the amber strip makes it
+// impossible to mistake a hypothetical grid for the held book. Not persisted in saved views. ----
+function HypoBar({ cfg, date, book, apply }: {
+  cfg: PivotConfig; date: string; book: string;
+  apply: (next: PivotConfig) => void;
+}) {
+  const { data: meta } = useMeta();
+  const boot = useWhatif(date, book, []);          // holdings + universe for the trade picker
+  const [pos, setPos] = useState("");
+  const [wgt, setWgt] = useState("");
+  const [fac, setFac] = useState("");
+  const [sig, setSig] = useState("");
+  const holdings = boot.data?.holdings ?? [];
+  const universe = boot.data?.universe ?? [];
+  const held = new Map(holdings.map((h) => [h.position, h]));
+  const names = [...holdings,
+    ...universe.filter((u) => !held.has(u.position)).map((u) => ({ ...u, weight: 0 }))];
+  const factors = (meta?.factors ?? []).filter((f) => f !== "Market");
+  const active = cfg.whatif.length > 0 || Object.keys(cfg.shocks).length > 0;
+
+  const addTrade = () => {
+    const w = Number(wgt);
+    if (!pos || Number.isNaN(w)) return;
+    const t = names.find((n) => n.position === pos);
+    apply({ ...cfg, whatif: [...cfg.whatif.filter((x) => x.position !== pos),
+                             { position: pos, ticker: t?.ticker ?? pos, weight: w }] });
+    setPos(""); setWgt("");
+  };
+  const addShock = () => {
+    const s = Number(sig);
+    if (!fac || Number.isNaN(s) || s === 0) return;
+    apply({ ...cfg, shocks: { ...cfg.shocks, [fac]: s } });
+    setFac(""); setSig("");
+  };
+
+  return (
+    <div className="small" style={{ margin: "0.4rem 0", padding: "0.45rem 0.6rem",
+      borderLeft: "3px solid #b07d2b", background: "rgba(176,125,43,0.06)" }}>
+      <div className="row" style={{ flexWrap: "wrap", gap: "0.4rem 1rem" }}>
+        <strong style={{ color: "#b07d2b" }}>Hypothetical</strong>
+        <span className="row" style={{ gap: "0.3rem" }}>
+          <select value={pos} onChange={(e) => setPos(e.target.value)}>
+            <option value="">trade name…</option>
+            {names.map((n) => <option key={n.position} value={n.position}>{n.ticker}</option>)}
+          </select>
+          <input type="number" step={0.005} placeholder="weight" style={{ width: "4.6rem" }}
+            value={wgt} onChange={(e) => setWgt(e.target.value)} />
+          <button disabled={!pos || wgt === ""} onClick={addTrade}>add trade</button>
+        </span>
+        <span className="row" style={{ gap: "0.3rem" }}>
+          <select value={fac} onChange={(e) => setFac(e.target.value)}>
+            <option value="">shock factor…</option>
+            {factors.map((f) => <option key={f}>{f}</option>)}
+          </select>
+          <input type="number" step={0.5} placeholder="σ" style={{ width: "3.4rem" }}
+            value={sig} onChange={(e) => setSig(e.target.value)} />
+          <button disabled={!fac || sig === ""} onClick={addShock}>add shock</button>
+        </span>
+        {active && (
+          <button onClick={() => apply({ ...cfg, whatif: [], shocks: {} })}>clear all</button>
+        )}
+      </div>
+      {active && (
+        <div className="row" style={{ flexWrap: "wrap", gap: "0.3rem", marginTop: "0.35rem" }}>
+          {cfg.whatif.map((t) => (
+            <button key={t.position} title="remove"
+              onClick={() => apply({ ...cfg, whatif: cfg.whatif.filter((x) => x.position !== t.position) })}>
+              {t.ticker.toUpperCase()} → {(t.weight * 100).toFixed(1)}% ×
+            </button>
+          ))}
+          {Object.entries(cfg.shocks).map(([f, s]) => (
+            <button key={f} title="remove"
+              onClick={() => { const sh = { ...cfg.shocks }; delete sh[f]; apply({ ...cfg, shocks: sh }); }}>
+              {f} {s > 0 ? "+" : ""}{s}σ ×
+            </button>
+          ))}
+          <span className="muted">
+            — every number in this grid is branch-priced under the hypothetical
+            {cfg.whatif.length ? "" : ""}. Attribution measures stay the held book.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function Pivot() {
-  const { date, scenario } = useApp();
+  const { date, scenario, book } = useApp();
   const dimsQ = useDims();
   const [mode, setMode] = useState<"grid" | "chart">("grid");
   const [showRepo, setShowRepo] = useState(false);
   const [showAnalysis, setShowAnalysis] = useState(false);
+  const [showHypo, setShowHypo] = useState(false);
   // the currently-loaded saved view (name + its description), shown in the bottom description pane
   const [loadedView, setLoadedView] = useState<{ name: string; description?: string } | null>(null);
   // a charted view is self-describing: its named queries + Vega-Lite spec(s), rendered verbatim
@@ -60,6 +148,7 @@ export function Pivot() {
       rows: s.rows ?? cfg.rows, cols: s.cols ?? [], measures: s.measures ?? cfg.measures,
       filters: s.filters ?? cfg.filters, totals: s.row_tot ?? cfg.totals,
       heat: s.heat ?? cfg.heat, asPct: s.as_pct ?? cfg.asPct, prec: s.prec ?? cfg.prec,
+      whatif: [], shocks: {},   // a saved view is a canonical report — never load it hypothetical
     };
     setCfg(next);
     setMode(s.render === "chart" ? "chart" : "grid");
@@ -76,9 +165,12 @@ export function Pivot() {
     render: mode, description: loadedView?.description,
   };
 
+  const hypoActive = cfg.whatif.length > 0 || Object.keys(cfg.shocks).length > 0;
   const analysisBody = {
     rows: cfg.rows.join(","), cols: cfg.cols.join(","), measures: cfg.measures.join(","),
-    filters: JSON.stringify(cfg.filters), totals: cfg.totals, name: "pivot view",
+    filters: JSON.stringify(cfg.filters), totals: cfg.totals,
+    name: hypoActive ? "pivot view (HYPOTHETICAL)" : "pivot view",
+    ...hypoParams(cfg),
   };
 
   return (
@@ -92,12 +184,18 @@ export function Pivot() {
           <button className={mode === "grid" ? "primary" : ""} onClick={() => setMode("grid")}>Grid</button>
           <button className={mode === "chart" ? "primary" : ""} onClick={() => setMode("chart")}>Chart</button>
           <button onClick={() => setShowRepo((s) => !s)}>{showRepo ? "Hide" : "Views"}</button>
+          <button className={hypoActive ? "primary" : ""} onClick={() => setShowHypo((s) => !s)}>
+            Hypothetical{hypoActive ? " ●" : ""}</button>
           <label className="row small"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
           <label className="row small"><input type="checkbox" checked={cfg.asPct} onChange={(e) => setCfg((c) => ({ ...c, asPct: e.target.checked }))} /> %</label>
           <label className="row small"><input type="checkbox" checked={cfg.totals} onChange={(e) => setCfg((c) => ({ ...c, totals: e.target.checked }))} /> totals</label>
         </div>
       </div>
 
+      {(showHypo || hypoActive) && (
+        <HypoBar cfg={cfg} date={date} book={book}
+          apply={(next) => { setCfg(next); reload(next); }} />
+      )}
       {warning && <div className="rag-amber small" style={{ margin: "0.3rem 0" }}>⚠ {warning}</div>}
       {error && <div className="err small">{error}</div>}
 
