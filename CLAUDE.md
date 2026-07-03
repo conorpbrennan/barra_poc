@@ -573,6 +573,17 @@ on the estimation residual mean/std WITHOUT a winsor (inputs bounded by construc
 `COVERAGE_CAP` backstop, NaN for no-mcap names. Special-cased out of the generic `_split_z` loop
 in `build_exposures` (it must hinge on raw values). The model carries ten style factors + Market.
 
+MegaCap moved the residual R² 0.51 → 0.44 and migrated the remaining hidden-beta carriers from
+mega- to small/mid-caps (hto/itri/ida/gtls) — which exposed the second construction fault:
+**NonLinSize was a U, not an S**. Cubing raw log-mcap (all positive, mean ~24) leaves the
+post-Size-fit residual dominated by the QUADRATIC term (corr +0.74 with Size² on the
+cross-section), so small/mid-caps sat pinned together at +6/+7 on the U's left arm.
+**Respec 2026-07-04: NonLinSize = cube of the STANDARDIZED Size** (USE4 convention — centre
+first, then cube, so the residual is genuinely odd: small −, mid ~0, large +), computed in the
+per-date loop from the z-scored Size (also excluded from the generic `_split_z` pass), then the
+existing Size-orthogonalization. The excel section-3 mirror still shows raw m³ with a
+divergence note.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

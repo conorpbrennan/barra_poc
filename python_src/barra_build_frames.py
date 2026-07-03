@@ -596,7 +596,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
         frecs.append(pd.DataFrame({
             "ticker": row["ticker"], "Date": cal,
             "Size": np.log(mcap + 1),
-            "NonLinSize": np.log(mcap + 1) ** 3,
+            "NonLinSize": np.log(mcap + 1),              # cubed AFTER standardization (USE4)
             "MegaCap": np.log(mcap + 1),                 # hinged per-date in build_exposures
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
@@ -624,13 +624,20 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
     for d, g in raw.groupby("Date"):
         g = g.copy()
         em = g["is_estimation"]
-        for f in [c for c in STYLE_FACTORS if c in g and c != "MegaCap"]:
+        for f in [c for c in STYLE_FACTORS if c in g and c not in ("MegaCap", "NonLinSize")]:
             g[f] = _split_z(g[f].astype(float), em)
-        if {"NonLinSize", "Size"}.issubset(g):           # remove the part explained by Size
+        if "Size" in g:
+            # NonLinSize = cube of the STANDARDIZED Size (Barra USE4), then the Size-residual.
+            # Cubing raw log-mcap (all positive, mean ~24) left a residual dominated by the
+            # QUADRATIC term — a U-shape (corr +0.74 with Size²) that pinned small/mid-caps
+            # together on its left arm at +6/+7, so their regime landed in residuals (the
+            # audit's mid-cap NonLinSize hidden-beta carriers: hto/itri/ida/gtls). Centering
+            # first makes the cube genuinely odd: small −, mid ~0, large + — real curvature.
             ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
-            sz, nls = g["Size"].fillna(0.0), g["NonLinSize"].fillna(0.0)
-            b = np.polyfit(sz[ref], nls[ref], 1)
-            g["NonLinSize"] = _split_z(g["NonLinSize"] - (b[0] * g["Size"] + b[1]), em)
+            nls = g["Size"] ** 3                          # NaN (no-mcap) stays NaN
+            sz = g["Size"].fillna(0.0)
+            b = np.polyfit(sz[ref], nls.fillna(0.0)[ref], 1)
+            g["NonLinSize"] = _split_z(nls - (b[0] * g["Size"] + b[1]), em)
         if {"Liquidity", "Size"}.issubset(g):
             # Barra-style: orthogonalize Liquidity (turnover) to Size on the estimation fit —
             # raw turnover still shares Size's driver (the turnover respec alone only flipped

@@ -544,7 +544,9 @@ about.</p>
     version was cross-sectionally a second Size (factor-return ρ ≈ −0.8).
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
-    log(mcap+1)³; <code>MegaCap</code> = a spline knot in the size curve — the hinge of raw
+    the cube of the <em>standardised</em> Size loading (USE4 convention — cubing raw log-mcap
+    leaves a quadratic U-shape after the Size fit, which pinned small/mid-caps together;
+    respecified 2026-07-04), orthogonalised to Size; <code>MegaCap</code> = a spline knot in the size curve — the hinge of raw
     log-mcap above the estimation 90th percentile, orthogonalised to Size and NonLinSize, so the
     very largest names keep the differentiation the ±3 winsor removes from Size;
     <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /

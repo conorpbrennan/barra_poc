@@ -2670,7 +2670,9 @@ FACTOR_RECIPES = {
     "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
     "Size": "log market cap (close × PIT shares)",
-    "NonLinSize": "log-mcap cubed, orthogonalized to Size on the estimation fit",
+    "NonLinSize": "cube of the STANDARDIZED Size loading (USE4), orthogonalized to Size on the "
+                  "estimation fit (2026-07-04 respec — cubing raw log-mcap left a quadratic "
+                  "U-shape that pinned small/mid-caps together on its left arm)",
     "MegaCap": "spline knot in the size curve: hinge of raw log-mcap above the estimation 90th "
                "percentile, orthogonalized to Size + NonLinSize (2026-07-04 — the ±3 winsor "
                "flattened the top tail, so the mega-cap regime landed in residuals)",
