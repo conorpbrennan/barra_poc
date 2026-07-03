@@ -10,7 +10,7 @@ import { QueryState } from "../components/ui";
 import { pct, num } from "../lib/format";
 import type { Rec } from "../api/types";
 
-const STYLE_FACTORS = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "MegaCap", "RateBeta", "Leverage"];
+const STYLE_FACTORS = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "MegaCap", "RateBeta", "NdxBeta", "Leverage"];
 
 function col(recs: Rec[], xKey: string, yKey: string) {
   return recs.map((r, i) => ({

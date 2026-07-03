@@ -615,6 +615,19 @@ lands in the Market row (self-exposure read −0.11 pre-fix); the reference sect
 portfolio row and 400s with a clear message; pure `Ind:*` portfolios are requestable
 (dollar-neutral, like styles).
 
+**NdxBeta (2026-07-04): the mega-complex comovement factor.** Post-industries the last two
+flags (Liquidity +0.63, MegaCap −0.64) were carried by amzn/googl/msft/tsm — the mega complex
+trades as a GROUP beyond any smooth function of log-mcap (MegaCap grades size; the regime is
+club membership), and tsm's imputed size can't see its Taipei volume. `NdxBeta` = partial beta
+to QQQ (`NDX_PROXY`) residualized against the market, the RateBeta construction. Result:
+**Liquidity's flag cleared** (+0.36 watch, amzn/msft leave the carriers), **residual R²
+0.40 → 0.26** (the largest single drop of the program; 0.51 at session start), admission 43%,
+collinearity clean (no NdxBeta~Ind:IT pair), RateBeta cleared to ok. The ONE remaining flag is
+MegaCap (−0.60), localized to the imputed-size names (tsm +3.9, tko +1.9) — the log-ADV
+imputation understates mega-ness where US volume underrepresents global size, a free-data
+boundary, disclosed. MegaCap's admission fell to 13% as NdxBeta took over the club's pricing —
+first drop candidate at the next review. Twelve style factors + 11 industries + Market.
+
 **RateBeta (2026-07-04): the missing rates/duration factor.** The post-respec audit's three
 remaining flags (Leverage/Liquidity/MegaCap) shared one carrier list — hto/tsm/ida/cms/amzn:
 utilities, a hotel REIT, rate-sensitive mega-caps — the missing-factor signature. `RateBeta` =

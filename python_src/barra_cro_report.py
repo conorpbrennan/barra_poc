@@ -552,7 +552,10 @@ about.</p>
     version was cross-sectionally a second Size (factor-return ρ ≈ −0.8);
     <code>RateBeta</code> = partial duration beta — the rate proxy's (TLT) daily return is
     residualised against the market over the same 252-day window, then the stock's beta to that
-    residual, so it measures rate sensitivity <em>beyond</em> what equity beta already carries.
+    residual, so it measures rate sensitivity <em>beyond</em> what equity beta already carries;
+    <code>NdxBeta</code> = partial mega-complex beta, the same construction against QQQ — the
+    realized comovement with the mega-cap complex, which trades as a group beyond any smooth
+    function of log-mcap.
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
     the cube of the <em>standardised</em> Size loading (USE4 convention — cubing raw log-mcap
@@ -830,19 +833,30 @@ tests to every factor:</p>
     <td class="num">daily cross-sectional R² 0.19 → 0.30; Leverage's flag clears (breadth
     41% → 25%, the utilities leave its carrier list); all eleven industries test ok/watch;
     industries admit strongly (Energy 51%, Industrials 43%, IT 41% of days)</td></tr>
+<tr><td><strong>NdxBeta added</strong> — partial mega-complex beta (stock return on the QQQ
+    return residualised against the market, 252-day window, the RateBeta construction)</td>
+    <td>post-industries the last two flags (Liquidity, MegaCap) were carried by amzn / googl /
+    msft / tsm — the mega complex trades as a <em>group</em>, beyond any smooth function of
+    log-mcap (MegaCap grades size; the regime is club membership), and tsm's imputed size
+    can't see its home-market volume</td>
+    <td class="num">Liquidity's flag CLEARS (Σw·β +0.63 → +0.36, amzn/msft leave the carriers);
+    residual-vs-factor R² 0.40 → 0.26 — the largest single drop of the programme; NdxBeta
+    admits at 43% of days with a near-clean own hidden beta; collinearity stays clean (no
+    NdxBeta ~ Ind:IT pair); RateBeta clears to ok</td></tr>
 </table>
 <p><strong>Where it stands.</strong> The model is now structurally a production-shaped Barra
-model: Market + 11 styles + 11 GICS industries, estimated jointly under the proper constraint.
-Daily cross-sectional R² 0.19 → 0.30 over the day's changes. Beta, EarnYield, Momentum and all
-eleven industries test clean-to-watch on the hidden-beta audit; Leverage, Size, Value, ResidVol,
-NonLinSize and RateBeta sit on watch. The two remaining flags — Liquidity (Σw·β +0.63) and
-MegaCap (−0.64) — are carried by the mega-cap/liquidity complex itself (tsm, googl, amzn, msft;
-~20% of the book): a genuinely hard modelling problem, not an omission. On admission: styles
-ceded ground to industries by design (industries reclaimed the sector-correlated content styles
-had been absorbing — Value 37% → 22%, RateBeta 50% → 41%); MegaCap (14%), NonLinSize (18%) and
-EarnYield (15%) sit below the one-third rule that removed Growth and stay on probation — kept
-because each measurably fixed a residual pathology the admission rate alone doesn't see. Judge
-the styles again after two more quarters of data, now that industries hold what's theirs.</p>
+model: Market + 12 styles + 11 GICS industries, estimated jointly under the proper constraint.
+Over the programme: daily cross-sectional R² 0.19 → 0.30, residual-vs-factor R² 0.51 → 0.26.
+<strong>One flag remains — MegaCap (Σw·β −0.60)</strong> — and it is precisely localised: the
+carriers are tsm (+3.9) and tko (+1.9), both <em>imputed-size</em> names. The log-ADV
+imputation understates mega-ness where US-listed volume underrepresents global size (tsm's
+volume is in Taipei); NdxBeta prices their comovement, but the MegaCap characteristic loading
+itself stays misestimated for them — a free-data boundary, disclosed, not a spec fault.
+Everything else tests ok/watch. On admission: MegaCap fell to 13% (weakest in the model) as
+NdxBeta took over the club's pricing — it has moved from probation to first candidate for
+removal at the next review; NonLinSize (18%), EarnYield (14%), Leverage (16%), Value (18%) and
+Liquidity (19%) also sit below the one-third rule and are judged again after two more quarters
+of data, now that industries and the comovement betas hold what's theirs.</p>
 <p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
 <em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
 erased real information (the mega-cap tail), the answer was a new bounded regressor computed

@@ -2669,6 +2669,10 @@ FACTOR_RECIPES = {
     "RateBeta": "partial duration beta: stock daily return on the TLT return residualized "
                 "against the market, 252d window (2026-07-04 — the missing rates/duration "
                 "factor behind the shared Leverage/Liquidity/MegaCap hidden-beta carriers)",
+    "NdxBeta": "partial mega-complex beta: stock daily return on the QQQ return residualized "
+               "against the market, 252d window (2026-07-04 — the mega complex co-moves as a "
+               "group beyond any smooth function of log-mcap; realized comovement prices the "
+               "club directly, incl. imputed-size names like TSM)",
     "Momentum": "12-1 month price return (t−252d → t−21d)",
     "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
