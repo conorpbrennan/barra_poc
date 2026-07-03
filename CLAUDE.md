@@ -218,7 +218,11 @@ precision. **`conditional: true`** adds the correlated read: `E[f|f_S=s] = F[:,S
 move too — the naive result holds them still and understates a real event. `GET /reverse_stress?loss=`
 inverts it: for a target loss `L`, the single-factor move
 `σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
-Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
+Total VaR 99 desk limit). The naive shock is ALSO priced by the cube's **StressShock parameter
+simulation** (`Custom stress PnL` measure; `/stress` appends a transient uuid scenario, reads the
+branch, drops it — served as `cube_prototype` beside the API number, tie < 1e-12; the Tier-2
+prototype from docs/cube-measure-opportunities.md — name/sector drill awaits `/pivot` scenario
+plumbing). UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
 conditional toggle (naive vs conditional side by side + the propagation table) plus **presets**
 that fill the σ inputs — the cube's `HYPO_SHOCKS` definitions (served via `/meta.hypo_shocks`,
 ONE source, guarded by `t_meta_serves_hypo_shocks`), the primer's ch-09 Value −2σ example, and

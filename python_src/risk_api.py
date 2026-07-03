@@ -49,6 +49,7 @@ import os
 import math
 import json
 import time
+import uuid
 import pathlib
 import datetime as _dt
 from collections import deque
@@ -1284,6 +1285,38 @@ async def stress(body: StressBody):
         if body.vol_mult is not None or body.rho is not None:
             res["correlation_stress"] = _corr_stress_result(
                 d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
+        # Tier-2 prototype (docs/cube-measure-opportunities.md #3): the same naive shock priced
+        # by the cube's StressShock parameter simulation — a transient per-request scenario,
+        # served alongside the API number for comparison (not yet the UI source). Failure here
+        # must never break /stress.
+        scen = f"req-{uuid.uuid4().hex[:12]}"
+        sim = None
+        try:
+            cube = S["cube"]; l, mm = cube.levels, cube.measures
+            sim = S["session"].tables["StressShock"]
+            sim.append(*[(scen, f_, float(sig)) for f_, sig in body.shocks.items()])
+            flt = ((l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
+                   & (l["StressShock"] == scen))
+            if "Book" in {n for _, n in cube.hierarchies}:
+                flt &= (l["Book"] == body.book)
+            r = cube.query(mm["Custom stress PnL"], filter=flt)
+            cube_pnl = float(r.iloc[0]["Custom stress PnL"]) if len(r) else None
+            res["cube_prototype"] = {
+                "total_pnl": cube_pnl,
+                "abs_diff_vs_naive": (abs(cube_pnl - res["total_pnl"])
+                                      if cube_pnl is not None else None),
+                "note": ("the naive shock priced by the cube's parameter simulation "
+                         "(StressShock scenario branch) — drillable by name/sector in the cube; "
+                         "prototype served for comparison"),
+            }
+        except Exception as e:
+            res["cube_prototype"] = {"error": f"{e.__class__.__name__}: {e}"}
+        finally:
+            if sim is not None:
+                try:
+                    sim.drop(sim["Scenario"] == scen)
+                except Exception:
+                    pass
         return res
     return await run_in_threadpool(run)
 

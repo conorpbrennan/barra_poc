@@ -466,6 +466,20 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _hedged_vec = book_pnl_vec + m["Min-variance hedge ratio"] * _shock_vec
     m["Vol at min-variance hedge"] = tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book)
     m["Vol at min-variance hedge"].formatter = "DOUBLE[0.00%]"
+
+    # ---- Tier-2 prototype: custom stress as a PARAMETER SIMULATION ----------------------------
+    # (docs/cube-measure-opportunities.md #3.) A per-Factor "Shock sigma" parameter, default 0 on
+    # the Base scenario. /stress appends a TRANSIENT scenario per request (uuid rows into the
+    # "StressShock" table), reads `Custom stress PnL` on that branch, and drops the rows. What
+    # the API math cannot do and this gets free: the shock P&L drills by name/sector (each leaf
+    # is w·L_k·sigma_k·vol_k, footing exactly), and composes with any cube filter.
+    # NB Factor return vol is ScenarioSet-dependent — always read this sliced to HistFull.
+    cube.create_parameter_simulation(
+        "StressShock", measures={"Shock sigma": 0.0}, levels=[l["Factor"]])
+    m["Custom stress PnL"] = tt.agg.sum(
+        m["Net exposure"] * m["Shock sigma"] * m["Factor return vol"],
+        scope=tt.OriginScope({l["Factor"]}))
+    m["Custom stress PnL"].formatter = "DOUBLE[0.00%]"
     # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
     # vector minus this cell's, its specific variance minus this cell's), subtract from the book
     # sigma. NOT additive (vol is sub-additive) — it answers "how much vol does removing this

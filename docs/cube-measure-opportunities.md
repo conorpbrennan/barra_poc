@@ -14,7 +14,30 @@ aggregation — no matrix inverses, no rolling windows, no cross-member order st
 **Status: Tier 1 BUILT 2026-07-03** — `Factor return vol` (feeds `_factor_vols` → `/stress`,
 `/reverse_stress`; in-cube identity tested), `Vol ex factor`, `Min-variance hedge ratio`,
 `Vol at min-variance hedge` (serve `/hedge`, `_hedge_table` kept as the live cross-check;
-verification ~1e-17). Tier 2 and the liquidity note remain open.
+verification ~1e-17).
+
+**Tier 2 #3 PROTOTYPE BUILT 2026-07-03** — `create_parameter_simulation("StressShock",
+{"Shock sigma": 0}, levels=[Factor])` + `Custom stress PnL = Σ x·σ·vol` (OriginScope Factor,
+so it foots by name/sector). `/stress` appends a transient uuid scenario per request, reads the
+branch, drops the rows, and serves the result in a `cube_prototype` block beside the API number
+— ties at < 1e-12, second call clean (`t_stress_cube_prototype_ties_and_cleans_up`). Not yet
+the UI source; exposing the name/sector DRILL needs scenario plumbing in `/pivot` (a
+`stress_scenario` param) — do that when the UI wants the drill.
+
+**Tier 2 #4 FEASIBILITY SPIKE 2026-07-03 — findings, held for Chris:** atoti 0.9.15 *does*
+support source scenarios (`Session.create_scenario` / `Table.scenarios`), so branch-based
+what-if is technically available. The catch is our own load-time optimization: weights are
+baked into PHYSICAL columns on the exposures table (`WLoading = Loading×Weight`,
+`FactorPnL = WLoading×FwdRet` — precomputed in pandas because measure-level products were too
+slow/OOM'd). A positions-branch override therefore does NOT flow through; a what-if branch
+must also override the affected exposures rows (~11 factor rows per traded name per date, plus
+the positions row) — tractable for single-date trades (a 5-name trade ≈ 60 row overrides) but
+it re-implements a slice of the builder inside the scenario write, and adds scenario lifecycle
+/ concurrency / memory-per-branch concerns. Recommendation unchanged: an architecture item
+with Chris — the numpy `_risk_from_weights` mirror (already tied to the cube at 5e-10) stays
+the what-if engine until then.
+
+The liquidity note remains open (lens parked).
 
 ## Tier 1 — clear wins, small and mechanical
 

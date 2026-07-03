@@ -101,6 +101,23 @@ def t_meta_serves_hypo_shocks():
 
 
 @integ
+def t_stress_cube_prototype_ties_and_cleans_up():
+    """The Tier-2 parameter-simulation prototype: /stress returns a cube_prototype block whose
+    total ties the naive API number at float precision, and the transient scenario is dropped —
+    a second call gets a fresh branch and the same answer (no residue)."""
+    import requests
+    a = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -2, "Value": 1.5}},
+                      timeout=60).json()
+    cp = a.get("cube_prototype", {})
+    assert "error" not in cp, cp
+    assert cp["total_pnl"] is not None
+    assert cp["abs_diff_vs_naive"] < 1e-12, cp
+    b = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -2, "Value": 1.5}},
+                      timeout=60).json()
+    assert abs(b["cube_prototype"]["total_pnl"] - cp["total_pnl"]) < 1e-15
+
+
+@integ
 def t_stress_matches_cube_hypo():
     """Custom /stress {Momentum:-3} == the cube's Hypo:MomentumCrash mean P&L (a length-1 vector),
     since both are Σ x_k·(σ_k·vol_k) with the same vols — validates the linear stress math."""
