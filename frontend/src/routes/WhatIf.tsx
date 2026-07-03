@@ -4,7 +4,7 @@
 // cube's reported figures exactly — only the delta is new information.
 import { useMemo, useState } from "react";
 import { useApp } from "../context/AppContext";
-import { useWhatif, useHedge } from "../api/hooks";
+import { useWhatif, useHedge, useContributions } from "../api/hooks";
 import { apiSend } from "../api/client";
 import { QueryState, HowToRead } from "../components/ui";
 import { pct, num, signedPct, signedNum } from "../lib/format";
@@ -70,6 +70,7 @@ const RISK_ROWS: { key: keyof WhatIfResult["before"]; label: string; fmt: (v: nu
 export function WhatIf() {
   const { date, book } = useApp();
   const boot = useWhatif(date, book, []);
+  const contrib = useContributions(date, book);   // CTR ranking feeds the presets
 
   // edited weights keyed by position; undefined = unchanged
   const [edits, setEdits] = useState<Record<string, number>>({});
@@ -88,6 +89,25 @@ export function WhatIf() {
     for (const [position, weight] of Object.entries(edits)) t.push({ position, weight });
     return t;
   }, [edits]);
+
+  // presets from the Euler ranking — allocate the trade to where the RISK is (CTR), not the
+  // biggest weight; ch 09's "tracking error concentrates in few names" made actionable
+  const presets = useMemo(() => {
+    const ps = contrib.data?.positions ?? [];
+    if (!ps.length) return [];
+    const r5 = (v: number) => Math.round(v * 1e4) / 1e4;
+    const top = ps[0];
+    const top5 = ps.slice(0, 5);
+    return [
+      { label: `Drop ${top.ticker.toUpperCase()} (top risk name)`,
+        note: `CTR ${(top.ctr * 100).toFixed(2)}% — the largest single contribution to book vol`,
+        edits: { [top.position]: 0 } },
+      { label: "Halve the top-5 risk names",
+        note: `halves ${top5.map((p) => p.ticker.toUpperCase()).join(", ")} — `
+          + `${((contrib.data?.sum_ctr ? top5.reduce((s, p) => s + p.ctr, 0) / contrib.data.sum_ctr : 0) * 100).toFixed(0)}% of book vol`,
+        edits: Object.fromEntries(top5.map((p) => [p.position, r5(p.weight / 2)])) },
+    ];
+  }, [contrib.data]);
 
   async function run() {
     if (!trades.length) { setErr("edit at least one weight"); return; }
@@ -121,6 +141,17 @@ export function WhatIf() {
           <div style={{ display: "flex", gap: "2.5rem", flexWrap: "wrap", alignItems: "flex-start" }}>
             <div>
               <h2 style={{ marginTop: 0 }}>Holdings ({holdings.length})</h2>
+              {presets.length > 0 && (
+                <div className="row" style={{ flexWrap: "wrap", gap: "0.4rem", marginBottom: "0.6rem" }}>
+                  <span className="muted small">Presets</span>
+                  {presets.map((p) => (
+                    <button key={p.label} title={p.note}
+                      onClick={() => { setEdits(p.edits); setResult(null); setErr(null); }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="row" style={{ marginBottom: "0.6rem" }}>
                 <select value={addPos} onChange={(e) => setAddPos(e.target.value)}>
                   <option value="">add from universe…</option>
