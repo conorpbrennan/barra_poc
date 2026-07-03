@@ -531,6 +531,35 @@ The six-frame schema and the cube are unchanged — `is_estimation` lives only i
 Rebuild to take effect (it changes factor returns, specific risk, and every downstream number; book
 Total VaR ≈ 3.6%, unchanged headline). See `docs/estimation-coverage-design.md`.
 
+## Descriptor health — the Liquidity respec + audit (2026-07-04)
+
+The residual diagnostics' hidden-beta flag (R² 0.50, "loads on Liquidity" β 0.89 t 7.9) traced to a
+**descriptor construction fault, not stale loadings**: raw Liquidity was `z(log 63d dollar-ADV)` —
+mechanically a second Size (`log ADV ≈ log mcap`; factor-return ρ −0.81 with Size). Three builder
+changes in `barra_build_frames.py` (rebuild to take effect):
+
+- **Per-descriptor history gates** in `price_descriptors` — Beta/ResidVol need 120 return days,
+  Momentum its own 252, ADV only 21 volume days; the old single 120-day gate dropped ALL price
+  descriptors for young listings (post-2021 entrants = 51% of book weight lost Liquidity entirely).
+- **Liquidity = turnover**: raw `log ADV − log mcap` at merge time (still shared Size's driver,
+  ρ +0.71 alone) **plus Size-orthogonalization of the loading on the estimation fit** (the
+  NonLinSize pattern) → final factor-return ρ vs Size **−0.06 full / +0.26 window**. `FACTOR_RECIPES`
+  in `risk_api.py` documents the respec.
+- **Coverage trade-off, accepted + disclosed**: turnover needs mcap, so ~40 held names (20.1% of
+  weight — tsm, tko, cwan…) carry no Liquidity loading (they had raw-ADV before). Better no
+  descriptor than wrong units; `/dq` and the audit's coverage section disclose it.
+
+**`barra_descriptor_audit.py`** generalizes the three tests that caught this, run per factor from
+`python_src/` after a build: (1) **collinearity** — factor-return |ρ| ≥ 0.6 pairs, full + trailing
+window; (2) **hidden beta** — each held name's daily specific return regressed on the factor return
+(β ~ 0 if loadings right; `Σw·β` = the unmodeled book exposure, |t|>2 share = breadth); (3) **held-weight
+loading coverage**. Pure helpers (`_collinear_pairs`, `_residual_betas`, `_coverage`) are unit-tested
+in `test_descriptor_audit.py` (no backend needed). Post-fix audit findings: the residual R² stays ~0.51
+but the top loading moved Liquidity → **Size (β 1.04) / NonLinSize (β −1.43)** — the mislabel is gone
+and the remaining hidden beta is a real **mega-cap regime driver** (amzn/googl/aapl/nvda/msft carry
+it) the linear+cubic size terms don't span; and **Growth covers only 21.3% of held weight**
+(reinforcing the drop-Growth candidate from `/regression`'s 9% |t|>2 admission rate).
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

@@ -2667,7 +2667,8 @@ FACTOR_RECIPES = {
     "Beta": "252d regression beta of daily returns on the market index",
     "ResidVol": "annualized std of the 252d market-regression residual",
     "Momentum": "12-1 month price return (t−252d → t−21d)",
-    "Liquidity": "log trailing-63d average dollar volume",
+    "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
+                 "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
     "Size": "log market cap (close × PIT shares)",
     "NonLinSize": "log-mcap cubed, orthogonalized to Size on the estimation fit",
     "Value": "book-to-price: PIT equity / mcap",

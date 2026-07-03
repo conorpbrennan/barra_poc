@@ -440,7 +440,12 @@ def stooq_daily(symbol: str) -> pd.DataFrame | None:
 
 def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
                       mkt: pd.DataFrame) -> pd.DataFrame:
-    """Beta, ResidVol, Momentum, Size(partial via $vol), Liquidity from daily prices."""
+    """Beta, ResidVol, Momentum, raw log-ADV (the Liquidity input) from daily prices.
+
+    Each descriptor carries its OWN history gate — Beta/ResidVol need 120 return days,
+    Momentum 252, the ADV mean only 21 volume days — so a young listing gets the loadings
+    its history supports instead of none at all (the old single 120-day gate silently
+    dropped every price descriptor for post-IPO entrants the book actually held)."""
     mret = mkt["Close"].pct_change()
     recs = []
     for tkr, px in prices.items():
@@ -448,20 +453,25 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
         dvol = (px["Close"] * px.get("Volume", np.nan))
         for d in cal:
             win = ret.loc[:d].tail(252)
-            if len(win) < 120:
+            dv = dvol.loc[:d].dropna().tail(63)
+            have_ret, have_dv = len(win) >= 120, len(dv) >= 21
+            if not (have_ret or have_dv):
                 continue
-            m = mret.reindex(win.index).fillna(0.0)
-            if m.std() > 0:
-                beta = np.cov(win.fillna(0), m)[0, 1] / m.var()
-                resid = win.fillna(0) - beta * m
+            if have_ret:
+                m = mret.reindex(win.index).fillna(0.0)
+                if m.std() > 0:
+                    beta = np.cov(win.fillna(0), m)[0, 1] / m.var()
+                    rvol = (win.fillna(0) - beta * m).std() * np.sqrt(252)
+                else:
+                    beta, rvol = np.nan, win.std() * np.sqrt(252)
             else:
-                beta, resid = np.nan, win
+                beta = rvol = np.nan
             mom = (px["Close"].loc[:d].iloc[-21] / px["Close"].loc[:d].iloc[-252] - 1
                    if len(px.loc[:d]) >= 252 else np.nan)
             recs.append({"ticker": tkr, "Date": d, "Beta": beta,
-                         "ResidVol": resid.std() * np.sqrt(252),
+                         "ResidVol": rvol,
                          "Momentum": mom,
-                         "Liquidity": np.log(dvol.loc[:d].tail(63).mean() + 1)})
+                         "Liquidity": np.log(dv.mean() + 1) if have_dv else np.nan})
     return pd.DataFrame(recs)
 
 
@@ -589,6 +599,15 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
     raw = pdsc.merge(fund, on=["ticker", "Date"], how="outer")
+    # Liquidity = TURNOVER, not raw dollar volume. log-ADV is essentially log-mcap
+    # cross-sectionally (the two factor returns ran ρ ≈ −0.8 vs Size), so the old descriptor
+    # was a second Size and the regression split one small/illiquid effect across two unstable
+    # coefficients — the book's residual then loaded on "Liquidity" (hidden beta at R² ~0.5).
+    # log(ADV+1) − log(mcap+1) ≈ log turnover decorrelates from Size by construction. A name
+    # with ADV but no mcap gets NaN — better no descriptor than one in different units.
+    if "Liquidity" in raw and "Size" in raw:
+        both = raw["Liquidity"].notna() & raw["Size"].notna()
+        raw["Liquidity"] = (raw["Liquidity"] - raw["Size"]).where(both)
     est_col = sec[["ticker", "figi"]].copy()
     est_col["is_estimation"] = sec["is_estimation"] if "is_estimation" in sec else True
     raw = raw.merge(est_col, on="ticker", how="left").dropna(subset=["figi"])
@@ -607,6 +626,15 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             sz, nls = g["Size"].fillna(0.0), g["NonLinSize"].fillna(0.0)
             b = np.polyfit(sz[ref], nls[ref], 1)
             g["NonLinSize"] = _split_z(g["NonLinSize"] - (b[0] * g["Size"] + b[1]), em)
+        if {"Liquidity", "Size"}.issubset(g):
+            # Barra-style: orthogonalize Liquidity (turnover) to Size on the estimation fit —
+            # raw turnover still shares Size's driver (the turnover respec alone only flipped
+            # the factor-return correlation −0.81 → +0.71), so take the Size-residual, the
+            # same treatment NonLinSize gets. NaN loadings stay NaN (no-mcap names).
+            ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
+            sz, lq = g["Size"].fillna(0.0), g["Liquidity"].fillna(0.0)
+            b = np.polyfit(sz[ref], lq[ref], 1)
+            g["Liquidity"] = _split_z(g["Liquidity"] - (b[0] * g["Size"] + b[1]), em)
         out.append(g)
     panel = pd.concat(out, ignore_index=True)
     long = panel.melt(id_vars=["figi", "Date"], value_vars=STYLE_FACTORS,
