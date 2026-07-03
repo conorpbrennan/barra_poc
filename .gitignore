@@ -26,3 +26,6 @@ data/
 
 # transient app screenshots (debug artifacts)
 screenshots/
+
+# editor/tool transient files
+*.tmp.*
