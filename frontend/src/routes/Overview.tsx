@@ -26,7 +26,7 @@ function series(recs: Rec[] | undefined, key: string): (number | null)[] {
 export function Overview() {
   const { date, scenario, book, ready } = useApp();
 
-  const trends = useTrends(scenario, "Scenario VaR 99,Scenario ES 97.5");
+  const trends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5");
   const wi = useWhatif(date, book, []);
   const limits = useLimits(date, scenario, book);
   const dq = useDq();
@@ -79,7 +79,7 @@ export function Overview() {
         <div>
           <h2 style={{ marginTop: 0 }}>Risk</h2>
           <HeroNum k="Model vol (1d) — the reference" v={pct(before?.model_vol_1d ?? null, 2)}
-            spark={[]} to="/attribution" />
+            spark={series(tr, "Model vol")} sparkLabels={dates} to="/attribution" />
           <HeroNum k="Factor / specific variance"
             v={factorShare === null ? "—" : `${pct(factorShare, 0)} / ${pct(1 - factorShare, 0)}`}
             spark={[]} to="/attribution" />

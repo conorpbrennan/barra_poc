@@ -299,6 +299,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         wgt * wgt * tt.agg.single_value(t_sv["SpecificVar"]),
         scope=tt.OriginScope({l["Date"], l["Position"]}))
     m["Specific vol"] = tt.math.sqrt(m["Specific variance"])
+    # ---- model vol: THE reference risk number (2026-07-03), sigma = sqrt(x'Fx + w'dw) ---------
+    # Factor half = std of the scenario P&L vector (atoti 'sample' mode == np.cov ddof=1), so
+    # sliced to HistFull this IS the model sigma on the same full-history covariance the API uses
+    # (_risk_from_weights / _euler_contributions tie out to float precision). On Evt:* it reads
+    # as the window (regime) vol; on length-1 Hypo:* the sample std is degenerate — blank.
+    # Computed per cell (each slice's own vector + own specific block), so it drills by
+    # sector/name/factor like the VaR measures.
+    m["Model vol"] = tt.math.sqrt(m["Scenario PnL vol"] ** 2 + m["Specific variance"])
+    m["Model vol"].formatter = "DOUBLE[0.00%]"
     # approximate total tail: factor scenario VaR with an independent idiosyncratic tail (z=2.326)
     m["Total VaR 99"] = tt.math.sqrt(m["Scenario VaR 99"] * m["Scenario VaR 99"]
                                      + (2.326 * m["Specific vol"]) ** 2)

@@ -127,7 +127,13 @@ risk-tooling roadmap.
 
 **Reference-metric decision (2026-07-03): MODEL VOL is the reference; VaR/ES are the limits.**
 The desk's reference risk number is model vol `σ = √(x'Fx + w'Δw)` with its factor/specific
-split (`model_vol_1d`, now first in `_risk_from_weights` and the what-if/Overview displays);
+split (`model_vol_1d`, now first in `_risk_from_weights` and the what-if/Overview displays).
+**`Model vol` is also a cube measure** (`barra_factor_risk_cube.py`: `√(Scenario PnL vol² +
+Specific variance)` — atoti sample-std == np.cov ddof=1, so sliced to HistFull it ties the API
+implementations to float precision; per-cell, so it drills by sector/name and serves `/trends`;
+on Evt sets it reads as window/regime vol, on length-1 Hypo sets it is degenerate → blank). On
+the `/pivot` allowlist + `TS_MEASURES`; accuracy pinned by `test_model_vol.py` (tie-outs to
+`/contributions` and `/whatif`, the in-cube identity, sub-additivity, set semantics, trends);
 the desk limits are written on **Scenario VaR 99 / ES 97.5** (the Kupiec-backtested metrics —
 `limits.json`'s Total VaR 99 limit was replaced by Scenario VaR 99, same thresholds); the house
 **Total VaR 99** composite (empirical factor quantile ⊕ Gaussian specific, in quadrature) is

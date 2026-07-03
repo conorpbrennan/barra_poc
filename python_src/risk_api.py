@@ -73,7 +73,8 @@ import barra_universe_drift as _ud
 from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS
 
 CUBE_PORT = int(os.environ.get("BARRA_CUBE_PORT", "9091"))   # own port, distinct from the 9090 UI cube
-TS_MEASURES = ["Total VaR 99", "Scenario VaR 99", "Scenario worst loss", "Specific vol"]
+TS_MEASURES = ["Model vol", "Scenario VaR 99", "Scenario worst loss", "Specific vol",
+               "Total VaR 99"]
 BY_LEVELS = {"country": "Country", "sector": "Sector", "issuer": "Issuer", "position": "Position"}
 
 S: dict = {}   # process-wide state: session, cube, frames
@@ -107,6 +108,9 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # VaR ladder (95/97.5/99), Expected Shortfall, P&L dispersion + total-ES analogue:
                  "Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5", "Scenario ES 99",
                  "Scenario PnL vol", "Total ES 97.5",
+                 # model vol — THE reference risk number (sigma = sqrt(x'Fx + w'dw); slice to
+                 # HistFull for the model sigma; degenerate on length-1 Hypo sets):
+                 "Model vol",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -122,7 +126,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "% of Scenario VaR 99", "% of Total VaR 99",
             "Incremental Scenario VaR 99", "Incremental Total VaR 99",
             "Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5", "Scenario ES 99",
-            "Scenario PnL vol", "Total ES 97.5",
+            "Scenario PnL vol", "Total ES 97.5", "Model vol",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -2866,10 +2870,10 @@ calendar (2016–2024) for one scenario set. The book is the Soros 13F overlay o
 factor model. Numbers are fractions of book value; VaR/ES/vol are 1-day losses.
 
 The payload:
-- `risk_series` — monthly book measures (Scenario VaR 99, Scenario ES 97.5, Specific vol, and
-  the legacy Total VaR 99 composite — read the scenario measures as primary; the desk's
-  reference number is model vol, which has no cube time series). The trend matters more than
-  the level: where the series sits NOW vs its own history, and when it last shifted regime.
+- `risk_series` — monthly book measures. `Model vol` (σ = √(x'Fx + w'Δw)) is the REFERENCE
+  series — lead with it; Scenario VaR 99 / ES 97.5 are the limit metrics; Total VaR 99 is the
+  legacy composite. The trend matters more than the level: where each series sits NOW vs its
+  own history, and when it last shifted regime.
 - `exposure_series` — net factor exposures by month (quarterly-sampled) + per-factor start/end.
   Exposure paths are the mandate made visible: a persistent move is the book changing character,
   not noise. Whether drift is intentional (rotation) or re-pricing belongs to the drift
@@ -2902,7 +2906,8 @@ async def trends_analysis(body: TrendsAnalysisBody):
     _rate_limit()
     client = _anthropic()
     book_ts = await trends(set=body.set,
-                           measures="Total VaR 99,Scenario VaR 99,Scenario ES 97.5,Specific vol")
+                           measures="Model vol,Scenario VaR 99,Scenario ES 97.5,"
+                                    "Specific vol,Total VaR 99")
     fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor")
 
     def rnd(v):

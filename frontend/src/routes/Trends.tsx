@@ -21,7 +21,7 @@ function col(recs: Rec[], xKey: string, yKey: string) {
 
 export function Trends() {
   const { scenario } = useApp();
-  const book = useTrends(scenario, "Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol");
+  const book = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol");
   const byFactor = useTrends(scenario, "Net exposure", "Factor");
 
   return (
@@ -34,6 +34,7 @@ export function Trends() {
           const r = data.records;
           const dates = r.map((rec) => String(rec.Date ?? "").slice(0, 10));
           const charts: { title: string; key: string; fmt: (v: number) => string }[] = [
+            { title: "Model vol (the reference)", key: "Model vol", fmt: (v) => pct(v, 2) },
             { title: "Scenario VaR 99", key: "Scenario VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario ES 97.5", key: "Scenario ES 97.5", fmt: (v) => pct(v) },
             { title: "Specific vol", key: "Specific vol", fmt: (v) => pct(v) },
