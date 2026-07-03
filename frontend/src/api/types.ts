@@ -278,6 +278,8 @@ export interface ContributionPositionRow {
 }
 export interface ContributionsResult {
   date: string; book: string;
+  source?: string;                    // "cube" — served from the cube measures
+  verification?: { vol_abs_diff: number; max_ctv_abs_diff: number; max_ctr_abs_diff: number };
   vol_1d: number; var99_normal: number;
   factor_variance: number; specific_variance: number; total_variance: number;
   factor_share: number | null; sum_ctr: number; sum_ctv: number;

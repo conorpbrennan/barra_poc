@@ -433,6 +433,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Marginal Model vol"] = (_cov_book + m["Specific variance"]) / _sigma_book
     m["% of Model vol"] = (m["Marginal Model vol"]
         / tt.total(m["Marginal Model vol"], h["Security"], h["FactorDim"]))
+    # The clean FACTOR-side contribution (no specific block, VARIANCE units): cov(member, book).
+    # By Factor: per factor this IS the ch-09 CTV = x_k(Fx)_k (cross-terms 50/50, negative =
+    # hedge) and Σ_factor = the factor variance x'Fx. /contributions serves it.
+    m["Factor variance contribution"] = _cov_book
     # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
     # vector minus this cell's, its specific variance minus this cell's), subtract from the book
     # sigma. NOT additive (vol is sub-additive) — it answers "how much vol does removing this

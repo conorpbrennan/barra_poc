@@ -134,11 +134,12 @@ def t_factor_cov_shape():
 
 @integ
 def t_hedge_consistent_with_contributions():
-    """/hedge base vol equals /contributions vol (same model math); rows ranked; market h* set."""
+    """/hedge base vol (numpy) equals /contributions vol (now cube-served); rows ranked; market
+    h* set. Tolerance is the cube↔numpy float-precision bound, not 1e-12 identity."""
     import requests
     h = requests.get(f"{API}/hedge", timeout=60).json()
     c = requests.get(f"{API}/contributions", timeout=60).json()
-    assert abs(h["vol_base"] - c["vol_1d"]) < 1e-12
+    assert abs(h["vol_base"] - c["vol_1d"]) < 5e-10
     reds = [r["vol_reduction"] for r in h["rows"]]
     assert reds == sorted(reds, reverse=True)
     assert h["market_hedge"] and h["market_hedge"]["vol_after"] < h["vol_base"]

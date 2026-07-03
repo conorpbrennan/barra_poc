@@ -231,12 +231,15 @@ needed). Tests: `test_stress.py`.
 
 The It's Just Beta alignment set (see `itsjustbeta/additional-views-plan.md`), shipped 2026-07-02:
 
-- **`GET /contributions?date=&book=`** — the ch-09 standard reports from `_euler_contributions`
-  (pure): per-factor **CTV** `x_k(Fx)_k` (sums to factor VARIANCE, cross-terms 50/50, negative =
-  hedge) and per-position **CTR** `w·MCR` (sums EXACTLY to book daily vol). Model vol `σ² = x'Fx +
-  w'Δw` on the full factor-return history — the additive decomposition the standalone per-bucket
-  VaR view can't give; never compare CTR (vol units) with CTV (variance units). Vite Attribution
-  lens "Contributions (Euler)" tab, sums pinned. Tests: `test_contributions.py`.
+- **`GET /contributions?date=&book=`** — the ch-09 standard reports, **served from the cube
+  measures** since 2026-07-03 (`Marginal Model vol` per name == CTR, `Factor variance
+  contribution` per factor == CTV, `Model vol` book σ — endpoint and grid can never disagree):
+  per-factor **CTV** `x_k(Fx)_k` (sums to factor VARIANCE, cross-terms 50/50, negative = hedge)
+  and per-position **CTR** `w·MCR` (sums EXACTLY to book daily vol); never compare CTR (vol
+  units) with CTV (variance units). `_euler_contributions` (pure numpy) is retained and
+  **recomputed on every call as an independent cross-check**, reported in `verification`
+  (live diffs ~1e-17 — the tie-out made permanent). Vite Attribution lens "Contributions
+  (Euler)" tab, sums pinned. Tests: `test_contributions.py`.
 - **`GET /calibration?window=&book=`** — the ROLLING bias statistic (`_rolling_bias`, pure):
   `b = std(realized/predicted vol)` over a trailing window with the `1 ± √(2/window)` acceptance
   band, book + specific, plus 2σ exceedance counts (expected ≈ 4.6%). NB the route is

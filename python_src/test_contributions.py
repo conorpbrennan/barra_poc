@@ -90,6 +90,20 @@ def t_contributions_tie_out():
 
 
 @integ
+def t_contributions_cube_numpy_crosscheck():
+    """/contributions serves the CUBE measures with the numpy Euler recomputed as a live
+    cross-check — the `verification` diffs must sit at float precision. This preserves the
+    independent-implementation guarantee after the endpoint moved to the cube."""
+    import requests
+    j = requests.get(f"{API}/contributions", timeout=120).json()
+    assert j.get("source") == "cube"
+    v = j["verification"]
+    assert v["vol_abs_diff"] < 5e-10, v
+    assert v["max_ctv_abs_diff"] < 5e-10, v
+    assert v["max_ctr_abs_diff"] < 5e-10, v
+
+
+@integ
 def t_contributions_shape():
     import requests
     j = requests.get(f"{API}/contributions", timeout=60).json()

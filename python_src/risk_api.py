@@ -113,6 +113,7 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # marginal (== the ch-09 CTR; sums exactly to Model vol; by-NAME views) and the
                  # diversification-aware incremental (vol released by removing the member):
                  "Model vol", "Marginal Model vol", "% of Model vol", "Incremental Model vol",
+                 "Factor variance contribution",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -130,6 +131,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5", "Scenario ES 99",
             "Scenario PnL vol", "Total ES 97.5", "Model vol",
             "Marginal Model vol", "% of Model vol", "Incremental Model vol",
+            "Factor variance contribution",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -1387,46 +1389,77 @@ def _euler_contributions(w: np.ndarray, Lv: np.ndarray, F: np.ndarray, sv: np.nd
 
 @app.get("/contributions")
 async def contributions(date: str | None = None, book: str = "Soros"):
-    """Euler risk contributions — the ch-09 standard reports. Factors: CTV_k = x_k(Fx)_k, sums to
-    factor variance (negative = a hedge). Positions: CTR_i = w_i·MCR_i, sums exactly to book
-    daily vol. Model vol (σ² = x'Fx + w'Δw on the full factor-return history), not scenario VaR —
-    the additive decomposition the standalone per-bucket VaR view can't give."""
+    """Euler risk contributions — the ch-09 standard reports, SERVED FROM THE CUBE measures
+    (`Marginal Model vol` per name == CTR; `Factor variance contribution` per factor == CTV;
+    `Model vol` book σ) so this endpoint and the pivot grid can never disagree. The retained
+    numpy implementation (_euler_contributions) is recomputed on every call as an independent
+    cross-check and reported in `verification` — the tie-out made permanent."""
     def run():
         d = date or _latest_date()
+        # numpy reference — the independent implementation, kept as a live cross-check
         L, w, s, R = _book_inputs(d, book)
         if not float(np.abs(w.to_numpy()).sum()):
             raise HTTPException(404, f"no {book} positions at {d}")
         F = np.cov(R, rowvar=False)
         e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
-        total_var = e["factor_var"] + e["specific_var"]
+        ref_ctv = {str(f): float(e["ctv"][i]) for i, f in enumerate(L.columns)}
+        ref_ctr = {str(p): float(e["ctr"][i]) for i, p in enumerate(L.index)}
+        # cube-served numbers (single source of truth with the grid), HistFull = the model σ
+        cube = S["cube"]; l, m = cube.levels, cube.measures
+        flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
+        if "Book" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Book"] == book)
+        bk = cube.query(m["Model vol"], m["Scenario PnL vol"], m["Specific variance"], filter=flt)
+        if not len(bk):
+            raise HTTPException(404, f"no cube cell at {d} / HistFull")
+        vol = float(bk.iloc[0]["Model vol"])
+        fac_var = float(bk.iloc[0]["Scenario PnL vol"]) ** 2
+        svar = float(bk.iloc[0]["Specific variance"])
+        total_var = fac_var + svar
+        dfF = (cube.query(m["Net exposure"], m["Factor variance contribution"],
+                          levels=[l["Factor"]], filter=flt).reset_index())
+        dfP = (cube.query(m["Marginal Model vol"], levels=[l["Position"]], filter=flt)
+               .reset_index())
         factors = sorted(
-            [{"factor": f, "exposure": float(e["x"][i]), "ctv": float(e["ctv"][i]),
-              "pct_of_variance": (float(e["ctv"][i] / total_var) if total_var > 0 else None)}
-             for i, f in enumerate(L.columns)],
+            [{"factor": str(r["Factor"]), "exposure": float(r["Net exposure"]),
+              "ctv": float(r["Factor variance contribution"]),
+              "pct_of_variance": (float(r["Factor variance contribution"] / total_var)
+                                  if total_var > 0 else None)}
+             for _, r in dfF.iterrows()],
             key=lambda r: -abs(r["ctv"]))
         tk = _ticker_map()
-        wv = w.to_numpy()
-        held = [i for i in range(len(wv)) if wv[i] != 0.0]
+        held = w[w != 0.0]
+        ctr_map = dict(zip(dfP["Position"].astype(str), dfP["Marginal Model vol"].astype(float)))
         positions = sorted(
-            [{"position": str(L.index[i]), "ticker": tk.get(str(L.index[i]), str(L.index[i])),
-              "weight": float(wv[i]), "mcr": float(e["mcr"][i]), "ctr": float(e["ctr"][i]),
-              "pct_of_vol": (float(e["ctr"][i] / e["sigma"]) if e["sigma"] > 0 else None)}
-             for i in held],
+            [{"position": p, "ticker": tk.get(p, p), "weight": float(wt),
+              "mcr": (ctr_map.get(p, 0.0) / float(wt)) if wt else None,
+              "ctr": ctr_map.get(p, 0.0),
+              "pct_of_vol": (ctr_map.get(p, 0.0) / vol) if vol > 0 else None}
+             for p, wt in held.items()],
             key=lambda r: -r["ctr"])
+        verification = {
+            "vol_abs_diff": abs(vol - e["sigma"]),
+            "max_ctv_abs_diff": max((abs(f_["ctv"] - ref_ctv.get(f_["factor"], 0.0))
+                                     for f_ in factors), default=0.0),
+            "max_ctr_abs_diff": max((abs(p_["ctr"] - ref_ctr.get(p_["position"], 0.0))
+                                     for p_ in positions), default=0.0),
+        }
         return {
-            "date": d, "book": book,
-            "vol_1d": e["sigma"], "var99_normal": _Z99 * e["sigma"],
-            "factor_variance": e["factor_var"], "specific_variance": e["specific_var"],
+            "date": d, "book": book, "source": "cube",
+            "vol_1d": vol, "var99_normal": _Z99 * vol,
+            "factor_variance": fac_var, "specific_variance": svar,
             "total_variance": total_var,
-            "factor_share": (e["factor_var"] / total_var) if total_var > 0 else None,
-            "sum_ctr": float(np.sum(e["ctr"])),   # = vol_1d, the Euler tie-out
-            "sum_ctv": float(np.sum(e["ctv"])),   # = factor_variance
+            "factor_share": (fac_var / total_var) if total_var > 0 else None,
+            "sum_ctr": float(dfP["Marginal Model vol"].sum()),   # = vol_1d, Euler (all names)
+            "sum_ctv": float(dfF["Factor variance contribution"].sum()),   # = factor_variance
             "factors": factors, "positions": positions,
+            "verification": verification,
             "note": ("CTR (positions) is in VOL units and sums exactly to book vol; CTV (factors) "
                      "is in VARIANCE units and sums to factor variance — different unit pairings, "
                      "never compare directly. Negative CTV = the exposure hedges the book. MCR is "
                      "a rate (risk per unit weight), nothing to sum. Model vol on the full "
-                     "factor-return history — distinct from the scenario-VaR views."),
+                     "factor-return history — distinct from the scenario-VaR views. Served from "
+                     "the cube measures; `verification` is the live numpy cross-check."),
         }
     return await run_in_threadpool(run)
 
