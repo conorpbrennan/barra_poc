@@ -16,13 +16,13 @@ cube-served number carries a live numpy cross-check; the tie-outs read at machin
 
 ## 2. Decisions to ratify
 
-**2a. Model vol is now the reference risk number; your limit was rewritten.**
+**2a. Model vol is now the reference risk number; the limit metric moved with it.**
 We took the primer at its word: σ = √(x'Fx + w'Δw) with the factor/specific split leads every
-display (book: 1.44%/d, 94% factor / 6% specific). The limits are written on the
-Kupiec-backtested metrics — **your Total VaR 99 limit (4.5%/5.5%) is now a Scenario VaR 99
-limit at the same thresholds**; ES 97.5 unchanged (5.0%/6.5%). The old Total VaR 99 composite
-(empirical factor quantile ⊕ Gaussian specific tail) survives as a measure marked "legacy".
-Confirm or amend.
+display (book: 1.44%/d, 94% factor / 6% specific). The desk limits are written on the
+Kupiec-backtested metrics: the limit is now on **Scenario VaR 99** rather than the old house
+Total VaR 99 composite (which survives as a measure marked "legacy"). The thresholds
+themselves are placeholder defaults we set (VaR 4.5%/5.5%, ES 5.0%/6.5%, Top-5 share 40%/50%)
+— confirm the metric choice, and give us the numbers you'd actually run this book against.
 
 **2b. Views removed to match your process.**
 Cut: the standalone per-bucket Scenario-VaR "Risk by level" tab (superseded by CTR — ch 09's
