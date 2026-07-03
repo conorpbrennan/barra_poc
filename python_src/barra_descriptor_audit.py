@@ -143,13 +143,26 @@ def run(window_start: str = "2025-06-30", corr_thresh: float = 0.6) -> None:
     print("\n== 3. loading coverage (held book, latest date) ==")
     exp_d = exp[exp["Date"] == d]
     print(f"   {'factor':<10} {'covered':>8} {'missing':>8}  names")
-    for f_ in wide.columns:
+    # industries are MUTUALLY EXCLUSIVE memberships (one sector per name), so per-industry
+    # coverage is meaningless ("missing Ind:Energy" describes every non-energy name); report
+    # them as ONE row — the held weight carrying ANY industry loading.
+    ind_cols = [c for c in wide.columns if str(c).startswith("Ind:")]
+    for f_ in [c for c in wide.columns if c not in ind_cols]:
         c = _coverage(exp_d, held, f_)
         names = ", ".join(tk.get(p, p) for p in c["missing"].index[:6])
         more = f" +{c['n_missing'] - 6}" if c["n_missing"] > 6 else ""
         print(f"   {f_:<10} {c['weight_covered']:>8.1%} {c['weight_missing']:>8.2%}  "
               f"{names}{more}" if c["n_missing"] else
               f"   {f_:<10} {c['weight_covered']:>8.1%} {'—':>8}")
+    if ind_cols:
+        have_any = set(exp_d[exp_d["Factor"].isin(ind_cols)]["Position"])
+        miss = held[~held.index.isin(have_any)].sort_values(ascending=False)
+        names = ", ".join(tk.get(p, p) for p in miss.index[:6])
+        more = f" +{len(miss) - 6}" if len(miss) > 6 else ""
+        print(f"   {'Industry':<10} {held[held.index.isin(have_any)].sum():>8.1%} "
+              f"{miss.sum():>8.2%}  {names}{more}" if len(miss) else
+              f"   {'Industry':<10} {held[held.index.isin(have_any)].sum():>8.1%} {'—':>8}")
+        print("   (any Ind:* — sectors are mutually exclusive; missing = Unknown-sector names)")
 
 
 if __name__ == "__main__":
