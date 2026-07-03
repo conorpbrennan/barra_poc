@@ -1,8 +1,8 @@
 // Smoke tests for the PnL-attribution chart components (Step 15): the sign-aware stacked hero
 // and the §4 reconcile band chart. Pure-render — no API.
 import { describe, it, expect } from "vitest";
-import { render } from "@testing-library/react";
-import { StackedHero, BandChart, irSignificance } from "./Attribution";
+import { fireEvent, render } from "@testing-library/react";
+import { StackedHero, BandChart, DrillBars, irSignificance } from "./Attribution";
 import type { PnlLinkageResult } from "../api/types";
 
 const SERIES = [
@@ -108,5 +108,47 @@ describe("BandChart", () => {
       expect(cx).toBeGreaterThan(0);
       expect(cx).toBeLessThan(700);
     }
+  });
+});
+
+describe("BandChart drill dots", () => {
+  it("factor dots fire onDot; the book row does not get a click target", () => {
+    const hits: string[] = [];
+    const { container } = render(<BandChart lk={LK} onDot={(n) => hits.push(n)} />);
+    const dot = container.querySelector('g[data-dot="Market"]')!;
+    expect(dot).toBeTruthy();
+    fireEvent.click(dot);
+    expect(hits).toEqual(["Market"]);
+    expect(container.querySelector('g[data-dot="Book total"]')).toBeNull();
+    expect(container.querySelector('g[data-dot="Specific"]')).toBeNull();
+  });
+
+  it("without onDot no dot is clickable (pure chart unchanged)", () => {
+    const { container } = render(<BandChart lk={LK} />);
+    expect(container.querySelector("g[data-dot]")).toBeNull();
+  });
+});
+
+describe("DrillBars", () => {
+  const BARS = [
+    { label: "Beta", v: 0.0068, note: "loading 2.83 at T" },
+    { label: "ResidVol", v: 0.0068 },
+    { label: "Liquidity", v: -0.0006 },
+  ];
+  it("direct labels + values, accent only on the largest |v|", () => {
+    const { container, getByText } = render(<DrillBars bars={BARS} />);
+    getByText("Beta"); getByText("loading 2.83 at T"); getByText("-0.06%");
+    const bars = [...container.querySelectorAll("[data-bar]")];
+    const accents = bars.filter(
+      (b) => (b as HTMLElement).style.background === "rgb(59, 94, 140)");
+    expect(accents.length).toBe(1);                     // one accent = the biggest contributor
+  });
+
+  it("negative bars extend left of the zero centreline", () => {
+    const { container } = render(<DrillBars bars={BARS} />);
+    const neg = container.querySelector('[data-bar="Liquidity"]') as HTMLElement;
+    const pos = container.querySelector('[data-bar="Beta"]') as HTMLElement;
+    expect(parseFloat(neg.style.left)).toBeLessThan(75);   // centre C = 75
+    expect(parseFloat(pos.style.left)).toBe(75);
   });
 });

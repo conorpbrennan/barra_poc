@@ -6,12 +6,15 @@
 // The by-name drill lives in the Pivot via the cube measures (Factor contribution / Specific PnL /
 // Realized PnL). Tufte/Few: grey + one accent, direct labels, colour only where it means something.
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import {
-  useContributions, usePnlAttribution, usePnlResidual, usePnlLinkage, usePnlNames,
+  useContributions, useMeta, usePivot, usePnlAttribution, usePnlResidual, usePnlLinkage,
+  usePnlNames,
 } from "../api/hooks";
 import type {
-  ContributionsResult, PnlAttributionResult, PnlLinkageResult, PnlSeriesPoint,
+  ContributionsResult, PnlAttributionResult, PnlLinkagePosition, PnlLinkageResult,
+  PnlLinkageRow, PnlSeriesPoint,
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
 import { HowToRead, QueryState, RagDot } from "../components/ui";
@@ -121,7 +124,10 @@ export function StackedHero({ series, width = 640, height = 240 }: {
 // Each row reads against its OWN band, so x-position IS the surprise z (shared σ axis). ----
 const DOT = { within: "#33332f", stress: "#b07d2b", investigate: "#a8322a" } as const;
 
-export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: number }) {
+export function BandChart({ lk, width = 700, onDot }: {
+  lk: PnlLinkageResult; width?: number;
+  onDot?: (name: string) => void;      // linked selection: a factor dot opens its drill drawer
+}) {
   const rows = [...lk.rows, null, lk.book_total];   // null = separator
   const px = 52, cx = 350, labelX = 118, zX = width - 66;
   const rh = 30, y0 = 26;
@@ -142,18 +148,25 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
     // an exposure-migration breach is a band artifact (x frozen at T), not a factor event —
     // draw it hollow so it doesn't read like a real breach
     const hollow = r.driver?.kind === "exposure_migration";
+    const drillable = onDot && r.kind === "factor";
     els.push(
       <g key={r.name}>
         <rect x={cx - halfS} y={y} width={2 * halfS} height={14} fill="#ece9e0" />
         <rect x={cx - 2 * px} y={y} width={4 * px} height={14} fill="#d9d5ca" />
         <text x={labelX} y={y + 11} textAnchor="end" fontSize={12.5}
           fontWeight={r.kind === "book" ? 600 : 400} fill="#2a2a26">{r.name}</text>
-        <circle cx={dx} cy={y + 7} r={4.2} fill={hollow ? "#fffff8" : c}
-          stroke={hollow ? c : "none"} strokeWidth={hollow ? 1.5 : 0}>
-          <title>{`${r.name}: realized ${signedPct(r.realized, 2)} · z ${signedNum(z, 1)}σ · `
-            + `base ±${pct(2 * r.sd_base, 2)} · stressed ±${pct(2 * r.sd_stressed, 2)}`
-            + ` · ${r.verdict}`}</title>
-        </circle>
+        <g data-dot={drillable ? r.name : undefined}
+          onClick={drillable ? () => onDot(r.name) : undefined}
+          style={drillable ? { cursor: "pointer" } : undefined}>
+          {/* transparent halo so the 4px dot has a clickable target */}
+          {drillable && <circle cx={dx} cy={y + 7} r={11} fill="transparent" />}
+          <circle cx={dx} cy={y + 7} r={4.2} fill={hollow ? "#fffff8" : c}
+            stroke={hollow ? c : "none"} strokeWidth={hollow ? 1.5 : 0}>
+            <title>{`${r.name}: realized ${signedPct(r.realized, 2)} · z ${signedNum(z, 1)}σ · `
+              + `base ±${pct(2 * r.sd_base, 2)} · stressed ±${pct(2 * r.sd_stressed, 2)}`
+              + ` · ${r.verdict}${drillable ? " · click to drill" : ""}`}</title>
+          </circle>
+        </g>
         <text x={zX} y={y + 11} fontSize={11.5} fill={c} className="num">
           {signedNum(z, 1)}σ</text>
       </g>,
@@ -195,6 +208,193 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
       <text x={90} y={legendY + 49} fontSize={10.5} fill="#2a2a26">
         hollow — exposure migrated in-window (band artifact, see driver read)</text>
     </svg>
+  );
+}
+
+// ---- §4 drill drawers: click a breach row (or a factor dot) → the decomposition behind it,
+// served by the same guarded /pivot the grid uses (no new endpoint, no off-allowlist number).
+// Tufte: inline, hairline-bounded, one open at a time; bidirectional bars, direct-labelled,
+// the accent marks only the largest contributor (colour = meaning). ----
+
+// pure, exported for tests — bidirectional magnitude bars around a zero centreline
+export function DrillBars({ bars }: {
+  bars: { label: string; v: number; note?: string }[];
+}) {
+  if (!bars.length) return <p className="muted small">nothing to show</p>;
+  const max = Math.max(...bars.map((b) => Math.abs(b.v)), 1e-12);
+  const W = 150, C = W / 2;
+  const iBig = bars.reduce((a, b, i) => (Math.abs(b.v) > Math.abs(bars[a].v) ? i : a), 0);
+  return (
+    <div style={{ margin: "0.35rem 0" }}>
+      {bars.map((b, i) => {
+        const w = Math.max(1, (Math.abs(b.v) / max) * (C - 2));
+        return (
+          <div key={b.label} className="row small" style={{ gap: "0.55rem", margin: "0.12rem 0" }}>
+            <span className="label" style={{ width: "6.4rem", textAlign: "right", flex: "none" }}>
+              {b.label}</span>
+            <span style={{ position: "relative", width: W, height: 9, flex: "none" }}>
+              <span style={{ position: "absolute", left: C, top: -1, bottom: -1,
+                borderLeft: "1px solid #d8d5cd" }} />
+              <span data-bar={b.label} style={{ position: "absolute", top: 0, height: 9,
+                left: b.v < 0 ? C - w : C, width: w,
+                background: i === iBig ? "#3b5e8c" : "#c9c5bb" }} />
+            </span>
+            <span className="num">{signedPct(b.v, 2)}</span>
+            {b.note && <span className="muted">{b.note}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// deep link into the Pivot lens carrying this exact slice (?drill= applied once on mount there)
+const pivotDrill = (cfg: { rows: string[]; measures: string[];
+  filters: Record<string, string[]> }) =>
+  `/pivot?drill=${encodeURIComponent(JSON.stringify(cfg))}`;
+
+const winDates = (dates: string[], T: string, to: string) =>
+  dates.filter((d) => d >= T && d < to);   // fwd-month convention: value at d covers d → d+1m
+
+// one name's breach explained: per-factor contribution over the window + the T loadings
+function PositionDrawer({ p, lk, dates }: {
+  p: PnlLinkagePosition; lk: PnlLinkageResult; dates: string[];
+}) {
+  const win = winDates(dates, lk.T, lk.to);
+  const base = { Book: [lk.book], Position: [p.position] };
+  const cq = usePivot("Factor", "", "Factor contribution",
+    JSON.stringify({ ...base, Date: win }), false, win.length > 0);
+  const lq = usePivot("Factor", "", "Net exposure",
+    JSON.stringify({ ...base, Date: [lk.T] }), false, win.length > 0);
+  const nFactors = lk.rows.filter((r) => r.kind === "factor").length;
+  return (
+    <div style={{ padding: "0.4rem 0 0.55rem 1.35rem" }}>
+      <p className="small" style={{ margin: 0 }}>
+        realized <strong className="num">{signedPct(p.realized, 2)}</strong> = factor{" "}
+        {signedPct(p.factor_pnl, 2)} + specific {signedPct(p.specific_pnl, 2)} · band
+        ±{pct(2 * p.sd_base, 2)} · z {signedNum(p.z, 1)}σ · {lk.T} → {lk.to}
+      </p>
+      <QueryState q={cq}>
+        {(d) => {
+          const loads = new Map((lq.data?.records ?? [])
+            .filter((r) => typeof r["Net exposure"] === "number")
+            .map((r) => [String(r.Factor), (r["Net exposure"] as number) / (p.weight || 1)]));
+          const bars = d.records
+            .map((r) => ({ f: String(r.Factor),
+              v: typeof r["Factor contribution"] === "number" ? (r["Factor contribution"] as number) : 0 }))
+            .filter((b) => b.v !== 0)
+            .sort((a, b) => Math.abs(b.v) - Math.abs(a.v))
+            .map((b) => ({ label: b.f, v: b.v,
+              note: loads.has(b.f) ? `loading ${num(loads.get(b.f)!, 2)} at T`
+                                   : "no loading at T" }));
+          bars.push({ label: "Specific", v: p.specific_pnl,
+            note: p.specific_pnl === 0 ? "no residual history" : "" });
+          return (
+            <>
+              <DrillBars bars={bars} />
+              {loads.size < nFactors && (
+                <p className="muted small" style={{ margin: "0.15rem 0 0" }}>
+                  only {loads.size} of {nFactors} factor loadings at {lk.T} — a thin loading
+                  set is itself a hidden-beta suspect.
+                </p>
+              )}
+              {p.driver && (
+                <p className="small" style={{ margin: "0.3rem 0 0", maxWidth: "38rem" }}>
+                  {p.driver.text}
+                </p>
+              )}
+              <p className="small" style={{ margin: "0.3rem 0 0" }}>
+                <Link className="muted" to={pivotDrill({ rows: ["Factor"],
+                  measures: ["Factor contribution", "Specific PnL", "Realized PnL"],
+                  filters: { ...base, Date: win } })}>open in Pivot →</Link>
+              </p>
+            </>
+          );
+        }}
+      </QueryState>
+    </div>
+  );
+}
+
+// one positions-table row + its optional expansion (indentation + hairlines, no container)
+function FragRow({ row: p, open, onToggle, lk, dates }: {
+  row: PnlLinkagePosition; open: boolean; onToggle: () => void;
+  lk: PnlLinkageResult; dates: string[];
+}) {
+  return (
+    <>
+      <tr onClick={onToggle} style={{ cursor: "pointer" }}>
+        <td className="label">
+          <span className="muted" style={{ display: "inline-block", width: "0.9rem",
+            transform: open ? "rotate(90deg)" : undefined, transition: "transform 0.1s" }}>
+            ▸</span>
+          {p.name.toUpperCase()}
+        </td>
+        <td>{pct(p.weight, 1)}</td>
+        <td>{signedPct(p.realized, 2)}</td>
+        <td className="muted">{signedPct(p.factor_pnl, 2)}</td>
+        <td className="muted">{signedPct(p.specific_pnl, 2)}</td>
+        <td style={{ color: DOT[p.verdict as keyof typeof DOT] ?? INK }}>
+          {signedNum(p.z, 1)}</td>
+        <td className="muted">{p.verdict}</td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={7} style={{ padding: 0 }}>
+            <PositionDrawer p={p} lk={lk} dates={dates} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// the inverse read for a factor row: which names carried this factor's move
+function FactorDrawer({ row, lk, dates, onClose }: {
+  row: PnlLinkageRow; lk: PnlLinkageResult; dates: string[]; onClose: () => void;
+}) {
+  const win = winDates(dates, lk.T, lk.to);
+  const q = usePivot("Issuer", "", "Factor contribution",
+    JSON.stringify({ Book: [lk.book], Factor: [row.name], Date: win }), false, win.length > 0);
+  return (
+    <div style={{ borderTop: "1px solid #d8d5cd", borderBottom: "1px solid #d8d5cd",
+      padding: "0.45rem 0 0.55rem", margin: "0.3rem 0 0.5rem" }}>
+      <p className="small" style={{ margin: 0 }}>
+        <strong>{row.name}</strong> — who carried it: realized{" "}
+        <strong className="num">{signedPct(row.realized, 2)}</strong> · band
+        ±{pct(2 * row.sd_base, 2)} · z {signedNum(row.z ?? 0, 1)}σ · {lk.T} → {lk.to}{" "}
+        <button className="muted" style={{ marginLeft: "0.6rem" }} onClick={onClose}>×</button>
+      </p>
+      <QueryState q={q}>
+        {(d) => {
+          const rows = d.records
+            .map((r) => ({ label: String(r.Issuer),
+              v: typeof r["Factor contribution"] === "number" ? (r["Factor contribution"] as number) : 0 }))
+            .filter((b) => b.v !== 0)
+            .sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+          const top = rows.slice(0, 8);
+          const rest = rows.slice(8).reduce((s, b) => s + b.v, 0);
+          const bars = [...top, ...(rows.length > 8
+            ? [{ label: `…${rows.length - 8} more`, v: rest }] : [])];
+          return (
+            <>
+              <DrillBars bars={bars} />
+              {row.driver && (
+                <p className="small" style={{ margin: "0.3rem 0 0", maxWidth: "38rem" }}>
+                  {row.driver.text}
+                </p>
+              )}
+              <p className="small" style={{ margin: "0.3rem 0 0" }}>
+                <Link className="muted" to={pivotDrill({ rows: ["Issuer"],
+                  measures: ["Factor contribution"],
+                  filters: { Book: [lk.book], Factor: [row.name], Date: win } })}>
+                  open in Pivot →</Link>
+              </p>
+            </>
+          );
+        }}
+      </QueryState>
+    </div>
   );
 }
 
@@ -268,6 +468,10 @@ function PnlTab() {
   const q = usePnlAttribution(from, to);
   const rq = usePnlResidual(from, to);
   const lq = usePnlLinkage(horizon);
+  const meta = useMeta();
+  // one drill open at a time (accordion) — a chart dot opens a factor drawer, a table row a
+  // position drawer; opening either closes the other so the overview stays scannable.
+  const [drill, setDrill] = useState<{ type: "factor" | "position"; key: string } | null>(null);
 
   return (
     <>
@@ -413,7 +617,8 @@ function PnlTab() {
       <h2>Risk ↔ PnL reconcile</h2>
       <div className="row" style={{ marginBottom: "0.5rem" }}>
         <span className="muted small">Horizon</span>
-        <select value={horizon} onChange={(e) => setHorizon(Number(e.target.value))}>
+        <select value={horizon}
+          onChange={(e) => { setHorizon(Number(e.target.value)); setDrill(null); }}>
           {[1, 3, 6, 12].map((h) => <option key={h} value={h}>{h}m</option>)}
         </select>
       </div>
@@ -423,9 +628,17 @@ function PnlTab() {
             <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
               Risk decomposition at <strong>{lk.T}</strong> vs realized PnL over{" "}
               <strong>{lk.T} → {lk.to}</strong> ({lk.n_days} trading days). Each row reads against
-              its own start-of-period band; the dot is the realized contribution.
+              its own start-of-period band; the dot is the realized contribution — click a factor
+              dot to see which names carried it.
             </p>
-            <BandChart lk={lk} />
+            <BandChart lk={lk} onDot={(name) =>
+              setDrill((d) => d?.type === "factor" && d.key === name
+                ? null : { type: "factor", key: name })} />
+            {drill?.type === "factor" && (() => {
+              const row = lk.rows.find((r) => r.name === drill.key);
+              return row ? <FactorDrawer row={row} lk={lk} dates={meta.data?.dates ?? []}
+                onClose={() => setDrill(null)} /> : null;
+            })()}
             {(() => {
               const flagged = [...lk.rows, lk.book_total].filter((r) => r.driver);
               if (!flagged.length) return null;
@@ -445,24 +658,21 @@ function PnlTab() {
               <>
                 <p className="muted small" style={{ margin: "0.8rem 0 0.2rem" }}>
                   Position surprises — realized vs own ex-ante σ at T (top |z|), split
-                  factor / specific
+                  factor / specific · click a row to drill the driver
                 </p>
                 <table className="tufte">
                   <thead><tr><th className="label">Name</th><th>Weight</th><th>Realized</th>
                     <th>Factor</th><th>Specific</th><th>z</th><th>Verdict</th></tr></thead>
                   <tbody>
-                    {lk.positions.map((p) => (
-                      <tr key={p.position}>
-                        <td className="label">{p.name.toUpperCase()}</td>
-                        <td>{pct(p.weight, 1)}</td>
-                        <td>{signedPct(p.realized, 2)}</td>
-                        <td className="muted">{signedPct(p.factor_pnl, 2)}</td>
-                        <td className="muted">{signedPct(p.specific_pnl, 2)}</td>
-                        <td style={{ color: DOT[p.verdict as keyof typeof DOT] ?? INK }}>
-                          {signedNum(p.z, 1)}</td>
-                        <td className="muted">{p.verdict}</td>
-                      </tr>
-                    ))}
+                    {lk.positions.map((p) => {
+                      const open = drill?.type === "position" && drill.key === p.position;
+                      return (
+                        <FragRow key={p.position} open={open}
+                          onToggle={() => setDrill(open ? null
+                            : { type: "position", key: p.position })}
+                          row={p} lk={lk} dates={meta.data?.dates ?? []} />
+                      );
+                    })}
                   </tbody>
                 </table>
                 {(() => {

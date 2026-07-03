@@ -2,6 +2,7 @@
 // grid (or chart mode), the saved-view Repository, and on-demand /analysis commentary. The grid is a
 // pure renderer — every number comes from a /pivot call behind the cube's allowlist guard.
 import { Suspense, lazy, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import { useDims, useMeta, useWhatif } from "../api/hooks";
 import { usePivot, hypoParams, type PivotConfig } from "../pivot/usePivot";
@@ -137,6 +138,29 @@ export function Pivot() {
     reload(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dimsQ.data, date, scenario]);
+
+  // Cross-lens drill link: another lens (e.g. the Attribution reconcile drawer) navigates here
+  // with ?drill=<json {rows, cols?, measures, filters}>. Applied once when dims are ready, then
+  // stripped from the URL. Declared AFTER the context-fold effect so on a fresh mount the drill
+  // config wins the initial render (effects run in declaration order).
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (!dimsQ.data) return;
+    const raw = searchParams.get("drill");
+    if (!raw) return;
+    try {
+      const s = JSON.parse(raw) as Partial<Pick<PivotConfig, "rows" | "cols" | "measures" | "filters">>;
+      const next: PivotConfig = { ...cfg, rows: s.rows ?? cfg.rows, cols: s.cols ?? [],
+        measures: s.measures ?? cfg.measures, filters: s.filters ?? cfg.filters,
+        whatif: [], shocks: {} };
+      setCfg(next);
+      setMode("grid");
+      reload(next);
+      setLoadedView({ name: "drill-through", description: "opened from another lens" });
+    } catch { /* malformed link — fall back to the default view */ }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dimsQ.data, searchParams]);
 
   const loadViewState = (s: ViewState, name: string) => {
     // Build the next config explicitly and hand it straight to reload(). Do NOT rely on setCfg +
