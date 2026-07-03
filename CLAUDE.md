@@ -308,7 +308,13 @@ so **"before" matches the cube's reported figures exactly** and only the BEFORE�
 new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
 "add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
-VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. UI panel `render_whatif`.
+VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. **Each trade set is
+ALSO priced on a transient cube scenario branch** (`_whatif_branch_prototype` → `cube_prototype` block):
+`Net exposure` is now a MEASURE-LEVEL product of the leaf Loading × the JOINED Positions Weight
+(benchmarked at parity with the old baked WLoading column — the ~9s penalty is gone on atoti 0.9.15),
+so a Positions branch flows through every chained measure; live diffs vs the numpy engine ~1e-17.
+Attribution measures stay deliberately branch-INsensitive (baked FactorPnL/SpecPnL — a what-if doesn't
+rewrite realized history). UI panel `render_whatif`.
 Tests: `test_whatif.py`.
 
 ## Liquidity / days-to-liquidate (`/liquidity`)

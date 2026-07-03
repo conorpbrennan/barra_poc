@@ -89,6 +89,24 @@ def t_whatif_concentrating_raises_top5_share():
 
 
 @integ
+def t_whatif_cube_branch_prototype():
+    """The Tier-2 #4 scenario-branch prototype: /whatif's cube_prototype block prices the same
+    trades on a transient Positions branch. Vols tie the numpy engine at float precision
+    (identical math once the branch weight flows through the measure-level Net exposure);
+    VaR/ES agree within quantile-interpolation tolerance; a second call is clean."""
+    j = _whatif([])
+    top = j["holdings"][0]
+    res = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
+    cp = res.get("cube_prototype", {})
+    assert "error" not in cp, cp
+    assert cp["abs_diff_model_vol"] < 5e-10, cp
+    assert cp["abs_diff_specific_vol"] < 5e-10, cp
+    assert cp["rel_diff_var99"] < 1e-3, cp
+    res2 = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
+    assert abs(res2["cube_prototype"]["model_vol_1d"] - cp["model_vol_1d"]) < 1e-15
+
+
+@integ
 def t_whatif_add_universe_name():
     """A coverage-universe name not currently held can be ADDED: /whatif returns the universe, and
     adding one with a target weight raises net by ~that weight and appears in the trades."""

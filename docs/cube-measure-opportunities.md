@@ -24,18 +24,21 @@ branch, drops the rows, and serves the result in a `cube_prototype` block beside
 the UI source; exposing the name/sector DRILL needs scenario plumbing in `/pivot` (a
 `stress_scenario` param) — do that when the UI wants the drill.
 
-**Tier 2 #4 FEASIBILITY SPIKE 2026-07-03 — findings, held for Chris:** atoti 0.9.15 *does*
-support source scenarios (`Session.create_scenario` / `Table.scenarios`), so branch-based
-what-if is technically available. The catch is our own load-time optimization: weights are
-baked into PHYSICAL columns on the exposures table (`WLoading = Loading×Weight`,
-`FactorPnL = WLoading×FwdRet` — precomputed in pandas because measure-level products were too
-slow/OOM'd). A positions-branch override therefore does NOT flow through; a what-if branch
-must also override the affected exposures rows (~11 factor rows per traded name per date, plus
-the positions row) — tractable for single-date trades (a 5-name trade ≈ 60 row overrides) but
-it re-implements a slice of the builder inside the scenario write, and adds scenario lifecycle
-/ concurrency / memory-per-branch concerns. Recommendation unchanged: an architecture item
-with Chris — the numpy `_risk_from_weights` mirror (already tied to the cube at 5e-10) stays
-the what-if engine until then.
+**Tier 2 #4 PROTOTYPE BUILT 2026-07-03 — unblocked by the measure-level-product switch.**
+The spike found the blocker was our own load-time optimization (weights baked into the
+physical `WLoading` column). Benchmarking on atoti 0.9.15 showed the historical ~9s penalty
+for measure-level products is GONE (Date×Position pivot: 375ms measure-level vs 380ms column;
+bit-exact) — so **`Net exposure` was switched to the measure-level product of the leaf Loading
+and the JOINED Positions Weight**, read at query time. Consequence: a source-scenario branch
+overriding Positions rows flows through Net exposure and every chained measure (scenario
+vectors, VaR/ES ladder, the whole Model-vol family). `/whatif` now prices each trade set on a
+**transient uuid Positions branch** and serves it as `cube_prototype` beside the numpy engine:
+live diffs ~1e-17/1e-18 (vols) and even VaR agreed at 2e-16 on the drop-JD demo; the branch is
+deleted in `finally`, second calls are clean (`t_whatif_cube_branch_prototype`). Remaining
+scope before promoting it past prototype (the part still worth Chris's input): attribution
+measures are deliberately NOT branch-sensitive (FactorPnL/SpecPnL stay baked — a what-if does
+not rewrite realized history), branch-scoped drill in `/pivot` (a `whatif_scenario` param),
+and concurrency/memory policy for long-lived named scenarios.
 
 The liquidity note remains open (lens parked).
 

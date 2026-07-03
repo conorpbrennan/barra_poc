@@ -115,12 +115,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     scenarios = build_scenarios(factor_ret, scn_factors)
     scn_axis = build_scenario_axis(factor_ret, scn_factors)   # date axis dual of the shock/P&L vectors
 
-    # Precompute the leaf products as PHYSICAL columns. Defining them instead as measure
-    # arithmetic (single_value(Loading) x single_value(Weight) under an OriginScope) makes
-    # every query re-derive each leaf product in the measure engine — fine on a filtered
-    # slice, but a Date x Position x ScenarioSet pivot (~160k cells) took ~9s. As columns,
-    # Net exposure / Specific variance become plain SUMs the columnar engine aggregates.
-    # Unheld names get Weight 0 and contribute nothing, same as the join's None did.
+    # Leaf products: `Net exposure` is now MEASURE-LEVEL (Loading x the JOINED Positions
+    # Weight under an OriginScope) — benchmarked 2026-07-03 on atoti 0.9.15 at parity with the
+    # old physical WLoading column on every query incl. the historical ~9s Date x Position
+    # pivot (375ms vs 380ms), bit-exact. The point of the switch: the weight is read from the
+    # Positions table AT QUERY TIME, so a source-scenario branch overriding Positions rows
+    # flows through Net exposure and every measure chained off it (the what-if branch design —
+    # docs/cube-measure-opportunities.md #4). The pandas WLoading below remains ONLY as an
+    # intermediate for the attribution FactorPnL column (fwd returns baked at load; attribution
+    # is deliberately NOT branch-sensitive). Unheld names: Weight join is None -> the product
+    # contributes nothing, same as the old fillna(0) column.
     w = positions[["Date", "Position", "Weight"]]
     exposures = exposures.merge(w, on=["Date", "Position"], how="left")
     exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
@@ -156,7 +160,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         spec_pnl = sr_m.merge(w, on=["Date", "Position"], how="inner")
         spec_pnl["SpecPnL"] = spec_pnl["Weight"] * spec_pnl["SpecificReturn"]
         spec_pnl = spec_pnl.loc[spec_pnl["SpecPnL"] != 0.0, ["Date", "Position", "SpecPnL"]]
-    exposures = exposures.drop(columns="Weight")
+    exposures = exposures.drop(columns=["Weight", "WLoading"])
     # NB: the same trick must NOT be applied to specific_var — it is a *joined* table, and a
     # plain SUM over a joined column fans out by fact-row multiplicity (each (Date, Position)
     # specvar row is reached once per factor leaf -> ~10x inflated variance, observed √10
@@ -197,9 +201,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     assert {"Book", "ScenarioSet"} <= {n for _, n in h}, sorted(n for _, n in h)
 
     # ---- additive exposures (drill/slice; independent of ScenarioSet) -------------------------
-    # WLoading = Loading x Weight precomputed at load (see top of build_cube): a plain
-    # columnar SUM, so deep pivots stay fast.
-    m["Net exposure"] = tt.agg.sum(t_exp["WLoading"])
+    # MEASURE-LEVEL product of the leaf Loading and the JOINED Positions Weight (see the leaf-
+    # products note at the top of build_cube): reads the weight at query time, so scenario
+    # branches on Positions flow through this and every chained measure. Benchmarked at parity
+    # with the old physical column.
+    m["Net exposure"] = tt.agg.sum(
+        tt.agg.single_value(t_exp["Loading"]) * tt.agg.single_value(t_pos["Weight"]),
+        scope=tt.OriginScope({l["Date"], l["Position"], l["Factor"]}))
     m["Net exposure"].formatter = "DOUBLE[0.000]"
 
     # ---- ONE scenario engine: aggregate exposure to K factor scalars, scale each factor's shock

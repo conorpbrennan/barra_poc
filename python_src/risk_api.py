@@ -1527,8 +1527,69 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     # a name that isn't currently held, not just resize/drop holdings.
     universe = [{"position": p, "ticker": tk.get(p, p)} for p in L.index]
     universe.sort(key=lambda u: u["ticker"])
-    return {"date": date, "book": book, "trades": applied, "before": before, "after": after,
-            "delta": delta, "holdings": holdings, "universe": universe}
+    out = {"date": date, "book": book, "trades": applied, "before": before, "after": after,
+           "delta": delta, "holdings": holdings, "universe": universe}
+    if trades:
+        out["cube_prototype"] = _whatif_branch_prototype(date, book, trades, after)
+    return out
+
+
+def _whatif_branch_prototype(date: str, book: str, trades: list, after: dict) -> dict:
+    """Tier-2 #4 prototype (docs/cube-measure-opportunities.md): the same trades priced by a
+    TRANSIENT SOURCE-SCENARIO branch on the Positions table — possible since `Net exposure`
+    reads the joined Positions weight at query time (the measure-level-product switch), so the
+    branch flows through every chained measure. Served beside the numpy engine for comparison;
+    never allowed to break /whatif. NB attribution measures (baked FactorPnL/SpecPnL columns)
+    are deliberately NOT branch-sensitive."""
+    branch = f"whatif-{uuid.uuid4().hex[:12]}"
+    session = S["session"]
+    try:
+        cube = S["cube"]; l, mm = cube.levels, cube.measures
+        pos = S["frames"]["positions"]
+        d_ts = pd.Timestamp(date)
+        base = pos[(pos["Book"] == book) & (pos["Date"] == d_ts)]
+        rows = []
+        for t in trades:
+            p, nw = t["position"], float(t["weight"])
+            r0 = base[base["Position"] == p]
+            if len(r0):
+                r = r0.iloc[0].to_dict(); r["Weight"] = nw
+            else:                                   # adding a coverage name not currently held
+                r = {"Date": d_ts, "Book": book, "Position": p, "Weight": nw,
+                     "MV": np.nan, "ADV": np.nan}
+            rows.append(r)
+        session.tables["Positions"].scenarios[branch].load(
+            pd.DataFrame(rows, columns=list(pos.columns)))
+        flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
+        if "Book" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Book"] == book)
+        q = cube.query(mm["Model vol"], mm["Scenario VaR 99"], mm["Scenario ES 97.5"],
+                       mm["Specific vol"], mm["Total VaR 99"],
+                       filter=flt, scenario=branch)
+        row = q.iloc[0]
+        var99 = float(row["Scenario VaR 99"])
+        return {
+            "model_vol_1d": float(row["Model vol"]),
+            "scenario_var_99": var99,
+            "es_975": float(row["Scenario ES 97.5"]),
+            "specific_vol": float(row["Specific vol"]),
+            "total_var_99": float(row["Total VaR 99"]),
+            "abs_diff_model_vol": abs(float(row["Model vol"]) - after["model_vol_1d"]),
+            "abs_diff_specific_vol": abs(float(row["Specific vol"]) - after["specific_vol"]),
+            "rel_diff_var99": (abs(var99 - after["scenario_var_99"])
+                               / max(after["scenario_var_99"], 1e-12)),
+            "note": ("the same trades priced on a transient cube scenario branch — every cube "
+                     "measure recomputes under the trade (drill/slice included); prototype "
+                     "served beside the numpy engine. VaR/ES differ by quantile-interpolation "
+                     "convention only; vols tie at float precision."),
+        }
+    except Exception as e:
+        return {"error": f"{e.__class__.__name__}: {e}"}
+    finally:
+        try:
+            session.delete_scenario(branch)
+        except Exception:
+            pass
 
 
 class WhatIfBody(BaseModel):
