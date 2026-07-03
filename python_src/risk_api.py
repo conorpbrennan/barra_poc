@@ -2666,6 +2666,9 @@ FACTOR_RECIPES = {
     "Market": "intercept — every name loads 1.0; carries the cross-sectional average return",
     "Beta": "252d regression beta of daily returns on the market index",
     "ResidVol": "annualized std of the 252d market-regression residual",
+    "RateBeta": "partial duration beta: stock daily return on the TLT return residualized "
+                "against the market, 252d window (2026-07-04 — the missing rates/duration "
+                "factor behind the shared Leverage/Liquidity/MegaCap hidden-beta carriers)",
     "Momentum": "12-1 month price return (t−252d → t−21d)",
     "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",

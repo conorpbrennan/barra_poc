@@ -38,7 +38,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_span.parquet"
 FUNNEL = OUT / "universe_funnel.parquet"
 
-STYLE = ["Beta", "Momentum", "Size", "Value", "MegaCap",
+STYLE = ["Beta", "Momentum", "Size", "Value", "MegaCap", "RateBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 EDGE_Q = 0.99            # the cloud's own 99th-pct D² is the edge of "the space"
 MIN_CLOUD = 30           # need a real cross-section to estimate the covariance

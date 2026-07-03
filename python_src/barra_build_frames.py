@@ -63,6 +63,7 @@ COVERAGE_CAP    = 10.0            # backstop clip for coverage loadings: lets a 
 SP500_URL       = ("https://raw.githubusercontent.com/datasets/"
                    "s-and-p-500-companies/main/data/constituents.csv")
 MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta regression
+RATE_PROXY      = "tlt"           # 20y+ Treasury ETF: the RateBeta (duration) descriptor's proxy
 
 # Growth dropped 2026-07-04: |t|>2 on only 9% of regression days (the admission bar)
 # and a loading on only 21.3% of held weight (asset-growth needs two XBRL vintages).
@@ -70,7 +71,11 @@ MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta re
 # estimation 90th percentile, orthogonalized to Size + NonLinSize. The ±3 estimation winsor
 # bounds leverage but flattens the top tail (NVDA ≈ a $600B name at Size +3), so the mega-cap
 # regime landed in residuals (the audit's Size +1.04 / NonLinSize −2.19 hidden-beta cluster).
-STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "MegaCap",
+# RateBeta added 2026-07-04: partial duration beta (stock return on the TLT return residualized
+# against the market, 252d window). The audit's Leverage/Liquidity/MegaCap flags shared one
+# carrier list (hto/tsm/ida/cms/amzn — utilities, a REIT, rate-sensitive mega-caps): correlated
+# residuals with one theme = a missing rates/duration factor.
+STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "MegaCap", "RateBeta",
                  "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -445,14 +450,20 @@ def stooq_daily(symbol: str) -> pd.DataFrame | None:
     return df.set_index("Date").sort_index()
 
 def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
-                      mkt: pd.DataFrame) -> pd.DataFrame:
-    """Beta, ResidVol, Momentum, raw log-ADV (the Liquidity input) from daily prices.
+                      mkt: pd.DataFrame, rates: pd.DataFrame | None = None) -> pd.DataFrame:
+    """Beta, ResidVol, Momentum, RateBeta, raw log-ADV (the Liquidity input) from daily prices.
 
-    Each descriptor carries its OWN history gate — Beta/ResidVol need 120 return days,
+    Each descriptor carries its OWN history gate — Beta/ResidVol/RateBeta need 120 return days,
     Momentum 252, the ADV mean only 21 volume days — so a young listing gets the loadings
     its history supports instead of none at all (the old single 120-day gate silently
-    dropped every price descriptor for post-IPO entrants the book actually held)."""
+    dropped every price descriptor for post-IPO entrants the book actually held).
+
+    RateBeta is the PARTIAL duration beta: the rate proxy's (TLT) daily return is residualized
+    against the market over the same window, then the stock's beta to that residual — so it
+    measures rate sensitivity BEYOND what equity beta already carries, not a second Beta.
+    `rates=None` (older call sites) emits the column as NaN."""
     mret = mkt["Close"].pct_change()
+    rret = rates["Close"].pct_change() if rates is not None else None
     recs = []
     for tkr, px in prices.items():
         ret = px["Close"].pct_change()
@@ -463,6 +474,7 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
             have_ret, have_dv = len(win) >= 120, len(dv) >= 21
             if not (have_ret or have_dv):
                 continue
+            rateb = np.nan
             if have_ret:
                 m = mret.reindex(win.index).fillna(0.0)
                 if m.std() > 0:
@@ -470,6 +482,12 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
                     rvol = (win.fillna(0) - beta * m).std() * np.sqrt(252)
                 else:
                     beta, rvol = np.nan, win.std() * np.sqrt(252)
+                if rret is not None and m.std() > 0:
+                    r = rret.reindex(win.index).fillna(0.0)
+                    if r.std() > 0:
+                        rr = r - (np.cov(r, m)[0, 1] / m.var()) * m   # rates ⊥ market
+                        if rr.var() > 0:
+                            rateb = np.cov(win.fillna(0), rr)[0, 1] / rr.var()
             else:
                 beta = rvol = np.nan
             mom = (px["Close"].loc[:d].iloc[-21] / px["Close"].loc[:d].iloc[-252] - 1
@@ -477,6 +495,7 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
             recs.append({"ticker": tkr, "Date": d, "Beta": beta,
                          "ResidVol": rvol,
                          "Momentum": mom,
+                         "RateBeta": rateb,
                          "Liquidity": np.log(dv.mean() + 1) if have_dv else np.nan})
     return pd.DataFrame(recs)
 
@@ -574,8 +593,9 @@ def _split_z(s: pd.Series, is_est: pd.Series) -> pd.Series:
 
 
 def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
-                    cal: pd.DatetimeIndex, mkt: pd.DataFrame) -> pd.DataFrame:
-    pdsc = price_descriptors(prices, cal, mkt)
+                    cal: pd.DatetimeIndex, mkt: pd.DataFrame,
+                    rates: pd.DataFrame | None = None) -> pd.DataFrame:
+    pdsc = price_descriptors(prices, cal, mkt, rates)
     # fundamental descriptors, point-in-time aligned to each calendar date per name
     frecs = []
     for _, row in sec.iterrows():
@@ -861,13 +881,14 @@ def build_frames():
     # --- raw market + fundamentals pulls (parallel, cached, with progress) --
     print(f"data pull: {len(sec)} names ({_HTTP['hit']} cache hits so far)", flush=True)
     mkt = stooq_daily(MARKET_PROXY)
+    rates = stooq_daily(RATE_PROXY)
     prices = {t: p for t, p in _pull_map(stooq_daily, sec["ticker"], "prices").items()
               if p is not None}
     funda  = {int(c): f for c, f in
               _pull_map(fundamentals, [int(c) for c in sec["cik"].unique()], "fundamentals").items()}
 
     # --- exposures (leaf) + factor cache + specific risk -------------------
-    exposures = build_exposures(sec, prices, funda, cal, mkt)
+    exposures = build_exposures(sec, prices, funda, cal, mkt, rates)
     factor_returns, specific_var, specific_returns, reg_stats = \
         regress_factors(exposures, prices, sec)
     # regression-health side artifact (daily weighted R² + per-factor t-stats). Written here,

@@ -596,6 +596,21 @@ EarnYield stay NaN (no fundamentals). Disclosed: builder prints the count, `/dq`
 "size-curve proxy loadings" check (held names with Size but no Value ⇒ imputed; WARN above 25%
 weight), `FACTOR_RECIPES` and the CRO report document it.
 
+**RateBeta (2026-07-04): the missing rates/duration factor.** The post-respec audit's three
+remaining flags (Leverage/Liquidity/MegaCap) shared one carrier list — hto/tsm/ida/cms/amzn:
+utilities, a hotel REIT, rate-sensitive mega-caps — the missing-factor signature. `RateBeta` =
+the PARTIAL duration beta: TLT's (`RATE_PROXY`) daily return residualized against the market
+over the 252d window, then the stock's beta to that residual (rate sensitivity BEYOND equity
+beta — not a second Beta). Same per-descriptor 120-day gate as Beta/ResidVol; `rates=None`
+call sites (excel mirror) emit the column NaN. Eleven style factors + Market.
+
+**Span inside-share note (2026-07-04).** The drop 80.6% → ~73% after the size-curve respecs is
+NOT the imputed block (3.6% of the outside weight) — it's MegaCap BY CONSTRUCTION: the hinge
+gives the top tail extreme loadings, so nvda/googl/aapl sit past the estimation cloud's p99
+Mahalanobis edge on MegaCap alone. For ESTIMATION members "outside" means "sparse tail of the
+cloud", not model extrapolation (their exposures are fit on their own data) — read the span
+drill-down with that distinction.
+
 **Leverage respec (2026-07-04): Liabilities/Assets, not Assets/Equity.** A/E is unbounded as
 equity→0 (insurers 40×, buyback/distressed names 100×+), so 28 coverage names pinned at one
 clipped loading and every S&P financial saturated at the estimation winsor — the factor

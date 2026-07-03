@@ -295,7 +295,7 @@ def build() -> None:
     series is bought or downloaded — they are estimated in-house (§3).</li>
 <li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
     — Size / MegaCap / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol /
-    Momentum / Liquidity from prices — standardised by median / MAD on the estimation universe (winsorised ±3
+    Momentum / Liquidity / RateBeta from prices — standardised by median / MAD on the estimation universe (winsorised ±3
     there, left uncapped on coverage so off-index names read their true loadings).</li>
 <li><strong>Risk.</strong> Every scenario is the same calculation
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
@@ -541,7 +541,10 @@ about.</p>
     return, price<sub>t−21</sub> / price<sub>t−252</sub> − 1 (the most recent month is skipped);
     <code>Liquidity</code> = log turnover (trailing-63d mean daily dollar-volume / mcap),
     orthogonalised to Size on the estimation fit — respecified 2026-07-04; the raw dollar-volume
-    version was cross-sectionally a second Size (factor-return ρ ≈ −0.8).
+    version was cross-sectionally a second Size (factor-return ρ ≈ −0.8);
+    <code>RateBeta</code> = partial duration beta — the rate proxy's (TLT) daily return is
+    residualised against the market over the same 252-day window, then the stock's beta to that
+    residual, so it measures rate sensitivity <em>beyond</em> what equity beta already carries.
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
     the cube of the <em>standardised</em> Size loading (USE4 convention — cubing raw log-mcap
@@ -786,17 +789,28 @@ tests to every factor:</p>
     <td>assets/equity is unbounded as equity → 0 (insurers 40×, distressed names 100×+): 28
     names pinned at one clipped loading — a financials-sector dummy, not a leverage factor</td>
     <td class="num">pinned cluster 28 → 3; loading p99 6.47 → 3.24; EarnYield's flag clears</td></tr>
+<tr><td><strong>RateBeta added</strong> — partial duration beta (stock return on the TLT return
+    residualised against the market, 252-day window)</td>
+    <td>the remaining Leverage / Liquidity / MegaCap flags shared one carrier list (hto, tsm,
+    ida, cms, amzn — utilities, a REIT, rate-sensitive mega-caps): correlated residuals with
+    one theme = a missing factor, read as rates/duration</td>
+    <td class="num">the factor is strongly priced — |t| &gt; 2 on 50% of days, 4th after
+    Market/Beta/Momentum — and its own hidden beta is near-clean (−0.06); but the shared
+    carriers' co-movement <em>persists</em>, so duration was only part of the theme</td></tr>
 </table>
 <p><strong>Where it stands.</strong> Residual-vs-factor R² 0.51 → ~0.40 (it reads 0.40 rather
 than 0.37 because the imputation made a fifth of the book <em>visible</em> to the diagnostics —
-names whose whole risk previously hid in "specific"). Beta, EarnYield and Momentum test clean;
-Value, ResidVol and NonLinSize are on watch. The three remaining flags — Leverage (Σw·β −0.42),
-Liquidity (+0.64), MegaCap (−0.46) — share one carrier list: hto, tsm, ida, cms, amzn —
-utilities, a hotel REIT, rate-sensitive mega-caps. Correlated residuals with one theme are the
-signature of a <em>missing factor</em>, here rates/duration. That is a model-scope decision (no
-obvious free-data duration descriptor), documented rather than patched. MegaCap itself admits
-at 18% of days (|t| &gt; 2) — a regime factor, on probation like NonLinSize (16%) under the
-one-third admission rule that removed Growth.</p>
+names whose whole risk previously hid in "specific"). Beta and Momentum test clean; Size,
+Value, EarnYield and RateBeta are on watch. The persistent flags — Leverage, Liquidity,
+MegaCap, and the utilities pair inside NonLinSize/ResidVol — still share the hto / tsm / ida /
+cms carrier list <em>after</em> their duration exposure is modelled. The remaining read is
+structural: this model has <strong>no industry factors</strong> beyond the market intercept, so
+sector co-movement (two utilities, a hotel REIT) has nowhere to go but the residual. Industry
+factors are the other half of a production Barra model; adding even a GICS-sector block is the
+next scope decision, and the sector data is already on <code>securities</code>. On admission:
+RateBeta enters at 50% of days; MegaCap (15%) and NonLinSize (20%) sit below the one-third rule
+that removed Growth and stay on probation — kept because each measurably fixed a residual
+pathology the admission rate alone doesn't see.</p>
 <p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
 <em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
 erased real information (the mega-cap tail), the answer was a new bounded regressor computed
