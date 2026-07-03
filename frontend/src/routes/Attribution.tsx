@@ -248,9 +248,10 @@ export function DrillBars({ bars }: {
   );
 }
 
-// deep link into the Pivot lens carrying this exact slice (?drill= applied once on mount there)
+// deep link into the Pivot lens carrying this exact slice (?drill= applied once on mount there);
+// the description lands in the Pivot description pane so the grid explains its own blanks/caveats
 const pivotDrill = (cfg: { rows: string[]; measures: string[];
-  filters: Record<string, string[]> }) =>
+  filters: Record<string, string[]>; description?: string }) =>
   `/pivot?drill=${encodeURIComponent(JSON.stringify(cfg))}`;
 
 const winDates = (dates: string[], T: string, to: string) =>
@@ -306,7 +307,14 @@ function PositionDrawer({ p, lk, dates }: {
               <p className="small" style={{ margin: "0.3rem 0 0" }}>
                 <Link className="muted" to={pivotDrill({ rows: ["Factor"],
                   measures: ["Factor contribution", "Specific PnL", "Realized PnL"],
-                  filters: { ...base, Date: win } })}>open in Pivot →</Link>
+                  filters: { ...base, Date: win },
+                  description: `${p.name.toUpperCase()} breach drill, ${lk.T} → ${lk.to}: `
+                    + "per-factor contribution (fwd-month) + specific. Specific PnL repeats "
+                    + "across factor rows (it has no factor dimension)"
+                    + (p.specific_pnl === 0
+                      ? " — blank here: this name has no residual history (outside residual "
+                        + "coverage), so specific reads as no-data, not 0."
+                      : ".") })}>open in Pivot →</Link>
               </p>
             </>
           );
@@ -387,7 +395,9 @@ function FactorDrawer({ row, lk, dates, onClose }: {
               <p className="small" style={{ margin: "0.3rem 0 0" }}>
                 <Link className="muted" to={pivotDrill({ rows: ["Issuer"],
                   measures: ["Factor contribution"],
-                  filters: { Book: [lk.book], Factor: [row.name], Date: win } })}>
+                  filters: { Book: [lk.book], Factor: [row.name], Date: win },
+                  description: `${row.name} drill, ${lk.T} → ${lk.to}: which names carried `
+                    + "the factor's move (per-issuer contribution, fwd-month convention)." })}>
                   open in Pivot →</Link>
               </p>
             </>

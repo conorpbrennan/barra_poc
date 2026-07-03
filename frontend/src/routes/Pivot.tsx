@@ -129,7 +129,8 @@ export function Pivot() {
   // effect dependency: consuming it must not re-trigger the fold.
   const [searchParams, setSearchParams] = useSearchParams();
   const [pendingDrill, setPendingDrill] = useState<
-    Partial<Pick<PivotConfig, "rows" | "cols" | "measures" | "filters">> | null>(() => {
+    (Partial<Pick<PivotConfig, "rows" | "cols" | "measures" | "filters">>
+      & { description?: string }) | null>(() => {
     const raw = searchParams.get("drill");
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
@@ -151,7 +152,8 @@ export function Pivot() {
       setCfg(next);
       setMode("grid");
       reload(next);
-      setLoadedView({ name: "drill-through", description: "opened from another lens" });
+      setLoadedView({ name: "drill-through",
+        description: pendingDrill.description ?? "opened from another lens" });
       setPendingDrill(null);
       setSearchParams({}, { replace: true });
       return;
