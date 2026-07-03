@@ -584,6 +584,18 @@ per-date loop from the z-scored Size (also excluded from the generic `_split_z` 
 existing Size-orthogonalization. The excel section-3 mirror still shows raw m³ with a
 divergence note.
 
+**Size-curve imputation (the no-mcap coverage fix, 2026-07-04).** ~40 held names / 20.1% of
+weight (tsm, tko, cwan…) had prices but no usable share count — foreign filers report IFRS in
+native currency (wrong-units ratios) and 20-F cover pages count ORDINARY shares against an ADR
+price (a 5:1 ratio fakes log-mcap by +1.6), so tag-widening was rejected. Instead the builder
+imputes raw log-mcap for COVERAGE names from the per-date estimation regression of log-mcap on
+log-ADV (ρ ≈ 0.9, `_logadv` stash in `build_exposures`), which fills Size/NonLinSize/MegaCap for
+them. Estimation rows are NEVER imputed (factor-return estimation untouched); Liquidity stays
+NaN for imputed names (turnover against its own imputation basis is circular) and Value/
+EarnYield stay NaN (no fundamentals). Disclosed: builder prints the count, `/dq` carries a
+"size-curve proxy loadings" check (held names with Size but no Value ⇒ imputed; WARN above 25%
+weight), `FACTOR_RECIPES` and the CRO report document it.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

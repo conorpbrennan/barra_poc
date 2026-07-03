@@ -172,6 +172,23 @@ def run(frames: dict | None = None) -> list[dict]:
         check("WARN", "regression_stats artifact present",
               "missing — rebuild with the v2 builder to enable /regression")
 
+    # (d) size-curve imputation disclosure: a held name with a Size loading but no Value loading
+    # has no share count (foreign filer / ETF) — its Size/NonLinSize/MegaCap are the builder's
+    # log-ADV proxy, not close × shares. Disclosed, never silent; Liquidity/Value/EarnYield are
+    # deliberately NaN for these names.
+    exp_l, pos_l = f["exposures"], f["positions"]
+    d_last = pos_l["Date"].max()
+    held = pos_l[pos_l["Date"] == d_last].groupby("Position")["Weight"].sum()
+    ed = exp_l[exp_l["Date"] == exp_l["Date"].max()]
+    have = ed.pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first")
+    if {"Size", "Value"}.issubset(have.columns):
+        prox = have.index[have["Size"].notna() & have["Value"].isna()]
+        w = float(held[held.index.isin(prox)].sum())
+        n = int(held.index.isin(prox).sum())
+        check("WARN" if w > 0.25 else "PASS",
+              "size-curve proxy loadings (imputed log-mcap, held book)",
+              f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit")
+
     return _results
 
 

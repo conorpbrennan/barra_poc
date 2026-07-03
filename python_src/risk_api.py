@@ -2669,7 +2669,8 @@ FACTOR_RECIPES = {
     "Momentum": "12-1 month price return (t−252d → t−21d)",
     "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
-    "Size": "log market cap (close × PIT shares)",
+    "Size": "log market cap (close × PIT shares); coverage names with no share count (foreign "
+            "filers/ETFs) are imputed from the estimation log-ADV fit, disclosed via /dq",
     "NonLinSize": "cube of the STANDARDIZED Size loading (USE4), orthogonalized to Size on the "
                   "estimation fit (2026-07-04 respec — cubing raw log-mcap left a quadratic "
                   "U-shape that pinned small/mid-caps together on its left arm)",

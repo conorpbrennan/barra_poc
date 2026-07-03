@@ -83,11 +83,16 @@ def t_whatif_drop_reduces_gross_net():
 
 @integ
 def t_whatif_concentrating_raises_top5_share():
-    """Doubling the top name (more concentrated) raises the top-5 risk share (the ch-09 CTR
-    concentration idiom that replaced Risk HHI)."""
+    """Taking the top name to HALF the book raises the top-5 risk share (the ch-09 CTR
+    concentration idiom that replaced Risk HHI). NB a mere 2× is NOT an invariant: top-5 share
+    is covariance-dependent, and doubling a mega-cap can rotate the book toward the common
+    Market/MegaCap block that every name covaries with, spreading contributions and LOWERING
+    the top-5 share even as total risk rises (observed on the 2026-07-04 imputed frames:
+    2× amzn read 0.40 → 0.35 while model vol rose 1.38% → 1.53%). A decisive concentration
+    must dominate regardless."""
     j = _whatif([])
     top = j["holdings"][0]
-    res = _whatif([{"position": top["position"], "weight": 2 * top["weight"]}])
+    res = _whatif([{"position": top["position"], "weight": 0.5}])
     assert res["after"]["top5_ctr_share"] > res["before"]["top5_ctr_share"], \
         (res["before"]["top5_ctr_share"], res["after"]["top5_ctr_share"])
     assert 0 < res["before"]["top5_ctr_share"] <= 1

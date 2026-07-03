@@ -556,6 +556,13 @@ about.</p>
     <strong>Market-cap floor:</strong> if a name's mcap falls below ${MCAP_FLOOR:,.0f} that month
     we withhold its fundamental descriptors (set them missing, not zero). A corrupt share count
     would otherwise turn every ratio into raw dollars (§5).
+    <strong>Size-curve imputation (2026-07-04):</strong> a held name with prices but no usable
+    share count (foreign IFRS filers in native currency; 20-F cover pages count ordinary shares
+    against an ADR price; ETFs) gets its raw log-mcap <em>imputed</em> from the per-month
+    estimation-universe regression of log-mcap on log-ADV (ρ ≈ 0.9) — estimation names are never
+    imputed, so factor-return estimation is untouched; the proxy only lets the held book be
+    priced. Its Liquidity / Value / EarnYield stay missing (turnover against its own imputation
+    basis would be circular; ratios need real fundamentals). Disclosed as a DQ check.
     <br><strong>Two cadences in one monthly panel.</strong> The price descriptors are recomputed
     each month over a <em>trailing daily window</em>, so they move every month as new prices
     arrive. The fundamental descriptors only step when a <em>new SEC filing lands</em> (quarterly,

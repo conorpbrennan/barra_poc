@@ -611,6 +611,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
     # log(ADV+1) − log(mcap+1) ≈ log turnover decorrelates from Size by construction. A name
     # with ADV but no mcap gets NaN — better no descriptor than one in different units.
     if "Liquidity" in raw and "Size" in raw:
+        raw["_logadv"] = raw["Liquidity"]                # stash raw log-ADV for size imputation
         both = raw["Liquidity"].notna() & raw["Size"].notna()
         raw["Liquidity"] = (raw["Liquidity"] - raw["Size"]).where(both)
     est_col = sec[["ticker", "figi"]].copy()
@@ -621,9 +622,27 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
     # cross-sectional standardize each date AGAINST THE ESTIMATION UNIVERSE (estimation rows capped,
     # coverage rows uncapped); orthogonalize NonLinSize to Size on the estimation fit.
     out = []
+    n_imputed = 0
     for d, g in raw.groupby("Date"):
         g = g.copy()
         em = g["is_estimation"]
+        if {"Size", "_logadv"}.issubset(g):
+            # Size-curve imputation for COVERAGE names with prices but no share count (foreign
+            # filers report IFRS in native currency and 20-F cover pages count ORDINARY shares
+            # against an ADR price — a 5:1 ratio would fake log-mcap by +1.6 — so tag-widening
+            # is wrong-units; better a disclosed proxy than either). Impute raw log-mcap from
+            # the per-date ESTIMATION regression of log-mcap on log-ADV (ρ ≈ 0.9). Estimation
+            # rows are never imputed, so factor-return estimation is untouched — the proxy only
+            # lets the held book be priced. Liquidity stays NaN (turnover against its own
+            # imputation basis is circular); Value/EarnYield stay NaN (no fundamentals).
+            need = (~em) & g["Size"].isna() & g["_logadv"].notna()
+            fit = em & g["Size"].notna() & g["_logadv"].notna()
+            if need.any() and fit.sum() >= 30:
+                b = np.polyfit(g.loc[fit, "_logadv"], g.loc[fit, "Size"], 1)
+                imput = b[0] * g.loc[need, "_logadv"] + b[1]
+                g.loc[need, "Size"] = imput
+                g.loc[need, "MegaCap"] = imput           # raw log-mcap feeds the hinge
+                n_imputed += int(need.sum())
         for f in [c for c in STYLE_FACTORS if c in g and c not in ("MegaCap", "NonLinSize")]:
             g[f] = _split_z(g[f].astype(float), em)
         if "Size" in g:
@@ -676,6 +695,9 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
                 g["MegaCap"] = np.nan
         out.append(g)
     panel = pd.concat(out, ignore_index=True)
+    if n_imputed:
+        print(f"[exposures] size-curve imputation: {n_imputed} coverage name-dates priced via "
+              f"the estimation log-ADV fit (no share count; Liquidity/Value/EarnYield left NaN)")
     long = panel.melt(id_vars=["figi", "Date"], value_vars=STYLE_FACTORS,
                       var_name="Factor", value_name="Loading").dropna(subset=["Loading"])
     return long.rename(columns={"figi": "Position"})
