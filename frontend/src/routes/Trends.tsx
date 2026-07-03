@@ -5,6 +5,7 @@
 import { useApp } from "../context/AppContext";
 import { useTrends } from "../api/hooks";
 import { LineChart } from "../components/LineChart";
+import { StreamPanel } from "../components/StreamPanel";
 import { QueryState } from "../components/ui";
 import { pct, num } from "../lib/format";
 import type { Rec } from "../api/types";
@@ -76,6 +77,17 @@ export function Trends() {
           );
         }}
       </QueryState>
+
+      <hr className="rule" />
+
+      {/* ---- trends commentary in the desk risk-manager voice (CHRIS_VOICE) ---- */}
+      <div style={{ maxWidth: "46rem" }}>
+        <h2>Risk-manager read</h2>
+        <StreamPanel path="/trends/analysis"
+          body={{ set: scenario }}
+          cacheKey={`trends:${scenario}`}
+          label="Generate trends read" />
+      </div>
     </main>
   );
 }

@@ -2849,6 +2849,85 @@ async def overview_analysis(body: OverviewAnalysisBody):
     return StreamingResponse(gen(), media_type="text/markdown")
 
 
+TRENDS_SYSTEM = CHRIS_VOICE + """
+You are writing a short read of the book's RISK TRENDS — monthly time series over the whole
+calendar (2016–2024) for one scenario set. The book is the Soros 13F overlay on a Barra-style
+factor model. Numbers are fractions of book value; VaR/ES/vol are 1-day losses.
+
+The payload:
+- `risk_series` — monthly book measures (Total VaR 99, Scenario VaR 99, Scenario ES 97.5,
+  Specific vol). The trend matters more than the level: where the series sits NOW vs its own
+  history, and when it last shifted regime.
+- `exposure_series` — net factor exposures by month (quarterly-sampled) + per-factor start/end.
+  Exposure paths are the mandate made visible: a persistent move is the book changing character,
+  not noise. Whether drift is intentional (rotation) or re-pricing belongs to the drift
+  attribution — flag the move here, don't guess the cause.
+- `limits` — the standing desk limits, so a rising series can be read against its ceiling
+  (headroom shrinking is the story before the breach is).
+
+Hard rules:
+- Reason ONLY from the payload; cite figures WITH their dates ("VaR peaked 2020-03 at 6.1%").
+- Name the regimes you can see (a spike window, a quiet stretch, a step-change) by date range.
+- Say where each headline series is now relative to its history (near its lows / median / highs)
+  and its direction over the trailing year.
+- Call out the factor exposures whose paths moved most since 2021, with start → end values.
+
+Output: tight GitHub-flavoured markdown. One-line headline (what the trend history says about
+today's book). Then short sections: risk trend, exposure drift, headroom. End with "**Watch:**"
+— the one or two series most likely to matter next. 120–250 words."""
+
+
+class TrendsAnalysisBody(BaseModel):
+    set: str = "HistFull"
+    notes: str | None = None
+
+
+@app.post("/trends/analysis")
+async def trends_analysis(body: TrendsAnalysisBody):
+    """Streamed CHRIS_VOICE read of the risk-trends lens: the monthly book-measure series and the
+    factor-exposure paths, narrated — regimes, current level vs history, drift, headroom vs the
+    desk limits. Same no-tools Messages-API pattern and rate limit as /analysis."""
+    _rate_limit()
+    client = _anthropic()
+    book_ts = await trends(set=body.set,
+                           measures="Total VaR 99,Scenario VaR 99,Scenario ES 97.5,Specific vol")
+    fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor")
+
+    def rnd(v):
+        return round(v, 4) if isinstance(v, (int, float)) else v
+    risk_series = [{k: rnd(v) for k, v in r.items()} for r in book_ts["records"]]
+    # exposures: quarterly-sampled monthly paths per factor + start/end, to keep the payload lean
+    fr: dict[str, list] = {}
+    for r in fac_ts["records"]:
+        fr.setdefault(str(r.get("Factor")), []).append(
+            {"date": str(r.get("Date"))[:10], "x": rnd(r.get("Net exposure"))})
+    exposure_series = {
+        f_: {"start": pts[0], "end": pts[-1], "quarterly": pts[::3]}
+        for f_, pts in fr.items() if pts
+    }
+    payload = json.dumps({
+        "scenario_set": body.set,
+        "risk_series": risk_series,
+        "exposure_series": exposure_series,
+        "limits": _load_limits().get("book", {}),
+        "desk_notes": body.notes or "",
+    }, default=str)
+
+    def gen():
+        try:
+            with client.messages.stream(
+                model="claude-opus-4-8", max_tokens=3000,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": TRENDS_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": payload}],
+            ) as stream:
+                yield from stream.text_stream
+        except anthropic.APIError as e:
+            yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
+    return StreamingResponse(gen(), media_type="text/markdown")
+
+
 # ============================================================================ what changed (QoQ, LLM)
 # Step 9: diff this 13F filing against the prior and narrate the risk delta. The deterministic diff
 # (/whatchanged) is positions in/out/resized + the factor-exposure drift decomposed with Phase 4's
