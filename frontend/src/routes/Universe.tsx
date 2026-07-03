@@ -50,6 +50,7 @@ function Membership({ date }: { date: string }) {
             {d.buckets.map((b) => (
               <LineChart key={b} title={b}
                 points={d.series.map((r, i) => ({ x: i, y: typeof r[b] === "number" ? (r[b] as number) : null }))}
+                labels={d.series.map((r) => String(r.report_date ?? ""))}
                 fmt={(v) => pct(v)} />
             ))}
           </div>
@@ -138,7 +139,8 @@ function Span({ date }: { date: string }) {
             </div>
           </div>
           <h2>Inside-share over time</h2>
-          <LineChart points={d.series.map((r, i) => ({ x: i, y: r.inside_wt }))} fmt={(v) => pct(v)}
+          <LineChart points={d.series.map((r, i) => ({ x: i, y: r.inside_wt }))}
+            labels={d.series.map((r) => r.month)} fmt={(v) => pct(v)}
             width={520} height={100} />
 
           <h2>Factor space — estimation cloud vs book</h2>

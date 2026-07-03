@@ -31,6 +31,7 @@ export function Trends() {
       <QueryState q={book}>
         {(data) => {
           const r = data.records;
+          const dates = r.map((rec) => String(rec.Date ?? "").slice(0, 10));
           const charts: { title: string; key: string; fmt: (v: number) => string }[] = [
             { title: "Total VaR 99", key: "Total VaR 99", fmt: (v) => pct(v) },
             { title: "Scenario VaR 99", key: "Scenario VaR 99", fmt: (v) => pct(v) },
@@ -40,7 +41,8 @@ export function Trends() {
           return (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "1.4rem 2rem" }}>
               {charts.map((c) => (
-                <LineChart key={c.key} title={c.title} points={col(r, "Date", c.key)} fmt={c.fmt} />
+                <LineChart key={c.key} title={c.title} points={col(r, "Date", c.key)}
+                  labels={dates} fmt={c.fmt} />
               ))}
             </div>
           );
@@ -63,10 +65,12 @@ export function Trends() {
             byF.get(f)![i] = { x: i, y: typeof rec["Net exposure"] === "number" ? (rec["Net exposure"] as number) : null };
           }
           const present = STYLE_FACTORS.filter((f) => (byF.get(f) ?? []).some((p) => p.y !== null));
+          const dlabels = dates.map((d) => d.slice(0, 10));
           return (
             <div style={{ display: "flex", flexWrap: "wrap", gap: "1.4rem 2rem" }}>
               {present.map((f) => (
-                <LineChart key={f} title={f} points={byF.get(f)!} fmt={(v) => num(v, 2)} zero />
+                <LineChart key={f} title={f} points={byF.get(f)!} labels={dlabels}
+                  fmt={(v) => num(v, 2)} zero />
               ))}
             </div>
           );

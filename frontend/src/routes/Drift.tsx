@@ -34,6 +34,7 @@ export function Drift() {
                 {present.map((f) => (
                   <LineChart key={f} title={f}
                     points={d.series.map((r, i) => ({ x: i, y: typeof r[f] === "number" ? (r[f] as number) : null }))}
+                    labels={d.series.map((r) => String(r.month ?? ""))}
                     fmt={(v) => num(v, 2)} zero />
                 ))}
               </div>

@@ -13,6 +13,7 @@ import {
 import type {
   ContributionsResult, PnlAttributionResult, PnlLinkageResult, PnlSeriesPoint,
 } from "../api/types";
+import { TipBox, svgPoint } from "../components/svg";
 import { QueryState, RagDot } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
@@ -28,6 +29,7 @@ const BAND_KEYS: { key: keyof PnlSeriesPoint; label: string; color: string }[] =
 export function StackedHero({ series, width = 640, height = 240 }: {
   series: PnlSeriesPoint[]; width?: number; height?: number;
 }) {
+  const [hov, setHov] = useState<number | null>(null);
   const pad = { l: 44, r: 78, t: 8, b: 18 };
   const iw = width - pad.l - pad.r, ih = height - pad.t - pad.b;
   const n = series.length;
@@ -70,8 +72,16 @@ export function StackedHero({ series, width = 640, height = 240 }: {
     if (labels[i].y - labels[i - 1].y < 12) labels[i].y = labels[i - 1].y + 12;
   }
   const ticks = [yMin, 0, yMax].filter((v, i, a) => a.indexOf(v) === i);
+  const hp = hov !== null ? series[hov] : null;
   return (
-    <svg width={width} height={height} role="img" aria-label="cumulative PnL by source">
+    <svg width={width} height={height} role="img" aria-label="cumulative PnL by source"
+      onMouseMove={(e) => {
+        const p = svgPoint(e);
+        if (!p) return;
+        const i = Math.round(((p.x - pad.l) / iw) * (n - 1));
+        setHov(Math.max(0, Math.min(n - 1, i)));
+      }}
+      onMouseLeave={() => setHov(null)}>
       {ticks.map((v) => (
         <g key={v}>
           <text x={pad.l - 6} y={sy(v) + 3.5} textAnchor="end" fontSize={10.5}
@@ -90,6 +100,19 @@ export function StackedHero({ series, width = 640, height = 240 }: {
       <text x={pad.l} y={height - 4} fontSize={10.5} fill="#6b6b63">{series[0].date}</text>
       <text x={pad.l + iw} y={height - 4} textAnchor="end" fontSize={10.5} fill="#6b6b63">
         {series[last].date}</text>
+      {hp && hov !== null && (
+        <>
+          <line x1={sx(hov)} x2={sx(hov)} y1={pad.t} y2={pad.t + ih}
+            stroke="#c9c5bb" strokeWidth={0.8} strokeDasharray="2 2" pointerEvents="none" />
+          <circle cx={sx(hov)} cy={sy(hp.realized)} r={2.6} fill={INK} pointerEvents="none" />
+          <TipBox x={sx(hov)} y={sy(hp.realized)} width={width} height={height}
+            lines={[hp.date,
+                    `realized ${signedPct(hp.realized, 2)}`,
+                    `market ${signedPct(hp.market, 2)}`,
+                    `style ${signedPct(hp.style, 2)}`,
+                    `specific ${signedPct(hp.specific, 2)}`]} />
+        </>
+      )}
     </svg>
   );
 }
@@ -126,7 +149,11 @@ export function BandChart({ lk, width = 700 }: { lk: PnlLinkageResult; width?: n
         <text x={labelX} y={y + 11} textAnchor="end" fontSize={12.5}
           fontWeight={r.kind === "book" ? 600 : 400} fill="#2a2a26">{r.name}</text>
         <circle cx={dx} cy={y + 7} r={4.2} fill={hollow ? "#fffff8" : c}
-          stroke={hollow ? c : "none"} strokeWidth={hollow ? 1.5 : 0} />
+          stroke={hollow ? c : "none"} strokeWidth={hollow ? 1.5 : 0}>
+          <title>{`${r.name}: realized ${signedPct(r.realized, 2)} · z ${signedNum(z, 1)}σ · `
+            + `base ±${pct(2 * r.sd_base, 2)} · stressed ±${pct(2 * r.sd_stressed, 2)}`
+            + ` · ${r.verdict}`}</title>
+        </circle>
         <text x={zX} y={y + 11} fontSize={11.5} fill={c} className="num">
           {signedNum(z, 1)}σ</text>
       </g>,

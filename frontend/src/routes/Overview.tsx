@@ -38,6 +38,7 @@ export function Overview() {
   if (!ready) return <main className="lens"><div className="spin">loading…</div></main>;
 
   const tr = trends.data?.records;
+  const dates = (tr ?? []).map((r) => String(r.Date ?? "").slice(0, 10));
   const totVar = lastNum(tr, "Total VaR 99");
   const es = lastNum(tr, "Scenario ES 97.5");
   const before = wi.data?.before;
@@ -76,8 +77,10 @@ export function Overview() {
       <div className="hgroup">
         <div>
           <h2 style={{ marginTop: 0 }}>Risk</h2>
-          <HeroNum k="Total VaR 99" v={pct(totVar)} spark={series(tr, "Total VaR 99")} to="/trends" />
-          <HeroNum k="ES 97.5" v={pct(es)} spark={series(tr, "Scenario ES 97.5")} to="/trends" />
+          <HeroNum k="Total VaR 99" v={pct(totVar)} spark={series(tr, "Total VaR 99")}
+            sparkLabels={dates} to="/trends" />
+          <HeroNum k="ES 97.5" v={pct(es)} spark={series(tr, "Scenario ES 97.5")}
+            sparkLabels={dates} to="/trends" />
           <HeroNum k="Factor share of variance"
             v={factorShare === null ? "—" : `${pct(factorShare, 0)} / ${pct(1 - factorShare, 0)}`}
             spark={[]} to="/attribution" />
@@ -175,7 +178,9 @@ export function Overview() {
   );
 }
 
-function HeroNum({ k, v, spark, to }: { k: string; v: string; spark: (number | null)[]; to: string }) {
+function HeroNum({ k, v, spark, sparkLabels, to }: {
+  k: string; v: string; spark: (number | null)[]; sparkLabels?: string[]; to: string;
+}) {
   return (
     <Link to={to} style={{ color: "inherit", display: "block", marginBottom: "0.5rem" }}>
       <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
@@ -183,7 +188,7 @@ function HeroNum({ k, v, spark, to }: { k: string; v: string; spark: (number | n
           <div className="hero"><span className="v">{v}</span></div>
           <div className="k">{k}</div>
         </div>
-        <Sparkline values={spark} />
+        <Sparkline values={spark} labels={sparkLabels} fmt={(x) => pct(x, 2)} />
       </div>
     </Link>
   );

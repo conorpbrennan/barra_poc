@@ -10,6 +10,7 @@ import { useApp } from "../context/AppContext";
 import {
   useCalibration, useRegression, useFactorCov, useExposureProfile, useFactorPortfolio, useMeta,
 } from "../api/hooks";
+import { TipBox, svgPoint } from "../components/svg";
 import { QueryState } from "../components/ui";
 import { pct, num, signedNum } from "../lib/format";
 import type { ValidationSeries } from "../api/types";
@@ -20,6 +21,7 @@ const FAINT = "#6b6b63", ACCENT = "#3b5e8c", INK = "#111";
 export function BiasChart({ s, label, width = 340, height = 150 }: {
   s: ValidationSeries; label: string; width?: number; height?: number;
 }) {
+  const [hov, setHov] = useState<number | null>(null);
   const pad = { l: 30, r: 8, t: 10, b: 16 };
   const iw = width - pad.l - pad.r, ih = height - pad.t - pad.b;
   const n = s.bias.length;
@@ -32,8 +34,16 @@ export function BiasChart({ s, label, width = 340, height = 150 }: {
   const line = s.bias.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.b).toFixed(1)}`).join("");
   const last = s.bias[n - 1];
   const out = last.b > 1 + s.band || last.b < 1 - s.band;
+  const hp = hov !== null ? s.bias[hov] : null;
   return (
-    <svg width={width} height={height} role="img" aria-label={`rolling bias — ${label}`}>
+    <svg width={width} height={height} role="img" aria-label={`rolling bias — ${label}`}
+      onMouseMove={(e) => {
+        const p = svgPoint(e);
+        if (!p) return;
+        const i = Math.round(((p.x - pad.l) / iw) * (n - 1));
+        setHov(Math.max(0, Math.min(n - 1, i)));
+      }}
+      onMouseLeave={() => setHov(null)}>
       <rect x={pad.l} y={sy(1 + s.band)} width={iw}
         height={Math.max(1, sy(1 - s.band) - sy(1 + s.band))} fill="#ece9e0" />
       <line x1={pad.l} x2={pad.l + iw} y1={sy(1)} y2={sy(1)} stroke="#c9c5bb"
@@ -49,6 +59,13 @@ export function BiasChart({ s, label, width = 340, height = 150 }: {
       <text x={pad.l + 4} y={pad.t + 10} fontSize={11} fill={INK}>{label}</text>
       <text x={pad.l + iw} y={sy(last.b) - 5} textAnchor="end" fontSize={10.5}
         fill={out ? "#a8322a" : FAINT} className="num">b {num(last.b, 2)}</text>
+      {hp && hov !== null && (
+        <>
+          <circle cx={sx(hov)} cy={sy(hp.b)} r={2.4} fill={INK} pointerEvents="none" />
+          <TipBox x={sx(hov)} y={sy(hp.b)} width={width} height={height}
+            lines={[hp.date.slice(0, 7), `b ${num(hp.b, 2)}`]} />
+        </>
+      )}
     </svg>
   );
 }
@@ -56,6 +73,7 @@ export function BiasChart({ s, label, width = 340, height = 150 }: {
 function R2Chart({ pts, width = 700, height = 130 }: {
   pts: { date: string; r2: number }[]; width?: number; height?: number;
 }) {
+  const [hov, setHov] = useState<number | null>(null);
   const pad = { l: 34, r: 8, t: 8, b: 16 };
   const iw = width - pad.l - pad.r, ih = height - pad.t - pad.b;
   const n = pts.length;
@@ -64,9 +82,17 @@ function R2Chart({ pts, width = 700, height = 130 }: {
   const sx = (i: number) => pad.l + (i / (n - 1)) * iw;
   const sy = (v: number) => pad.t + (1 - v / yMax) * ih;
   const line = pts.map((p, i) => `${i ? "L" : "M"}${sx(i).toFixed(1)},${sy(p.r2).toFixed(1)}`).join("");
+  const hp = hov !== null ? pts[hov] : null;
   return (
     <svg width="100%" viewBox={`0 0 ${width} ${height}`} style={{ maxWidth: width }} role="img"
-      aria-label="monthly cross-sectional R²">
+      aria-label="monthly cross-sectional R²"
+      onMouseMove={(e) => {
+        const p = svgPoint(e);
+        if (!p) return;
+        const i = Math.round(((p.x - pad.l) / iw) * (n - 1));
+        setHov(Math.max(0, Math.min(n - 1, i)));
+      }}
+      onMouseLeave={() => setHov(null)}>
       {[0, 0.2, 0.4].filter((v) => v < yMax).map((v) => (
         <g key={v}>
           <text x={pad.l - 4} y={sy(v) + 3.5} textAnchor="end" fontSize={10} fill={FAINT}
@@ -78,6 +104,13 @@ function R2Chart({ pts, width = 700, height = 130 }: {
       <text x={pad.l} y={height - 3} fontSize={10} fill={FAINT}>{pts[0].date.slice(0, 7)}</text>
       <text x={pad.l + iw} y={height - 3} textAnchor="end" fontSize={10} fill={FAINT}>
         {pts[n - 1].date.slice(0, 7)}</text>
+      {hp && hov !== null && (
+        <>
+          <circle cx={sx(hov)} cy={sy(hp.r2)} r={2.4} fill="#111" pointerEvents="none" />
+          <TipBox x={sx(hov)} y={sy(hp.r2)} width={width} height={height}
+            lines={[hp.date.slice(0, 7), `R² ${pct(hp.r2, 1)}`]} />
+        </>
+      )}
     </svg>
   );
 }
@@ -124,7 +157,9 @@ function ExposureProfile() {
                 aria-label={`cross-section distribution of ${p.factor} loadings`}>
                 {p.hist.map((b, i) => (
                   <rect key={i} x={sx(b.x0)} width={Math.max(sx(b.x1) - sx(b.x0) - 0.5, 0.5)}
-                    y={pad.t + (1 - b.n / nMax) * ih} height={(b.n / nMax) * ih} fill="#c9c5bb" />
+                    y={pad.t + (1 - b.n / nMax) * ih} height={(b.n / nMax) * ih} fill="#c9c5bb">
+                    <title>{`${num(b.x0, 2)} … ${num(b.x1, 2)}: ${b.n} names`}</title>
+                  </rect>
                 ))}
                 {[-3, 3].filter((v) => v > x0 && v < x1).map((v) => (
                   <g key={v}>
