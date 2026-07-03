@@ -294,7 +294,7 @@ def build() -> None:
     builder writes six parquet frames; the Atoti cube reads those and nothing else. No factor-return
     series is bought or downloaded — they are estimated in-house (§3).</li>
 <li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
-    — Size / Value / Earnings Yield / Leverage / Growth from fundamentals, Beta / Residual Vol / Momentum
+    — Size / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol / Momentum
     / Liquidity from prices — standardised by median / MAD on the estimation universe (winsorised ±3
     there, left uncapped on coverage so off-index names read their true loadings).</li>
 <li><strong>Risk.</strong> Every scenario is the same calculation
@@ -394,7 +394,7 @@ sit in one place.</p>
     <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
 <tr><td>Fundamentals</td><td>SEC XBRL company-facts API, CIK-keyed; tags: Assets, Liabilities,
     StockholdersEquity, NetIncomeLoss, shares from <code>dei:EntityCommonStockSharesOutstanding</code></td>
-    <td>Per filing (point-in-time, as-of joined on <code>filed</code> date)</td><td>Stock</td><td>Size, Value, EarnYield, Leverage, Growth descriptors</td>
+    <td>Per filing (point-in-time, as-of joined on <code>filed</code> date)</td><td>Stock</td><td>Size, Value, EarnYield, Leverage descriptors</td>
     <td>Tag coverage varies by filer; ~no look-ahead by construction; see incident note in §5</td></tr>
 <tr><td>Prices</td><td>Stooq daily CSV (ticker-keyed) with Yahoo chart-API fallback (split-adjusted close, volume); market proxy = <code>{MARKET_PROXY.upper()}</code></td>
     <td>Daily</td><td>Stock</td><td>Stock returns (the regression's left-hand side), Beta, ResidVol, Momentum, Liquidity, market cap</td>
@@ -539,12 +539,15 @@ about.</p>
     over a 252-day window (needs ≥120 observations, else withheld); <code>ResidVol</code> =
     annualised σ of that regression's residual (×√252); <code>Momentum</code> = 12-1 total
     return, price<sub>t−21</sub> / price<sub>t−252</sub> − 1 (the most recent month is skipped);
-    <code>Liquidity</code> = log of mean daily dollar-volume over the trailing 63 days.
+    <code>Liquidity</code> = log turnover (trailing-63d mean daily dollar-volume / mcap),
+    orthogonalised to Size on the estimation fit — respecified 2026-07-04; the raw dollar-volume
+    version was cross-sectionally a second Size (factor-return ρ ≈ −0.8).
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
     log(mcap+1)³; <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
-    mcap; <code>Leverage</code> = assets / equity; <code>Growth</code> = period-over-period asset
-    growth. Market cap = split-adjusted close × shares outstanding (DEI cover-page count).
+    mcap; <code>Leverage</code> = assets / equity. (<code>Growth</code> was dropped 2026-07-04:
+    |t|&gt;2 on only 9% of regression days and a loading on only 21% of held weight.)
+    Market cap = split-adjusted close × shares outstanding (DEI cover-page count).
     <strong>Market-cap floor:</strong> if a name's mcap falls below ${MCAP_FLOOR:,.0f} that month
     we withhold its fundamental descriptors (set them missing, not zero). A corrupt share count
     would otherwise turn every ratio into raw dollars (§5).
@@ -552,8 +555,8 @@ about.</p>
     each month over a <em>trailing daily window</em>, so they move every month as new prices
     arrive. The fundamental descriptors only step when a <em>new SEC filing lands</em> (quarterly,
     as-of joined on the filing date) and stay flat between filings. So in a typical month a name's
-    Beta, Momentum, ResidVol and Liquidity drift while its Size, Value, EarnYield, Leverage and
-    Growth stay put. The panel refreshes price signals every month and fundamental signals every
+    Beta, Momentum, ResidVol and Liquidity drift while its Size, Value, EarnYield and Leverage
+    stay put. The panel refreshes price signals every month and fundamental signals every
     quarter.</li>
 
 <li><strong>(b) Robust cross-sectional standardisation — the estimation/coverage split.</strong>

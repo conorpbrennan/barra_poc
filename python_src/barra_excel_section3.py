@@ -95,12 +95,16 @@ def raw_descriptors(sec, prices, funda, mkt, cal):
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),
-            "Growth": (f["Assets"].pct_change().reindex(range(len(cal)), method=None).values
-                       if "Assets" in f else np.nan),
             "mcap": mcap.values,
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
     raw = pdsc.merge(fund, on=["ticker", "Date"], how="outer")
+    # Mirror the builder's 2026-07-04 Liquidity respec: turnover = log ADV - log mcap.
+    # (The builder additionally Size-orthogonalizes the loading on the estimation fit;
+    # the workbook shows the raw descriptor stage only.)
+    if "Liquidity" in raw and "Size" in raw:
+        both = raw["Liquidity"].notna() & raw["Size"].notna()
+        raw["Liquidity"] = (raw["Liquidity"] - raw["Size"]).where(both)
     raw = raw.merge(sec[["ticker", "figi", "title" if "title" in sec else "ticker"]]
                     .rename(columns={"title": "Issuer"}) if "title" in sec
                     else sec[["ticker", "figi"]], on="ticker", how="left")

@@ -64,7 +64,9 @@ SP500_URL       = ("https://raw.githubusercontent.com/datasets/"
                    "s-and-p-500-companies/main/data/constituents.csv")
 MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta regression
 
-STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value", "Growth",
+# Growth dropped 2026-07-04: |t|>2 on only 9% of regression days (the admission bar)
+# and a loading on only 21.3% of held weight (asset-growth needs two XBRL vintages).
+STYLE_FACTORS = ["Beta", "Momentum", "Size", "Value",
                  "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -594,8 +596,6 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             "Value": fa["Equity"].values / (mcap.values + 1),
             "EarnYield": fa["NetIncome"].values / (mcap.values + 1),
             "Leverage": fa["Assets"].values / (fa["Equity"].values + 1),
-            "Growth": f["Assets"].pct_change().reindex(range(len(cal)), method=None).values
-                      if "Assets" in f else np.nan,
         }))
     fund = pd.concat(frecs, ignore_index=True) if frecs else pd.DataFrame()
     raw = pdsc.merge(fund, on=["ticker", "Date"], how="outer")

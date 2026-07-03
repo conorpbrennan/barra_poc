@@ -264,7 +264,8 @@ The It's Just Beta alignment set (see `itsjustbeta/additional-views-plan.md`), s
   t-stats, and N — an eighth parquet, NOT part of the seven-frame cube contract; written inside
   `build_frames`, needs a rebuild to populate, 404s cleanly when absent). Serves the monthly R²
   trend (mean ≈ 0.19 daily — the trend matters, not the monthly 0.2–0.4 rule) and the admission
-  table: % of days `|t|>2` per factor (Market 85% … Growth 9%, a drop candidate).
+  table: % of days `|t|>2` per factor (Market 85% … Growth 9% — which led to Growth being
+  DROPPED from the model on 2026-07-04; see "Descriptor health" below).
 - **`GET /factor_cov?date=`** — the F matrix made visible: correlation matrix + per-factor daily
   vols, full window vs recent-1y side by side (vol-clustering warning where the ratio ≫ 1).
 
@@ -557,8 +558,11 @@ loading coverage**. Pure helpers (`_collinear_pairs`, `_residual_betas`, `_cover
 in `test_descriptor_audit.py` (no backend needed). Post-fix audit findings: the residual R² stays ~0.51
 but the top loading moved Liquidity → **Size (β 1.04) / NonLinSize (β −1.43)** — the mislabel is gone
 and the remaining hidden beta is a real **mega-cap regime driver** (amzn/googl/aapl/nvda/msft carry
-it) the linear+cubic size terms don't span; and **Growth covers only 21.3% of held weight**
-(reinforcing the drop-Growth candidate from `/regression`'s 9% |t|>2 admission rate).
+it) the linear+cubic size terms don't span; and **Growth covered only 21.3% of held weight**,
+which combined with `/regression`'s 9% |t|>2 admission rate led to **Growth being dropped from
+the model on 2026-07-04** (removed from `STYLE_FACTORS`, the fundamentals descriptor block, the
+precompute/frontend STYLE lists, `FACTOR_RECIPES`, and the CRO report — the model now carries
+nine style factors + Market).
 
 ## In-UI docs (static serving)
 

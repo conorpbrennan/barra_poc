@@ -2674,7 +2674,7 @@ FACTOR_RECIPES = {
     "Value": "book-to-price: PIT equity / mcap",
     "EarnYield": "earnings yield: PIT net income / mcap",
     "Leverage": "assets / equity (PIT)",
-    "Growth": "period-over-period asset growth (PIT)",
+    # Growth dropped 2026-07-04 (9% admission, 21.3% held-weight coverage)
 }
 
 
