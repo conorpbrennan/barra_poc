@@ -218,11 +218,11 @@ precision. **`conditional: true`** adds the correlated read: `E[f|f_S=s] = F[:,S
 move too — the naive result holds them still and understates a real event. `GET /reverse_stress?loss=`
 inverts it: for a target loss `L`, the single-factor move
 `σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
-Total VaR 99 desk limit). The naive shock is ALSO priced by the cube's **StressShock parameter
-simulation** (`Custom stress PnL` measure; `/stress` appends a transient uuid scenario, reads the
-branch, drops it — served as `cube_prototype` beside the API number, tie < 1e-12; the Tier-2
-prototype from docs/cube-measure-opportunities.md — name/sector drill awaits `/pivot` scenario
-plumbing). UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
+Total VaR 99 desk limit). The naive shock is **SERVED from the cube's StressShock parameter
+simulation** (`Custom stress PnL` — a transient uuid scenario per request, dropped in finally;
+numpy `_stress_result` retained as the live `verification` cross-check, < 1e-12, with a
+`numpy_fallback`). The grid can drill it too: **`/pivot` takes stateless `whatif` and `shocks`
+params** — the same guarded pivot on a transient hypothetical branch/scenario. UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
 conditional toggle (naive vs conditional side by side + the propagation table) plus **presets**
 that fill the σ inputs — the cube's `HYPO_SHOCKS` definitions (served via `/meta.hypo_shocks`,
 ONE source, guarded by `t_meta_serves_hypo_shocks`), the primer's ch-09 Value −2σ example, and
@@ -308,8 +308,9 @@ so **"before" matches the cube's reported figures exactly** and only the BEFORE�
 new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
 "add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
-VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. **Each trade set is
-ALSO priced on a transient cube scenario branch** (`_whatif_branch_prototype` → `cube_prototype` block):
+VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. **The before/after risk keys are SERVED from the cube**
+(base cell + a transient trades branch; numpy `_risk_from_weights` retained as the live
+`verification` cross-check + the gross/net/top-5 arithmetic, with a `numpy_fallback`):
 `Net exposure` is now a MEASURE-LEVEL product of the leaf Loading × the JOINED Positions Weight
 (benchmarked at parity with the old baked WLoading column — the ~9s penalty is gone on atoti 0.9.15),
 so a Positions branch flows through every chained measure; live diffs vs the numpy engine ~1e-17.

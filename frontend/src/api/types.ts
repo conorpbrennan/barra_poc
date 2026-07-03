@@ -102,6 +102,8 @@ export interface WhatIfResult {
   before: WhatIfRisk; after: WhatIfRisk; delta: Partial<WhatIfRisk>;
   holdings: { position: string; ticker: string; weight: number }[];
   universe: { position: string; ticker: string }[];
+  source?: string;                    // "cube" (scenario branch) | "numpy_fallback"
+  verification?: { max_abs_diff_vols: number; max_rel_diff_tails: number } | { error: string };
 }
 
 export interface LiquidityResult {
@@ -123,6 +125,8 @@ export interface ConditionalComponent {
 export interface StressResult {
   date: string; book: string; shocks: Record<string, number>;
   total_pnl: number; loss: number; components: StressComponent[];
+  source?: string;                    // "cube" (StressShock simulation) | "numpy_fallback"
+  verification?: { total_abs_diff: number; max_component_abs_diff: number } | { error: string };
   conditional?: { total_pnl: number; loss: number; components: ConditionalComponent[]; note: string };
   correlation_stress?: {
     vol_mult: number; rho_blend: number;

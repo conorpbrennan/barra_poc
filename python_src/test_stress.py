@@ -101,20 +101,40 @@ def t_meta_serves_hypo_shocks():
 
 
 @integ
-def t_stress_cube_prototype_ties_and_cleans_up():
-    """The Tier-2 parameter-simulation prototype: /stress returns a cube_prototype block whose
-    total ties the naive API number at float precision, and the transient scenario is dropped —
-    a second call gets a fresh branch and the same answer (no residue)."""
+def t_stress_served_from_cube():
+    """/stress naive numbers are SERVED from the StressShock parameter simulation, with the
+    numpy engine retained as the live cross-check: verification diffs at float precision, the
+    transient scenario dropped (a second call is identical), components still sum to the total."""
     import requests
     a = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -2, "Value": 1.5}},
                       timeout=60).json()
-    cp = a.get("cube_prototype", {})
-    assert "error" not in cp, cp
-    assert cp["total_pnl"] is not None
-    assert cp["abs_diff_vs_naive"] < 1e-12, cp
+    assert a.get("source") == "cube", a.get("source")
+    v = a["verification"]
+    assert v["total_abs_diff"] < 1e-12, v
+    assert v["max_component_abs_diff"] < 1e-12, v
     b = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -2, "Value": 1.5}},
                       timeout=60).json()
-    assert abs(b["cube_prototype"]["total_pnl"] - cp["total_pnl"]) < 1e-15
+    assert abs(b["total_pnl"] - a["total_pnl"]) < 1e-15
+
+
+@integ
+def t_pivot_shocks_param():
+    """/pivot?shocks= runs the SAME guarded pivot under a transient custom stress: the by-Factor
+    Custom stress PnL rows sum to /stress's total; an unknown factor 400s."""
+    import requests
+    body = {"shocks": {"Momentum": -3.0}}
+    s = requests.post(f"{API}/stress", json=body, timeout=60).json()
+    q = {"rows": "Factor", "measures": "Custom stress PnL",
+         "filters": json.dumps({"Book": ["Soros"], "Date": [s["date"]],
+                                "ScenarioSet": ["HistFull"]}),
+         "shocks": json.dumps(body["shocks"])}
+    j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
+    tot = sum(r["Custom stress PnL"] for r in j["records"]
+              if r.get("Custom stress PnL") is not None)
+    assert abs(tot - s["total_pnl"]) < 1e-12, (tot, s["total_pnl"])
+    q["shocks"] = json.dumps({"NotAFactor": 1.0})
+    r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=30)
+    assert r.status_code == 400, r.status_code
 
 
 @integ

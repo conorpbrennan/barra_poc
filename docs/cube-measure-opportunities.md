@@ -16,6 +16,16 @@ aggregation — no matrix inverses, no rolling windows, no cross-member order st
 `Vol at min-variance hedge` (serve `/hedge`, `_hedge_table` kept as the live cross-check;
 verification ~1e-17).
 
+**Tier 2 PROMOTED TO LIVE 2026-07-03 (both items):** `/stress` naive numbers and `/whatif`
+before/after risk keys are now SERVED from the cube (StressShock simulation / transient
+Positions branch), numpy demoted to the permanent `verification` cross-check with
+`numpy_fallback` resilience; and **`/pivot` gained stateless `whatif` + `shocks` params** —
+the same guarded pivot on a transient hypothetical (per-request branch/scenario, dropped in
+finally, no lifecycle to manage), so the grid can drill any measure under a trade or a shock.
+`Custom stress PnL` joined the allowlist. Tests: `t_stress_served_from_cube`,
+`t_whatif_served_from_cube`, `t_pivot_shocks_param`, `t_pivot_whatif_param`. Original
+prototype notes below kept for the design record.
+
 **Tier 2 #3 PROTOTYPE BUILT 2026-07-03** — `create_parameter_simulation("StressShock",
 {"Shock sigma": 0}, levels=[Factor])` + `Custom stress PnL = Σ x·σ·vol` (OriginScope Factor,
 so it foots by name/sector). `/stress` appends a transient uuid scenario per request, reads the

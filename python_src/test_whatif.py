@@ -89,21 +89,45 @@ def t_whatif_concentrating_raises_top5_share():
 
 
 @integ
-def t_whatif_cube_branch_prototype():
-    """The Tier-2 #4 scenario-branch prototype: /whatif's cube_prototype block prices the same
-    trades on a transient Positions branch. Vols tie the numpy engine at float precision
-    (identical math once the branch weight flows through the measure-level Net exposure);
-    VaR/ES agree within quantile-interpolation tolerance; a second call is clean."""
+def t_whatif_served_from_cube():
+    """/whatif risk keys are SERVED from the cube (base cell + a transient trades branch), with
+    the numpy engine as the live cross-check: vol diffs at float precision, tail (quantile)
+    diffs within interpolation tolerance, and a second call identical (branch dropped)."""
     j = _whatif([])
+    assert j.get("source") == "cube", j.get("source")
     top = j["holdings"][0]
     res = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
-    cp = res.get("cube_prototype", {})
-    assert "error" not in cp, cp
-    assert cp["abs_diff_model_vol"] < 5e-10, cp
-    assert cp["abs_diff_specific_vol"] < 5e-10, cp
-    assert cp["rel_diff_var99"] < 1e-3, cp
+    assert res.get("source") == "cube"
+    v = res["verification"]
+    assert v["max_abs_diff_vols"] < 5e-10, v
+    assert v["max_rel_diff_tails"] < 1e-3, v
     res2 = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
-    assert abs(res2["cube_prototype"]["model_vol_1d"] - cp["model_vol_1d"]) < 1e-15
+    assert abs(res2["after"]["model_vol_1d"] - res["after"]["model_vol_1d"]) < 1e-15
+
+
+@integ
+def t_pivot_whatif_param():
+    """/pivot?whatif= runs the SAME guarded pivot on a transient trades branch: the book-level
+    Model vol under the trade equals /whatif's after; missing Date filter 400s; unknown
+    position 400s."""
+    import json as _json
+    import urllib.parse
+    import requests
+    j = _whatif([])
+    top = j["holdings"][0]
+    trades = [{"position": top["position"], "weight": 0}]
+    res = _whatif(trades)
+    q = {"rows": "ScenarioSet", "measures": "Model vol",
+         "filters": _json.dumps({"Book": ["Soros"], "Date": [j["date"]],
+                                 "ScenarioSet": ["HistFull"]}),
+         "whatif": _json.dumps(trades)}
+    p = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
+    mv = p["records"][0]["Model vol"]
+    assert abs(mv - res["after"]["model_vol_1d"]) < 5e-10, (mv, res["after"]["model_vol_1d"])
+    q2 = dict(q); q2["filters"] = _json.dumps({"Book": ["Soros"], "ScenarioSet": ["HistFull"]})
+    assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=30).status_code == 400
+    q3 = dict(q); q3["whatif"] = _json.dumps([{"position": "NOPE", "weight": 0.1}])
+    assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q3)}", timeout=30).status_code == 400
 
 
 @integ

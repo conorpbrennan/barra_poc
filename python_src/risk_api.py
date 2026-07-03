@@ -118,6 +118,9 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # Tier-1 migrations: raw factor vol + the D6 hedge family (by-Factor views):
                  "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
                  "Vol at min-variance hedge",
+                 # custom stress on a StressShock scenario (reads 0 on the Base branch — pass
+                 # the /pivot `shocks` param to price a transient shock):
+                 "Custom stress PnL",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  # per-day unpacked scenario series (read with ScenarioDay on an axis):
@@ -137,7 +140,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Marginal Model vol", "% of Model vol", "Incremental Model vol",
             "Factor variance contribution",
             "Factor return vol", "Vol ex factor", "Min-variance hedge ratio",
-            "Vol at min-variance hedge",
+            "Vol at min-variance hedge", "Custom stress PnL",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
@@ -447,16 +450,23 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
         raise HTTPException(400, "select at least one row field")
 
 
-def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool) -> dict:
+def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
+                  scenario: str | None = None, stress_scenario: str | None = None) -> dict:
     """The tidy pivot result (records [+ per_row/per_col/grand margins when totals]). Extracted
     from /pivot so /analysis feeds the model the EXACT numbers the view renders. Synchronous —
-    call via run_in_threadpool. Assumes _validate_pivot has already run."""
+    call via run_in_threadpool. Assumes _validate_pivot has already run.
+    `scenario` = a SOURCE-scenario branch name (what-if trades — cube.query(scenario=...));
+    `stress_scenario` = a StressShock PARAMETER-simulation scenario (custom sigmas — selected
+    by slicing the StressShock level). Both default to the base."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
     seen, axis = set(), []
     for name in rlist + clist:          # dedupe, preserve order
         if name not in seen:
             seen.add(name); axis.append(name)
     filt = _build_filter(l, fdict)
+    if stress_scenario is not None:
+        filt = (filt & (l["StressShock"] == stress_scenario)) if filt is not None \
+            else (l["StressShock"] == stress_scenario)
 
     scen_ctx = ("ScenarioSet" in axis) or ("ScenarioSet" in fdict)
     warning = None
@@ -464,16 +474,17 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
         warning = ("Scenario measures need a ScenarioSet context — put ScenarioSet on an "
                    "axis or pick a single scenario; otherwise those cells are blank.")
     meas_objs = [m[x] for x in mlist]
-    df = cube.query(*meas_objs, levels=[l[a] for a in axis], filter=filt)
+    _kw = {"scenario": scenario} if scenario is not None else {}
+    df = cube.query(*meas_objs, levels=[l[a] for a in axis], filter=filt, **_kw)
     out = {"rows": rlist, "cols": clist, "measures": mlist, "totals": bool(totals),
            "warning": warning, "records": _records(df)}
     if totals:
-        per_row = cube.query(*meas_objs, levels=[l[a] for a in rlist], filter=filt)
+        per_row = cube.query(*meas_objs, levels=[l[a] for a in rlist], filter=filt, **_kw)
         out["per_row"] = _records(per_row)                              # Total column
         if clist:
-            per_col = cube.query(*meas_objs, levels=[l[a] for a in clist], filter=filt)
+            per_col = cube.query(*meas_objs, levels=[l[a] for a in clist], filter=filt, **_kw)
             out["per_col"] = _records(per_col)                          # Total row
-        grand = cube.query(*meas_objs, filter=filt)                     # corner
+        grand = cube.query(*meas_objs, filter=filt, **_kw)              # corner
         def _scalar(v):                                                 # null array-measures -> None
             try:
                 f = float(v); return None if math.isnan(f) else f
@@ -483,10 +494,34 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
     return out
 
 
+def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
+    """Positions rows for a transient what-if SOURCE-scenario branch: the traded names' as-of
+    rows with Weight replaced (a fabricated row for a coverage name not currently held).
+    Untraded names inherit the base — a branch is a delta, not a copy."""
+    pos = S["frames"]["positions"]
+    d_ts = pd.Timestamp(date)
+    base = pos[(pos["Book"] == book) & (pos["Date"] == d_ts)]
+    rows = []
+    for t in trades:
+        p, nw = t["position"], float(t["weight"])
+        r0 = base[base["Position"] == p]
+        if len(r0):
+            r = r0.iloc[0].to_dict(); r["Weight"] = nw
+        else:
+            r = {"Date": d_ts, "Book": book, "Position": p, "Weight": nw,
+                 "MV": np.nan, "ADV": np.nan}
+        rows.append(r)
+    return pd.DataFrame(rows, columns=list(pos.columns))
+
+
 @app.get("/pivot")
 async def pivot(rows: str = "", cols: str = "", measures: str = "",
                 date: str | None = None, set: str | None = None,
-                filters: str | None = None, totals: bool = False):
+                filters: str | None = None, totals: bool = False,
+                whatif: str | None = Query(None, description=
+                    'JSON [{"position","weight"}] — run the pivot on a transient what-if branch'),
+                shocks: str | None = Query(None, description=
+                    'JSON {"Factor": sigma} — run the pivot under a transient custom stress')):
     """Tidy long result of cube.query(measures, levels=rows+cols, filter=<slicers>).
 
     Slicers: `filters` is a JSON object {dimension: [members]} — AND across dimensions,
@@ -500,11 +535,71 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
     recomputes the measure at the aggregated level): `per_row` (levels=rows, aggregated over
     columns -> the Total column), `per_col` (levels=cols -> the Total row), and `grand`
     (no levels -> the corner).
+
+    `whatif` / `shocks` run the SAME guarded pivot on a transient hypothetical: a what-if
+    source-scenario branch (needs exactly one Date filter) and/or a StressShock parameter
+    scenario. Created per request, dropped in finally — stateless, so the grid can drill any
+    measure under a trade or a shock with no scenario lifecycle to manage.
     """
     rlist, clist, mlist = _csv(rows), _csv(cols), _csv(measures)
     fdict = _parse_filters(filters, date, set)
     _validate_pivot(rlist, clist, mlist, fdict)
-    return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals))
+    wtrades = shk = None
+    if whatif:
+        try:
+            wtrades = json.loads(whatif)
+            assert isinstance(wtrades, list) and all(
+                isinstance(t, dict) and "position" in t and "weight" in t for t in wtrades)
+        except Exception:
+            raise HTTPException(400, 'whatif must be a JSON list of {"position", "weight"}')
+        if len(fdict.get("Date") or []) != 1:
+            raise HTTPException(400, "whatif needs exactly one Date filter")
+        secs = {str(p) for p in S["frames"]["securities"]["Position"]}
+        bad = [t["position"] for t in wtrades if str(t["position"]) not in secs]
+        if bad:
+            raise HTTPException(400, f"unknown position(s): {bad}")
+    if shocks:
+        try:
+            shk = json.loads(shocks)
+            assert isinstance(shk, dict) and shk and all(
+                isinstance(v, (int, float)) for v in shk.values())
+        except Exception:
+            raise HTTPException(400, 'shocks must be a JSON object {"Factor": sigma}')
+        known = {str(f) for f in S["frames"]["factor_meta"]["Factor"]}
+        bad = [f for f in shk if f not in known]
+        if bad:
+            raise HTTPException(400, f"unknown factor(s): {bad}")
+    if not wtrades and not shk:
+        return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals))
+
+    def run():
+        session = S["session"]
+        branch = stress_scen = None
+        sim = None
+        try:
+            if wtrades:
+                branch = f"pivot-wf-{uuid.uuid4().hex[:12]}"
+                book = (fdict.get("Book") or ["Soros"])[0]
+                session.tables["Positions"].scenarios[branch].load(
+                    _whatif_branch_rows(fdict["Date"][0], book, wtrades))
+            if shk:
+                stress_scen = f"pivot-st-{uuid.uuid4().hex[:12]}"
+                sim = session.tables["StressShock"]
+                sim.append(*[(stress_scen, f_, float(v)) for f_, v in shk.items()])
+            return _pivot_result(rlist, clist, mlist, fdict, bool(totals),
+                                 scenario=branch, stress_scenario=stress_scen)
+        finally:
+            if branch is not None:
+                try:
+                    session.delete_scenario(branch)
+                except Exception:
+                    pass
+            if sim is not None and stress_scen is not None:
+                try:
+                    sim.drop(sim["Scenario"] == stress_scen)
+                except Exception:
+                    pass
+    return await run_in_threadpool(run)
 
 
 set_ = set   # preserve builtin; the endpoint shadows `set` with the query param
@@ -1279,16 +1374,11 @@ async def stress(body: StressBody):
         raise HTTPException(400, "provide at least one factor shock")
     def run():
         d = body.date or _latest_date()
-        res = _stress_result(body.shocks, d, body.book)
-        if body.conditional:
-            res["conditional"] = _conditional_stress_result(body.shocks, d, body.book)
-        if body.vol_mult is not None or body.rho is not None:
-            res["correlation_stress"] = _corr_stress_result(
-                d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
-        # Tier-2 prototype (docs/cube-measure-opportunities.md #3): the same naive shock priced
-        # by the cube's StressShock parameter simulation — a transient per-request scenario,
-        # served alongside the API number for comparison (not yet the UI source). Failure here
-        # must never break /stress.
+        # numpy reference — retained as the live cross-check
+        ref = _stress_result(body.shocks, d, body.book)
+        # cube-served naive shock (the StressShock parameter simulation — one transient scenario
+        # per request): per-factor components from Custom stress PnL / Net exposure /
+        # Factor return vol, footing to the book total. Falls back to serving the numpy numbers.
         scen = f"req-{uuid.uuid4().hex[:12]}"
         sim = None
         try:
@@ -1299,24 +1389,43 @@ async def stress(body: StressBody):
                    & (l["StressShock"] == scen))
             if "Book" in {n for _, n in cube.hierarchies}:
                 flt &= (l["Book"] == body.book)
-            r = cube.query(mm["Custom stress PnL"], filter=flt)
-            cube_pnl = float(r.iloc[0]["Custom stress PnL"]) if len(r) else None
-            res["cube_prototype"] = {
-                "total_pnl": cube_pnl,
-                "abs_diff_vs_naive": (abs(cube_pnl - res["total_pnl"])
-                                      if cube_pnl is not None else None),
-                "note": ("the naive shock priced by the cube's parameter simulation "
-                         "(StressShock scenario branch) — drillable by name/sector in the cube; "
-                         "prototype served for comparison"),
-            }
+            dfF = (cube.query(mm["Custom stress PnL"], mm["Net exposure"], mm["Factor return vol"],
+                              levels=[l["Factor"]], filter=flt).reset_index())
+            byf = dfF.set_index("Factor")
+            comps = []
+            for f_, sig in body.shocks.items():
+                r_ = byf.loc[f_]
+                vol_ = float(r_["Factor return vol"])
+                comps.append({"factor": f_, "exposure": float(r_["Net exposure"]),
+                              "sigma": float(sig), "vol": vol_,
+                              "shock_return": float(sig) * vol_,
+                              "pnl": float(r_["Custom stress PnL"])})
+            comps.sort(key=lambda c: c["pnl"])
+            total = float(sum(c["pnl"] for c in comps))
+            ref_pnl = {c["factor"]: c["pnl"] for c in ref["components"]}
+            res = {"date": d, "book": body.book, "shocks": body.shocks,
+                   "total_pnl": total, "loss": -total, "components": comps,
+                   "source": "cube",
+                   "verification": {
+                       "total_abs_diff": abs(total - ref["total_pnl"]),
+                       "max_component_abs_diff": max(
+                           (abs(c["pnl"] - ref_pnl.get(c["factor"], 0.0)) for c in comps),
+                           default=0.0)}}
         except Exception as e:
-            res["cube_prototype"] = {"error": f"{e.__class__.__name__}: {e}"}
+            res = dict(ref)
+            res["source"] = "numpy_fallback"
+            res["verification"] = {"error": f"{e.__class__.__name__}: {e}"}
         finally:
             if sim is not None:
                 try:
                     sim.drop(sim["Scenario"] == scen)
                 except Exception:
                     pass
+        if body.conditional:
+            res["conditional"] = _conditional_stress_result(body.shocks, d, body.book)
+        if body.vol_mult is not None or body.rho is not None:
+            res["correlation_stress"] = _corr_stress_result(
+                d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
         return res
     return await run_in_threadpool(run)
 
@@ -1506,7 +1615,35 @@ async def contributions(date: str | None = None, book: str = "Soros"):
     return await run_in_threadpool(run)
 
 
+_CUBE_RISK_KEYS = {"model_vol_1d": "Model vol", "scenario_var_99": "Scenario VaR 99",
+                   "scenario_var_975": "Scenario VaR 97.5", "es_975": "Scenario ES 97.5",
+                   "es_99": "Scenario ES 99", "specific_vol": "Specific vol",
+                   "total_var_99": "Total VaR 99"}
+_WHATIF_AUX_KEYS = ("top5_ctr_share", "gross", "net")   # weight arithmetic / mtv-share — numpy
+
+
+def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
+    """The what-if risk keys read from the CUBE at (date, book, HistFull) — optionally on a
+    transient what-if source-scenario branch. One query."""
+    cube = S["cube"]; l, mm = cube.levels, cube.measures
+    flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
+    if "Book" in {n for _, n in cube.hierarchies}:
+        flt &= (l["Book"] == book)
+    kw = {"scenario": scenario} if scenario is not None else {}
+    q = cube.query(*[mm[v] for v in _CUBE_RISK_KEYS.values()], filter=flt, **kw)
+    if not len(q):
+        raise HTTPException(404, f"no cube cell at {date} / HistFull")
+    row = q.iloc[0]
+    return {k: float(row[v]) for k, v in _CUBE_RISK_KEYS.items()}
+
+
 def _whatif_result(date: str, book: str, trades: list) -> dict:
+    """Before/after book risk under a set of trades. The risk keys are SERVED FROM THE CUBE
+    (base cell + a transient source-scenario branch carrying the trades), so /whatif, the grid
+    and every other cube consumer share one implementation; the numpy engine
+    (_risk_from_weights) is recomputed on every call as the live cross-check (`verification`)
+    and still supplies the weight arithmetic (gross/net) and the mtv-based top-5 share. Falls
+    back to serving the numpy numbers (source="numpy_fallback") if the cube path fails."""
     L, w, s, R = _book_inputs(date, book)
     tk = _ticker_map()
     unknown = [t["position"] for t in trades if t["position"] not in w.index]
@@ -1518,7 +1655,42 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
         p = t["position"]; nw = float(t["weight"])
         applied.append({"position": p, "ticker": tk.get(p, p), "old": float(w.get(p, 0.0)), "new": nw})
         w2.loc[p] = nw
-    before, after = _risk_from_weights(w, L, s, R), _risk_from_weights(w2, L, s, R)
+    ref_before = _risk_from_weights(w, L, s, R)
+    ref_after = _risk_from_weights(w2, L, s, R) if trades else ref_before
+    source, branch, session = "cube", None, S["session"]
+    try:
+        cube_before = _cube_risk_block(date, book)
+        if trades:
+            branch = f"whatif-{uuid.uuid4().hex[:12]}"
+            session.tables["Positions"].scenarios[branch].load(
+                _whatif_branch_rows(date, book, trades))
+            cube_after = _cube_risk_block(date, book, scenario=branch)
+        else:
+            cube_after = dict(cube_before)
+        _vk = ("model_vol_1d", "specific_vol")
+        _tk_ = ("scenario_var_99", "scenario_var_975", "es_975", "es_99", "total_var_99")
+        verification = {
+            "max_abs_diff_vols": max(abs(c[k] - r[k]) for c, r in
+                                     ((cube_before, ref_before), (cube_after, ref_after))
+                                     for k in _vk),
+            "max_rel_diff_tails": max(abs(c[k] - r[k]) / max(abs(r[k]), 1e-12) for c, r in
+                                      ((cube_before, ref_before), (cube_after, ref_after))
+                                      for k in _tk_),
+        }
+    except Exception as e:
+        source = "numpy_fallback"
+        cube_before, cube_after = ref_before, ref_after
+        verification = {"error": f"{e.__class__.__name__}: {e}"}
+    finally:
+        if branch is not None:
+            try:
+                session.delete_scenario(branch)
+            except Exception:
+                pass
+    before = {**{k: cube_before[k] for k in _CUBE_RISK_KEYS},
+              **{k: ref_before[k] for k in _WHATIF_AUX_KEYS}}
+    after = {**{k: cube_after[k] for k in _CUBE_RISK_KEYS},
+             **{k: ref_after[k] for k in _WHATIF_AUX_KEYS}}
     delta = {k: ((after[k] - before[k]) if isinstance(before[k], (int, float)) and before[k] is not None
                  and after[k] is not None else None) for k in before}
     holdings = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
@@ -1527,69 +1699,9 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     # a name that isn't currently held, not just resize/drop holdings.
     universe = [{"position": p, "ticker": tk.get(p, p)} for p in L.index]
     universe.sort(key=lambda u: u["ticker"])
-    out = {"date": date, "book": book, "trades": applied, "before": before, "after": after,
-           "delta": delta, "holdings": holdings, "universe": universe}
-    if trades:
-        out["cube_prototype"] = _whatif_branch_prototype(date, book, trades, after)
-    return out
-
-
-def _whatif_branch_prototype(date: str, book: str, trades: list, after: dict) -> dict:
-    """Tier-2 #4 prototype (docs/cube-measure-opportunities.md): the same trades priced by a
-    TRANSIENT SOURCE-SCENARIO branch on the Positions table — possible since `Net exposure`
-    reads the joined Positions weight at query time (the measure-level-product switch), so the
-    branch flows through every chained measure. Served beside the numpy engine for comparison;
-    never allowed to break /whatif. NB attribution measures (baked FactorPnL/SpecPnL columns)
-    are deliberately NOT branch-sensitive."""
-    branch = f"whatif-{uuid.uuid4().hex[:12]}"
-    session = S["session"]
-    try:
-        cube = S["cube"]; l, mm = cube.levels, cube.measures
-        pos = S["frames"]["positions"]
-        d_ts = pd.Timestamp(date)
-        base = pos[(pos["Book"] == book) & (pos["Date"] == d_ts)]
-        rows = []
-        for t in trades:
-            p, nw = t["position"], float(t["weight"])
-            r0 = base[base["Position"] == p]
-            if len(r0):
-                r = r0.iloc[0].to_dict(); r["Weight"] = nw
-            else:                                   # adding a coverage name not currently held
-                r = {"Date": d_ts, "Book": book, "Position": p, "Weight": nw,
-                     "MV": np.nan, "ADV": np.nan}
-            rows.append(r)
-        session.tables["Positions"].scenarios[branch].load(
-            pd.DataFrame(rows, columns=list(pos.columns)))
-        flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
-        if "Book" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Book"] == book)
-        q = cube.query(mm["Model vol"], mm["Scenario VaR 99"], mm["Scenario ES 97.5"],
-                       mm["Specific vol"], mm["Total VaR 99"],
-                       filter=flt, scenario=branch)
-        row = q.iloc[0]
-        var99 = float(row["Scenario VaR 99"])
-        return {
-            "model_vol_1d": float(row["Model vol"]),
-            "scenario_var_99": var99,
-            "es_975": float(row["Scenario ES 97.5"]),
-            "specific_vol": float(row["Specific vol"]),
-            "total_var_99": float(row["Total VaR 99"]),
-            "abs_diff_model_vol": abs(float(row["Model vol"]) - after["model_vol_1d"]),
-            "abs_diff_specific_vol": abs(float(row["Specific vol"]) - after["specific_vol"]),
-            "rel_diff_var99": (abs(var99 - after["scenario_var_99"])
-                               / max(after["scenario_var_99"], 1e-12)),
-            "note": ("the same trades priced on a transient cube scenario branch — every cube "
-                     "measure recomputes under the trade (drill/slice included); prototype "
-                     "served beside the numpy engine. VaR/ES differ by quantile-interpolation "
-                     "convention only; vols tie at float precision."),
-        }
-    except Exception as e:
-        return {"error": f"{e.__class__.__name__}: {e}"}
-    finally:
-        try:
-            session.delete_scenario(branch)
-        except Exception:
-            pass
+    return {"date": date, "book": book, "trades": applied, "before": before, "after": after,
+            "delta": delta, "holdings": holdings, "universe": universe,
+            "source": source, "verification": verification}
 
 
 class WhatIfBody(BaseModel):
