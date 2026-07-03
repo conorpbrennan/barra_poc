@@ -483,6 +483,68 @@ the methodology, not a trading record.</p>
 by reactive EWMA volatility — reactivity without the normality penalty. Live in the dashboard's
 VaR-backtest badge.</p>
 
+<h2>7·b · Descriptor health — the 2026-07-04 audit &amp; respecs</h2>
+<p>The residual diagnostics flagged a hidden beta (residual-vs-factor R² 0.50, "loads on
+Liquidity" β 0.89, t 7.9). Chasing it produced a standing audit and six model changes in one
+day. The audit (<code>barra_descriptor_audit.py</code>, rerun after every build) applies three
+tests to every factor:</p>
+<ul>
+<li><span class="formula">Collinearity</span> — factor-return correlations, full sample and
+    trailing year. Two factors running |ρ| ≥ 0.6 are one effect split across two unstable
+    regression coefficients; the labels stop being trustworthy.</li>
+<li><span class="formula">Hidden beta</span> — each held name's daily specific return regressed
+    on each factor's return. The modeled loading is already removed, so β ~ 0 if loadings are
+    right. Σw·β is the unmodeled book exposure the risk block can't see; the share of names
+    with |t| &gt; 2 says how broad it is.</li>
+<li><span class="formula">Coverage</span> — the held weight actually carrying a loading.</li>
+</ul>
+<p>What the tests caught, in the order the trail unwound:</p>
+<table>
+<tr><th>Change</th><th>Fault</th><th>Result</th></tr>
+<tr><td><strong>Liquidity → turnover</strong>, Size-orthogonalised</td>
+    <td>log dollar-ADV ≈ log mcap cross-sectionally: a second Size (factor-return ρ −0.81)</td>
+    <td class="num">ρ vs Size −0.81 → −0.06; the residual's "Liquidity" label was a mislabel —
+    the true driver re-attributed to Size/NonLinSize</td></tr>
+<tr><td><strong>Growth dropped</strong></td>
+    <td>|t| &gt; 2 on 9% of days; loadings on 21% of held weight (needs two XBRL vintages)</td>
+    <td class="num">nothing moved on removal — it was dead weight</td></tr>
+<tr><td><strong>MegaCap added</strong> — hinge of raw log-mcap above the estimation q90,
+    orthogonalised to Size + NonLinSize</td>
+    <td>the ±3 estimation winsor bounds regression leverage but flattens the top tail: NVDA
+    (3.5T) ≈ a 600B name at Size +3, so the mega regime sat in residuals</td>
+    <td class="num">residual R² 0.51 → 0.44; loadings grade the tail (nvda 7.5 &gt; googl 7.1
+    &gt; msft 5.7)</td></tr>
+<tr><td><strong>NonLinSize → cube of standardised Size</strong> (USE4)</td>
+    <td>cubing raw log-mcap (all positive, mean ~24) leaves a residual dominated by the
+    quadratic term — a U-shape (ρ +0.74 with Size²) pinning small/mid-caps together at +6/+7
+    on its left arm</td>
+    <td class="num">R² 0.44 → 0.37; the mid-cap carriers vanish; Beta and Momentum clear</td></tr>
+<tr><td><strong>Size-curve imputation</strong> — coverage names with prices but no share count
+    get log-mcap from the per-month estimation fit of log-mcap on log-ADV (ρ ≈ 0.9)</td>
+    <td>20% of held weight (foreign IFRS filers, ADR share-count mismatches, ETFs) carried
+    <em>no size-curve risk at all</em></td>
+    <td class="num">size-curve coverage 80% → 96% of held weight; estimation never imputed;
+    disclosed as a DQ check (15.8% of weight proxy-priced)</td></tr>
+<tr><td><strong>Leverage → liabilities / assets</strong></td>
+    <td>assets/equity is unbounded as equity → 0 (insurers 40×, distressed names 100×+): 28
+    names pinned at one clipped loading — a financials-sector dummy, not a leverage factor</td>
+    <td class="num">pinned cluster 28 → 3; loading p99 6.47 → 3.24; EarnYield's flag clears</td></tr>
+</table>
+<p><strong>Where it stands.</strong> Residual-vs-factor R² 0.51 → ~0.40 (it reads 0.40 rather
+than 0.37 because the imputation made a fifth of the book <em>visible</em> to the diagnostics —
+names whose whole risk previously hid in "specific"). Beta, EarnYield and Momentum test clean;
+Value, ResidVol and NonLinSize are on watch. The three remaining flags — Leverage (Σw·β −0.42),
+Liquidity (+0.64), MegaCap (−0.46) — share one carrier list: hto, tsm, ida, cms, amzn —
+utilities, a hotel REIT, rate-sensitive mega-caps. Correlated residuals with one theme are the
+signature of a <em>missing factor</em>, here rates/duration. That is a model-scope decision (no
+obvious free-data duration descriptor), documented rather than patched. MegaCap itself admits
+at 18% of days (|t| &gt; 2) — a regime factor, on probation like NonLinSize (16%) under the
+one-third admission rule that removed Growth.</p>
+<p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
+<em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
+erased real information (the mega-cap tail), the answer was a new bounded regressor computed
+from pre-winsor values — never unbounding the old one.</p>
+
 <h2>8 · Risk tooling on the cube</h2>
 <p>Operational layers exposed in the dashboard, all reading the same cube and frames:</p>
 <ul>
