@@ -658,6 +658,22 @@ amzn/aapl/ida/cms/hto carriers at moderate true ratios) was the residuals cancel
 manufactured tilt. Liab/A = 1 − 1/(A/E): same information, bounded ~[0,1], differentiates within
 the financials block. `Liabilities` falls back to `Assets − Equity` when the tag is missing.
 
+**Momentum respec (2026-07-04): LOG relative strength, not arithmetic return.** The audit's last
+HIDDEN BETA row (Momentum −0.22, 42% breadth, carried by tsm/googl/tko/msft) traced to two layers.
+The construction fault: raw momentum was the arithmetic 12-1 ratio — bounded at −1, unbounded
+above — so the z-scored winner tail ran to +8/+10 (skew +2.2; 4.3% of names pinned at the +3
+estimation winsor vs 0.0% at −3) while realized momentum sensitivity saturates near +1.
+`ln(P(t−21d)/P(t−252d))` (the USE4 RSTR convention) symmetrizes it (skew +0.5). Result: canonical
+residual R² 0.32 → 0.30, Momentum leaves the book-residual regression (β −0.17 t −2.8 → −0.11
+t −1.8, below significance), tsm exits the carriers, admission 51%. The audit row itself still
+reads −0.19/42% — that remainder is STRUCTURAL, measured and left disclosed rather than chased:
+(1) realized momentum sensitivity is concave in the characteristic on both tails (pooled
+γ ≈ −0.35, every era since 2016, flat in loading-refresh age so not staleness; z-rescaling is
+regression-invariant so no transform of scale fixes it — every linear momentum factor carries
+this); (2) half the book number is loading-independent name effects (googl/tko/crm/msft) whose
+residuals are mutually uncorrelated (pairwise ρ −0.02) — no common thread, so no missing factor
+by the desk's own comovement test.
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

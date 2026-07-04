@@ -504,7 +504,11 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
                                     ndxb = b_
             else:
                 beta = rvol = np.nan
-            mom = (px["Close"].loc[:d].iloc[-21] / px["Close"].loc[:d].iloc[-252] - 1
+            # LOG relative strength (USE4 RSTR), not arithmetic return: the arithmetic ratio is
+            # bounded at -1 and unbounded above, so its z-scored winner tail runs to +8/+10 while
+            # realized momentum sensitivity saturates near +1 (the 2026-07-04 audit's Momentum
+            # hidden beta, gamma ~ -0.4 on the winner side only). log symmetrizes the tail.
+            mom = (float(np.log(px["Close"].loc[:d].iloc[-21] / px["Close"].loc[:d].iloc[-252]))
                    if len(px.loc[:d]) >= 252 else np.nan)
             recs.append({"ticker": tkr, "Date": d, "Beta": beta,
                          "ResidVol": rvol,

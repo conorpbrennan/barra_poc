@@ -2673,7 +2673,8 @@ FACTOR_RECIPES = {
                "against the market, 252d window (2026-07-04 — the mega complex co-moves as a "
                "group beyond any smooth function of log-mcap; realized comovement prices the "
                "club directly, incl. imputed-size names like TSM)",
-    "Momentum": "12-1 month price return (t−252d → t−21d)",
+    "Momentum": "12-1 month LOG relative strength ln(P(t−21d)/P(t−252d)) — log, not arithmetic, so "
+                "the z-scored winner tail is not stretched by return skew (2026-07-04 respec)",
     "Liquidity": "log turnover (trailing-63d avg dollar volume / market cap), orthogonalized to "
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
     "Size": "log market cap (close × PIT shares); coverage names with no share count (foreign "
