@@ -119,10 +119,16 @@ def run(frames: dict | None = None) -> list[dict]:
     check("WARN" if misv > 0.05 else "PASS", "held positions have specific_var on the same date",
           f"{misv:.1%} of (date, position) uncovered")
 
-    facs_per_date = exp.groupby(["Date", "Position"]).Factor.nunique()
-    check("WARN" if (facs_per_date < 9).any() else "PASS",
-          "exposures: >=9 of 10 style loadings per (date, position)",
-          f"min {facs_per_date.min()}, {(facs_per_date < 9).mean():.1%} below 9")
+    # Style loadings only (Market/industries are memberships, not descriptors), against the
+    # regression's own pricing gate: a MAJORITY of the style set (the old ">=9 of 10" was a
+    # fixed count written for a 10-style model — same fault as the regression's hard-coded 6).
+    styles = set(f["factor_meta"].loc[f["factor_meta"]["FactorGroup"] == "Style", "Factor"])
+    n_sty = len(styles)
+    gate = n_sty // 2 + 1
+    facs_per_date = exp[exp["Factor"].isin(styles)].groupby(["Date", "Position"]).Factor.nunique()
+    check("WARN" if (facs_per_date < gate).any() else "PASS",
+          f"exposures: >={gate} of {n_sty} style loadings per (date, position)",
+          f"min {facs_per_date.min()}, {(facs_per_date < gate).mean():.1%} below {gate}")
 
     sec = f["securities"]
     stub = (sec["Sector"] == "Unknown").mean()
@@ -143,8 +149,11 @@ def run(frames: dict | None = None) -> list[dict]:
         est_pos = set(fn[(pd.to_datetime(fn["month"]) == dlast) & (fn["survived"] == True)]  # noqa: E712
                       ["position"].dropna())
     if len(est_pos) >= 30:
-        med = (exp[(exp["Date"] == dlast) & (exp["Position"].isin(est_pos))]
-               .groupby("Factor")["Loading"].median().drop("Market", errors="ignore"))
+        # STYLE loadings only — Market (1.0) and Ind:* (0/1 memberships, median 1 among their
+        # own members by definition) are not standardized descriptors and would always "fail".
+        med = (exp[(exp["Date"] == dlast) & (exp["Position"].isin(est_pos))
+                   & (exp["Factor"].isin(styles))]
+               .groupby("Factor")["Loading"].median())
         worst = med.abs().idxmax()
         check("WARN" if med.abs().max() > 0.5 else "PASS",
               "exposures: estimation-universe style medians ≈ 0 (standardization gate)",
