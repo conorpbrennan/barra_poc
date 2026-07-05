@@ -674,6 +674,27 @@ this); (2) half the book number is loading-independent name effects (googl/tko/c
 residuals are mutually uncorrelated (pairwise ρ −0.02) — no common thread, so no missing factor
 by the desk's own comovement test.
 
+**NonLinSize winsor (2026-07-04): cube the ±3 Size, and cap the output at ±3.** The audit's
+largest watch row (Σw·b +1.65 at 38% breadth; slope −1.04, corr −0.89 vs loading) was mostly
+fictional tails: cubing the UNCAPPED coverage Size amplifies any Size error by 3z², so held
+small-caps carried NonLinSize loadings of −9/−10 (35% of held weight sat beyond |3|) whose
+predicted comovement was fully cancelled in residuals (hidden-beta γ ≈ −1 every era — the
+no-pricing-content signature; the deep tail even realized sign-WRONG, ≈ +1). Both winsors:
+the cube is evaluated at `clip(Size, ±3)` (the estimation range — cubic extrapolation beyond
+the fitted range is not truth-telling, unlike Size's linear tail) and the standardized output
+is clipped to ±3 for coverage rows too (the cube-residual's MAD-z alone puts the ±3 edge at
+z ≈ ±9). Result: Σw·b +1.65 → +1.15, and the fiction had been leaking into neighbours —
+Momentum −0.183 → −0.159, Size +0.72 → +0.66, canonical residual R² 0.298 → 0.276, span
+inside-share 84.8% → 87.9%; fit R² unchanged. The remainder is the same STRUCTURAL intercept
+family as Momentum's (book-wide +0.9 comovement with a noisy factor return, 18% admission),
+disclosed, not chased. **Drop test run and REJECTED, both sides measured**: without NonLinSize
+residual R² 0.272 / fit 0.294 (a wash), Size/Momentum hidden betas worsen (the curvature work
+lands back on them), and ~17k young-IPO name-dates lose book pricing — NonLinSize is available
+from a listing's FIRST month (needs only mcap; Beta/ResidVol wait 120d, Momentum 252d) so it
+keeps young names above the regression's majority-of-loadings gate. That gate was itself a
+latent fault the test exposed: a hard-coded "6 of 10" count in `regress_factors` silently moved
+pricing coverage whenever the factor set changed — now `>= n_styles // 2 + 1` (identical today).
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data

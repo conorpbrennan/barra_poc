@@ -698,10 +698,22 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             # audit's mid-cap NonLinSize hidden-beta carriers: hto/itri/ida/gtls). Centering
             # first makes the cube genuinely odd: small −, mid ~0, large + — real curvature.
             ref = em if em.sum() >= 10 else pd.Series(True, index=g.index)
-            nls = g["Size"] ** 3                          # NaN (no-mcap) stays NaN
-            sz = g["Size"].fillna(0.0)
+            # Cube the WINSORIZED Size (±3, the estimation range), not the uncapped coverage
+            # tail (2026-07-04 audit): cubing amplifies a Size error by 3z², so an uncapped
+            # coverage Size of −3.6 became a −47 raw cube → a −10 NonLinSize loading with NO
+            # realized counterpart (hidden-beta gamma ≈ −1 every era: the loading's predicted
+            # comovement fully cancelled in residuals; 35% of held weight sat beyond |3|).
+            # The cubic is only meaningful inside the range the estimation fit saw — a deep
+            # small-cap reads like the estimation edge, not 3× beyond it. Size itself stays
+            # uncapped (linear extrapolation is defensible; cubic extrapolation is not).
+            s3 = g["Size"].clip(-3, 3)                    # NaN (no-mcap) stays NaN
+            nls = s3 ** 3
+            sz = s3.fillna(0.0)
             b = np.polyfit(sz[ref], nls.fillna(0.0)[ref], 1)
-            g["NonLinSize"] = _split_z(nls - (b[0] * g["Size"] + b[1]), em)
+            # ... and winsorize the OUTPUT at ±3 for coverage rows too (the cube-residual's
+            # MAD-z puts the ±3 Size edge at z ≈ ±9, so the uncapped-coverage rule alone
+            # still emitted −9 loadings). Unlike Size, the uncapped tail is not truth here.
+            g["NonLinSize"] = _split_z(nls - (b[0] * s3 + b[1]), em).clip(-3, 3)
         if {"Liquidity", "Size"}.issubset(g):
             # Barra-style: orthogonalize Liquidity (turnover) to Size on the estimation fit —
             # raw turnover still shares Size's driver (the turnover respec alone only flipped
@@ -758,9 +770,13 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
     # regressing each day's stock returns on the latest *prior* month-end exposures.
     for d0, d1 in zip(dates, dates[1:] + [pd.Timestamp(END)]):
         # Missing standardized exposure = 0 (the market-average tilt; Barra convention).
-        # Keep names carrying at least 6 of 10 loadings and zero-fill the rest.
+        # Keep names carrying a MAJORITY of the style loadings and zero-fill the rest. Majority,
+        # not a fixed count: a hard-coded "6" silently moved the pricing-coverage gate whenever
+        # the factor set changed (the NonLinSize drop test unpriced young IPOs for their first
+        # ~6 months because they went from 6 loadings to 5 against a threshold written for a
+        # 10-style model). 11//2+1 == 6, so this is behavior-identical for the current model.
         Xd = X.loc[d0]
-        Xd = Xd[Xd.notna().sum(axis=1) >= 6].fillna(0.0)
+        Xd = Xd[Xd.notna().sum(axis=1) >= Xd.shape[1] // 2 + 1].fillna(0.0)
         # restrict to names with a daily return series (needed for fit AND residuals)
         tk_all = pd.Series({fig: fig2tkr.get(fig) for fig in Xd.index})
         Xd = Xd[tk_all.reindex(Xd.index).isin(R.columns).values]

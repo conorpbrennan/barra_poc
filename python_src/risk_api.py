@@ -2679,9 +2679,10 @@ FACTOR_RECIPES = {
                  "Size on the estimation fit (2026-07-04 respec — raw ADV was a second Size)",
     "Size": "log market cap (close × PIT shares); coverage names with no share count (foreign "
             "filers/ETFs) are imputed from the estimation log-ADV fit, disclosed via /dq",
-    "NonLinSize": "cube of the STANDARDIZED Size loading (USE4), orthogonalized to Size on the "
-                  "estimation fit (2026-07-04 respec — cubing raw log-mcap left a quadratic "
-                  "U-shape that pinned small/mid-caps together on its left arm)",
+    "NonLinSize": "cube of the WINSORIZED (±3) standardized Size loading (USE4), orthogonalized "
+                  "to Size on the estimation fit (2026-07-04 respecs — cubing raw log-mcap left a "
+                  "quadratic U-shape; cubing the uncapped coverage tail made −10 loadings with no "
+                  "realized comovement, so the cube is evaluated at the estimation edge)",
     # MegaCap (size-curve spline knot) added AND dropped 2026-07-04: NdxBeta took over the
     # mega club's pricing (admission 13%) and its last flag was carried by imputed-size names
     # whose hinge loading the log-ADV fit cannot estimate.
