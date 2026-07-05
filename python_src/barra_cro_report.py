@@ -177,7 +177,9 @@ def build() -> None:
         cap_clause = ("<strong>Estimation</strong> rows (the names the factor returns are fit on) are "
                       "winsorised at <strong>±3σ</strong>; <strong>coverage</strong> rows (held names "
                       "not in the seed) are left <strong>uncapped</strong>, bounded only by a loose "
-                      f"±{COVERAGE_CAP:g} backstop against corrupt data.")
+                      f"±{COVERAGE_CAP:g} backstop against corrupt data. NonLinSize is the one "
+                      "exception — capped ±3 on every row, because a cubed tail amplifies noise "
+                      "rather than telling the truth (§3a, §7·b).")
         cap_why = (f"This is Chris's data-quality point: a tiny held name far below anything in the "
                    f"{seed_label} reads its <em>true</em> large-negative Size loading (≈ −6), not a "
                    f"clip to −3 — the correct statement of a real tilt, and capping belongs only in "
@@ -226,8 +228,8 @@ def build() -> None:
          "stale / thinly-traded quotes."),
         ("5 · Liquidity — min ADV", _money(fcfg.get("min_adv", "—")) + "/day", "Trailing mean dollar "
          "volume (close × volume). Ensures each day's price is market-clearing, not a stale quote."),
-        ("6 · Completeness", f"≥ {fcfg.get('min_descriptors', '—')} of 10", "Enough non-null style "
-         "descriptors present for the name to be represented in the model."),
+        ("6 · Completeness", f"≥ {fcfg.get('min_descriptors', '—')} of {len(STYLE_FACTORS)}",
+         "Enough non-null style descriptors present for the name to be represented in the model."),
         ("7 · Stability buffer", _buf_s, "Hysteresis on the liquidity rank across months: a name "
          "enters above the high band and leaves only below the low band, so membership doesn't churn "
          "in and out at a single threshold."),
@@ -298,8 +300,10 @@ def build() -> None:
     series is bought or downloaded — they are estimated in-house (§3).</li>
 <li><strong>Loadings.</strong> Each name's style loading is a cross-sectional z-score of a characteristic
     — Size / Value / Earnings Yield / Leverage from fundamentals, Beta / Residual Vol /
-    Momentum / Liquidity / RateBeta / NdxBeta from prices — standardised by median / MAD on the estimation universe (winsorised ±3
-    there, left uncapped on coverage so off-index names read their true loadings).</li>
+    Momentum / Liquidity / RateBeta / NdxBeta from prices, NonLinSize derived from Size —
+    standardised by median / MAD on the estimation universe (winsorised ±3 there, left uncapped
+    on coverage so off-index names read their true loadings; NonLinSize capped ±3 everywhere,
+    the one exception — §3a).</li>
 <li><strong>Risk.</strong> Every scenario is the same calculation
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
     shock vector changes (historical simulation, event replay, or a hypothetical stress). All figures are
@@ -545,8 +549,11 @@ about.</p>
 <li><strong>(a) Descriptor construction</strong>, per name, on the monthly month-end calendar.
     <em>Price-based</em> (trailing daily prices): <code>Beta</code> = cov(stock, {MARKET_PROXY.upper()}) / var({MARKET_PROXY.upper()})
     over a 252-day window (needs ≥120 observations, else withheld); <code>ResidVol</code> =
-    annualised σ of that regression's residual (×√252); <code>Momentum</code> = 12-1 total
-    return, price<sub>t−21</sub> / price<sub>t−252</sub> − 1 (the most recent month is skipped);
+    annualised σ of that regression's residual (×√252); <code>Momentum</code> = 12-1 <em>log</em>
+    relative strength, ln(price<sub>t−21</sub> / price<sub>t−252</sub>) (the most recent month is
+    skipped; respecified 2026-07-04 from the arithmetic ratio, which is bounded at −1 and unbounded
+    above, so its z-scored winner tail ran to +8/+10 while realized momentum sensitivity saturates
+    near +1 — the log symmetrises it, §7·b);
     <code>Liquidity</code> = log turnover (trailing-63d mean daily dollar-volume / mcap),
     orthogonalised to Size on the estimation fit — respecified 2026-07-04; the raw dollar-volume
     version was cross-sectionally a second Size (factor-return ρ ≈ −0.8);
@@ -558,9 +565,12 @@ about.</p>
     function of log-mcap.
     <em>Fundamental-based</em> (SEC XBRL, as-of joined on the <code>filed</code> date so nothing
     is known before it was reported): <code>Size</code> = log(mcap+1); <code>NonLinSize</code> =
-    the cube of the <em>standardised</em> Size loading (USE4 convention — cubing raw log-mcap
-    leaves a quadratic U-shape after the Size fit, which pinned small/mid-caps together;
-    respecified 2026-07-04), orthogonalised to Size (<code>MegaCap</code>, a spline knot above
+    the cube of the <em>standardised</em> Size loading <em>winsorised at ±3</em> (USE4 convention —
+    cubing raw log-mcap leaves a quadratic U-shape after the Size fit, which pinned small/mid-caps
+    together; respecified 2026-07-04), orthogonalised to Size, with the standardised output also
+    capped at ±3 for coverage rows — cubing amplifies a Size error by 3z², so the uncapped coverage
+    tail carried −9/−10 loadings with no realized comovement (§7·b; unlike Size, the uncapped cubic
+    tail is not truth-telling) (<code>MegaCap</code>, a spline knot above
     the estimation q90, was added and dropped the same day — 2026-07-04 — once NdxBeta took over
     the mega club's pricing; §7·b);
     <code>Value</code> = book equity / mcap; <code>EarnYield</code> = net income /
@@ -615,10 +625,14 @@ about.</p>
 <li><strong>(d) Per-day universe and factor screening (removing degenerate factors).</strong>
     Before each day's regression we screen the design matrix:
     <ul>
-    <li><em>Name screen.</em> Keep names carrying at least <strong>6 of the {len(factors)}</strong>
-        loadings (the full price block plus some fundamentals), and zero-fill the rest. A missing
+    <li><em>Name screen.</em> Keep names carrying a <strong>majority ({len(STYLE_FACTORS) // 2 + 1}
+        of the {len(STYLE_FACTORS)}) of the style loadings</strong>, and zero-fill the rest. A missing
         standardised exposure is the market-average tilt, which is the Barra convention. Requiring
-        complete rows here used to drop whole thin months below the name minimum.</li>
+        complete rows here used to drop whole thin months below the name minimum. Majority, not a
+        fixed count (respecified 2026-07-04): a hard-coded "6" written for a 10-style model silently
+        moved the pricing-coverage gate whenever the factor set changed — young listings carry
+        exactly the descriptors that need no history (Size, NonLinSize, sector) plus the 120-day
+        price block, so a one-factor change could unprice them for their first months.</li>
     <li><em>Factor screen.</em> Drop any factor column whose cross-sectional standard deviation
         that day is ≤ <strong>0.05</strong>. A near-constant regressor is collinear with the
         intercept and makes the normal equations near-singular (the old Value/EarnYield blow-ups,
@@ -769,7 +783,7 @@ VaR-backtest badge.</p>
 
 <h2>7·b · Descriptor health — the 2026-07-04 audit &amp; respecs</h2>
 <p>The residual diagnostics flagged a hidden beta (residual-vs-factor R² 0.50, "loads on
-Liquidity" β 0.89, t 7.9). Chasing it produced a standing audit and six model changes in one
+Liquidity" β 0.89, t 7.9). Chasing it produced a standing audit and a dozen model changes in one
 day. The audit (<code>barra_descriptor_audit.py</code>, rerun after every build) applies three
 tests to every factor:</p>
 <ul>
@@ -852,21 +866,46 @@ tests to every factor:</p>
     extreme loadings were pushing the megas past the cloud edge by construction); daily fit R²
     unchanged at 0.30. Cost: residual R² 0.26 → 0.32 and a modest new Momentum flag (−0.22,
     same mega carriers) — the hinge was doing real work for the correctly-measured megas</td></tr>
+<tr><td><strong>Momentum → log relative strength</strong>, ln(p<sub>t−21</sub>/p<sub>t−252</sub>)</td>
+    <td>the arithmetic 12-1 ratio is bounded at −1 and unbounded above, so its z-scored winner
+    tail ran to +8/+10 (cross-sectional skew +2.2; 4.3% of names pinned at the +3 estimation
+    winsor vs 0.0% at −3) while realized momentum sensitivity saturates near +1 — the book is
+    long winners, so it inherited the overstatement as a negative hidden beta</td>
+    <td class="num">skew +2.2 → +0.5; residual-vs-factor R² 0.32 → 0.30 and Momentum leaves the
+    book-residual regression (β −0.17 t −2.8 → −0.11 t −1.8); tsm exits the carriers; admission
+    51%. The remaining audit row (≈ −0.16) is structural — realized sensitivity is concave in
+    the characteristic on <em>both</em> tails (γ ≈ −0.35 every era since 2016, flat in
+    loading-refresh age, invariant to rescaling) plus loading-independent name effects whose
+    residuals are mutually uncorrelated (pairwise ρ ≈ 0) — no common thread, no missing factor</td></tr>
+<tr><td><strong>NonLinSize winsorised</strong> — cube the ±3 Size, cap the standardised output
+    at ±3 for coverage rows too</td>
+    <td>cubing the UNCAPPED coverage Size amplifies a Size error by 3z²: held small-caps carried
+    −9/−10 loadings (35% of held weight beyond |3|) whose predicted comovement was fully
+    cancelled in residuals (hidden-beta γ ≈ −1 every era — the no-pricing-content signature;
+    the deep tail realized sign-wrong). Unlike Size's linear tail, cubic extrapolation beyond
+    the estimation range is not truth-telling</td>
+    <td class="num">Σw·β +1.65 → +1.15; the fiction had leaked into neighbours — Momentum
+    −0.18 → −0.16, Size +0.72 → +0.66; residual-vs-factor R² 0.30 → 0.28; span inside-share
+    85% → 88%; fit R² unchanged. A <em>drop test</em> (rebuild without NonLinSize) was run and
+    REJECTED: residual/fit R² a wash, Size and Momentum hidden betas worsen, and ~17k young-IPO
+    name-dates lose book pricing — NonLinSize needs only mcap so it exists from a listing's
+    first month and keeps young names above the regression's majority-of-loadings gate (that
+    gate's hard-coded "6 of 10" was itself respecified to a majority rule the test exposed)</td></tr>
 </table>
 <p><strong>Where it stands.</strong> The model is Market + 11 styles + 11 GICS industries,
 estimated jointly under the proper constraint. Over the programme: daily cross-sectional R²
-0.19 → 0.30, residual-vs-factor R² 0.51 → 0.32. The MegaCap drop was a measured trade, both
-sides disclosed. <em>Gained:</em> Liquidity tests fully clean (Σw·β −0.03); the span
-inside-share diagnostic recovered 72% → 85% (MegaCap's deliberately extreme hinge loadings were
-pushing nvda/googl/aapl past the estimation cloud's edge by construction); no more misestimated
-hinge loadings on imputed-size names; the daily fit R² gave up nothing (0.30 before and after).
-<em>Cost:</em> residual-vs-factor R² 0.26 → 0.32, and a modest new Momentum flag (Σw·β −0.22,
-carriers tsm/googl/tko/msft) — the hinge <em>was</em> doing real work for the
-correctly-measured megas, and part of the club's variance now leans on Momentum's factor. The
-open watch list is therefore one modest flag (Momentum, mega carriers) plus the sub-one-third
-admission cohort — Liquidity (19%), NonLinSize (19%), Value (18%), Leverage (16%), EarnYield
-(14%) — all judged again after two more quarters of data, now that industries and the
-comovement betas hold what's theirs.</p>
+0.19 → 0.30, residual-vs-factor R² 0.51 → 0.28. Every construction fault the audit surfaced is
+fixed and verified — Liquidity-as-Size, the NonLinSize U-shape and its fictional cubed coverage
+tail, the Leverage financials dummy, Momentum's arithmetic winner-tail skew — and two factors
+that could not justify their seats (Growth, MegaCap) were dropped for cause, both sides
+measured. What remains is <em>structural and disclosed, not chased</em>: a modest Momentum
+hidden beta (Σw·β ≈ −0.16 — payoff concavity every linear momentum factor carries, plus
+uncorrelated name effects with no common thread) and a NonLinSize intercept (Σw·β ≈ +1.15,
+loading-independent — the book co-moves with a noisy curvature factor return; its drop test
+failed on the evidence, see the table). The open watch list is those two structural rows plus
+the sub-one-third admission cohort — Liquidity (19%), NonLinSize (18%), Value (18%), Leverage
+(16%), EarnYield (14%) — all judged again after two more quarters of data, now that industries
+and the comovement betas hold what's theirs.</p>
 <p class="small">Estimation loadings stay winsorised at ±3 throughout: the winsor is a
 <em>leverage bound</em> on the cross-sectional regression, not a validity judgment. Where it
 erased real information (the mega-cap tail), the answer was a new bounded regressor computed
