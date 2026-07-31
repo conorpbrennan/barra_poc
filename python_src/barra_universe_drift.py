@@ -94,10 +94,18 @@ def book_at(exp: pd.DataFrame, pos: pd.DataFrame, D: pd.Timestamp):
     return w, loadings
 
 
-def run(write: bool = True) -> dict:
+def run(write: bool = True, book: str = "Soros") -> dict:
     print("[drift] loading frames ...", flush=True)
     exp = pd.read_parquet(OUT / "exposures.parquet")
     pos = pd.read_parquet(OUT / "positions.parquet")
+    # positions carries one row per (Book, Date, Position) since the multi-manager build, and
+    # weights are normalised PER BOOK -- so without this filter the net exposure x_k = sum(w*L)
+    # would sum across every book at once (x_Market ~= 11, not 1). `book=None` keeps the old
+    # any-book union as an explicit escape hatch; no caller uses it.
+    if book is not None:
+        pos = pos[pos["Book"] == book]
+        if pos.empty:
+            raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
     months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))
 
     rows = []

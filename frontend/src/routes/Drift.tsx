@@ -2,17 +2,19 @@
 // ranked, and each factor's drift decomposed into entered/exited/reweighted/loading_drift with a
 // per-factor "lean" (rotation → benchmark vs re-pricing → hedge).
 import { useState } from "react";
+import { useApp } from "../context/AppContext";
 import { useDrift } from "../api/hooks";
 import { LineChart } from "../components/LineChart";
-import { QueryState } from "../components/ui";
+import { GuardedQueryState } from "../components/ui";
 import { signedNum, num } from "../lib/format";
 import type { Rec } from "../api/types";
 
 const STYLE = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "RateBeta", "NdxBeta", "Leverage"];
 
 export function Drift() {
+  const { book } = useApp();
   const [split, setSplit] = useState("2021-01-01");
-  const q = useDrift(split);
+  const q = useDrift(split, book);
 
   return (
     <main className="lens">
@@ -24,7 +26,7 @@ export function Drift() {
         <input type="text" value={split} onChange={(e) => setSplit(e.target.value)} style={{ width: "7rem" }} />
       </label>
 
-      <QueryState q={q}>
+      <GuardedQueryState q={q}>
         {(d) => {
           const present = STYLE.filter((f) => d.series.some((r) => typeof r[f] === "number"));
           return (
@@ -68,7 +70,7 @@ export function Drift() {
             </>
           );
         }}
-      </QueryState>
+      </GuardedQueryState>
     </main>
   );
 }

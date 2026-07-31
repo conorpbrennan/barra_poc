@@ -66,6 +66,17 @@ def t_limits_json_shape():
     assert "single_name_weight" in cfg.get("concentration", {}), cfg.get("concentration")
 
 
+@unit
+def t_limits_json_carries_calibrated_for():
+    """Multi-manager Phase 3: limits.json discloses which book its thresholds were tuned for --
+    additive field, doesn't restructure the flat limit set into per-book sets."""
+    import risk_api
+    cfg = risk_api._load_limits()
+    assert cfg.get("calibrated_for") == "Soros", cfg.get("calibrated_for")
+
+
+
+
 # --------------------------------------------------------------------------- INTEG
 @integ
 def t_limits_endpoint_configured():
@@ -93,6 +104,28 @@ def t_limits_evaluates_book_var():
     if var["value"] is not None:                          # green/amber/breach (not unknown)
         assert var["status"] != "unknown"
         assert abs(var["headroom"] - (var["limit"] - var["value"])) < 1e-9, var
+
+
+@integ
+def t_limits_calibration_disclosure():
+    """Multi-manager Phase 3: /limits discloses which book the thresholds were calibrated for,
+    additive to the pre-existing response shape (date/set/book/status/checks unchanged).
+    Requesting the calibrated book (default Soros) carries no cross-book flag; any other book
+    is flagged with a non-empty human-readable note, and status/checks still compute normally
+    (this is a DISCLOSURE, not a refusal -- /limits still evaluates the numbers, just against
+    another book's thresholds, which the RAG verdict now says out loud)."""
+    import requests
+    base = requests.get(f"{API}/limits", timeout=30).json()
+    assert base["calibrated_for"] == "Soros", base
+    assert base["cross_book_thresholds"] is False, base
+    assert base["calibration_note"] is None, base
+    other = requests.get(f"{API}/limits", params={"book": "Bridgewater"}, timeout=30).json()
+    assert other["calibrated_for"] == "Soros", other
+    assert other["cross_book_thresholds"] is True, other
+    assert other["calibration_note"] and "Bridgewater" in other["calibration_note"], other
+    # shape is still backward compatible -- every pre-Phase-3 field is present
+    for k in ("date", "set", "book", "status", "configured", "checks", "breaches"):
+        assert k in other, (k, other)
 
 
 @integ

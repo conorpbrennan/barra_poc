@@ -83,6 +83,42 @@ def t_buffer_hysteresis():
 
 
 @unit
+def t_held_positions_scoped_to_one_book():
+    """Multi-manager Phase 3: `_held_positions` (which `run()`'s held_map now delegates to) must
+    only count the REQUESTED book's holdings, not every manager's. Regression guard for the
+    pre-fix bug where `held_map` had no Book filter at all -- with >1 book that silently meant
+    'held by ANY manager'."""
+    pos = pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-31", "2024-01-31", "2024-01-31", "2024-02-29"]),
+        "Book": ["Soros", "Soros", "Bridgewater", "Soros"],
+        "Position": ["AAA", "BBB", "CCC", "AAA"],
+    })
+    soros_held = uf._held_positions(pos, "Soros")
+    bw_held = uf._held_positions(pos, "Bridgewater")
+    any_held = uf._held_positions(pos, None)
+    assert soros_held == {(pd.Timestamp("2024-01-31"), "AAA"), (pd.Timestamp("2024-01-31"), "BBB"),
+                          (pd.Timestamp("2024-02-29"), "AAA")}, soros_held
+    assert bw_held == {(pd.Timestamp("2024-01-31"), "CCC")}, bw_held
+    assert ("CCC" in {p for _, p in soros_held}) is False      # Soros never sees Bridgewater's name
+    assert any_held == soros_held | bw_held                    # None = the old (buggy) any-book union
+    assert any_held != soros_held                               # proves the two really differ
+
+
+@unit
+def t_run_book_param_default_matches_single_book_behaviour():
+    """`run`'s new `book="Soros"` default must reproduce the OLD unfiltered behaviour exactly on
+    single-book data (today's production positions.parquet has only ever held "Soros") — i.e. the
+    Phase-3 fix is a no-op for today's data, only a no-op-that-becomes-necessary once a second book
+    exists."""
+    pos_single_book = pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-31", "2024-02-29"]),
+        "Book": ["Soros", "Soros"],
+        "Position": ["AAA", "BBB"],
+    })
+    assert uf._held_positions(pos_single_book, "Soros") == uf._held_positions(pos_single_book, None)
+
+
+@unit
 def t_funnel_counts_reconcile():
     d = pd.DataFrame({
         "stage_dropped": ["size", "history", "data unavailable", None, None, "stability buffer"],
@@ -127,6 +163,20 @@ def t_funnel_accepts_date():
     d = series[0]["month"]
     j = requests.get(f"{API}/funnel", params={"date": d}, timeout=60).json()
     assert j["selected_date"] == d
+
+
+@integ
+def t_funnel_book_guard():
+    """Multi-manager Phase 3: the artifact is single-book. Default book (Soros, today's covered
+    book) is UNCHANGED (normal series shape, no status field); any other book comes back as a
+    clean book_mismatch status instead of silently wrong data."""
+    import requests
+    base = requests.get(f"{API}/funnel", timeout=60).json()
+    assert "status" not in base and base["series"], base           # unchanged for the covered book
+    mism = requests.get(f"{API}/funnel", params={"book": "Bridgewater"}, timeout=60).json()
+    assert mism["status"] == "book_mismatch", mism
+    assert mism["requested_book"] == "Bridgewater" and mism["artifact_book"] == "Soros", mism
+    assert mism["reason"], mism
 
 
 def main():

@@ -379,6 +379,92 @@ def t_stress_correlation_mode():
     assert abs(cs["base_var99_normal"] - 2.326 * cs["base_vol_1d"]) < 1e-12
 
 
+# ------------------------------------------------------ multi-manager Phase 3: single-book guards
+@integ
+def t_pnl_attribution_book_guard():
+    """pnl_attribution.parquet is single-book (barra_pnl_attribution.py's default run() call).
+    Default book (Soros) is UNCHANGED across all four endpoints; any other book comes back as a
+    clean book_mismatch status (HTTP 200, never a 500) instead of silently showing Soros's PnL
+    under another manager's label."""
+    import requests
+    eps = {"/pnl_attribution": {}, "/pnl_attribution/residual": {},
+           "/pnl_attribution/linkage": {}, "/pnl_attribution/names": {}}
+    for ep in eps:
+        base = requests.get(f"{API}{ep}", timeout=60).json()
+        assert "status" not in base or base.get("status") != "book_mismatch", (ep, base)
+        mism = requests.get(f"{API}{ep}", params={"book": "AQR"}, timeout=60).json()
+        assert mism.get("status") == "book_mismatch", (ep, mism)
+        assert mism["requested_book"] == "AQR" and mism["artifact_book"] == "Soros", (ep, mism)
+        assert mism["kind"] == "pnl_attribution", (ep, mism)
+
+
+@integ
+def t_book_independent_measures_inert_with_one_book():
+    """Factor contribution / Specific PnL / Realized PnL are book-independent by a known atoti
+    limitation (see barra_factor_risk_cube.py); the /pivot guard added in Phase 3 must be a NO-OP
+    with today's single-book data -- t_cube_measures_foot above already proves these measures are
+    reachable and correct at book level, this just pins that the guard itself doesn't fire."""
+    import requests
+    q = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
+         "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
+    r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
+    assert r.status_code == 200, r.text
+
+
+@unit
+def t_book_independent_measures_guarded_when_multi_book():
+    """UNIT (no backend): with >1 book loaded on the live frames, _validate_pivot must reject the
+    three book-independent measures with a clear message pointing at the per-book alternative --
+    and this must propagate to /analysis and /ask automatically since they call the same guard
+    (see risk_api.py's _validate_pivot docstring). A non-book-independent measure (Net exposure)
+    must still be allowed under the same multi-book condition -- the guard is scoped to the three
+    named measures only, not a blanket multi-book lockout."""
+    import risk_api
+    import pandas as pd
+    saved = risk_api.S.get("frames")
+    risk_api.S["frames"] = {"positions": pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]),
+        "Book": ["AQR", "Bridgewater"], "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
+    })}
+    try:
+        assert risk_api._multi_book_cube() is True
+        for meas in risk_api.BOOK_INDEPENDENT_MEASURES:
+            try:
+                risk_api._validate_pivot(["Position"], [], [meas], {})
+                assert False, f"{meas} should have been rejected with >1 book loaded"
+            except risk_api.HTTPException as e:
+                assert e.status_code == 400
+                assert "book-independent" in e.detail and "barra_pnl_attribution.py" in e.detail, e.detail
+        risk_api._validate_pivot(["Position"], [], ["Net exposure"], {})   # must NOT raise
+    finally:
+        if saved is not None:
+            risk_api.S["frames"] = saved
+        else:
+            risk_api.S.pop("frames", None)
+
+
+@unit
+def t_book_independent_measures_allowed_with_one_book():
+    """UNIT: the guard is conditional on >1 book -- with exactly one (today's real shape), the
+    three measures pass _validate_pivot untouched, matching pre-Phase-3 behaviour exactly."""
+    import risk_api
+    import pandas as pd
+    saved = risk_api.S.get("frames")
+    risk_api.S["frames"] = {"positions": pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-31"]), "Book": ["Soros"], "Position": ["p1"],
+        "Weight": [1.0],
+    })}
+    try:
+        assert risk_api._multi_book_cube() is False
+        for meas in risk_api.BOOK_INDEPENDENT_MEASURES:
+            risk_api._validate_pivot(["Position"], [], [meas], {})   # must NOT raise
+    finally:
+        if saved is not None:
+            risk_api.S["frames"] = saved
+        else:
+            risk_api.S.pop("frames", None)
+
+
 def main():
     p = f = 0
 

@@ -157,8 +157,26 @@ def name_metrics(px: pd.DataFrame, funda: pd.DataFrame, months: pd.DatetimeIndex
     return out
 
 
+def _held_positions(pos: pd.DataFrame, book: str | None) -> set:
+    """(Date, Position) pairs held by `book` (or by ANY book if `book` is None). Pure / no I/O so
+    it's unit-testable without the network or a real positions.parquet -- split out specifically
+    to catch a cross-book regression (see `run`'s `book` docstring): with >1 book present, calling
+    this with `book=None` mixes every manager's holdings into one set, which is exactly the bug
+    Phase 3 fixed `run`'s default away from."""
+    p = pos if book is None else pos[pos["Book"] == book]
+    return {(pd.Timestamp(d), pp) for d, pp in zip(p["Date"], p["Position"])}
+
+
 # --------------------------------------------------------------------------- build
-def run(write: bool = True) -> dict:
+def run(write: bool = True, book: str | None = "Soros") -> dict:
+    """`book` scopes the `held` / `held_survivors` flag to ONE manager's positions (multi-manager
+    Phase 3, 2026-07-30). Default "Soros" reproduces today's behaviour exactly on today's
+    single-book `positions.parquet` (every row's Book is already "Soros", so filtering to it is a
+    no-op). With more than one book loaded, filtering is NOT optional: the old unfiltered
+    `held_map` silently meant "held by ANY manager", corrupting the held/held_survivors counts
+    into a cross-book union nobody asked for. Pass `book=None` to explicitly opt back into that
+    old any-book union (kept only as an escape hatch, not a default -- no caller in this repo
+    uses it)."""
     cfg = load_cfg()
     print("[funnel] loading frames + PIT S&P 500 history ...", flush=True)
     sec = pd.read_parquet(OUT / "securities.parquet")
@@ -172,7 +190,7 @@ def run(write: bool = True) -> dict:
              .rename("n_descriptors").reset_index())
     ndesc_map = {(pd.Timestamp(d), p): int(n) for d, p, n in
                  zip(ndesc["Date"], ndesc["Position"], ndesc["n_descriptors"])}
-    held_map = {(pd.Timestamp(d), p) for d, p in zip(pos["Date"], pos["Position"])}
+    held_map = _held_positions(pos, book)
 
     # in-universe S&P 500 names = securities whose canon ticker is ever in the PIT S&P 500
     ever = set().union(*[m for _, m in hist]) if hist else set()

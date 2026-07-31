@@ -57,10 +57,16 @@ def run(frames: dict | None = None) -> list[dict]:
 
     # --- 3. value ranges -----------------------------------------------------
     pos = f["positions"]
-    wsum = pos.groupby("Date")["Weight"].sum()
+    # Per (Book, Date), not per Date: weights are normalised WITHIN a book, so once the
+    # multi-manager build put 11 books in the frame a per-Date sum totals 11.0 and this check
+    # FAILed on every date -- a false alarm on correct data.
+    _wkeys = ["Book", "Date"] if "Book" in pos.columns else ["Date"]
+    wsum = pos.groupby(_wkeys)["Weight"].sum()
     bad = wsum[(wsum - 1.0).abs() > 1e-6]
-    check("FAIL" if len(bad) else "PASS", "positions: weights sum to 1.0 per date",
-          f"{len(bad)} bad dates" if len(bad) else f"{len(wsum)} dates, max |err| {(wsum-1).abs().max():.1e}")
+    _label = "per (book, date)" if len(_wkeys) == 2 else "per date"
+    check("FAIL" if len(bad) else "PASS", f"positions: weights sum to 1.0 {_label}",
+          f"{len(bad)} bad groups" if len(bad) else
+          f"{len(wsum)} groups, max |err| {(wsum-1).abs().max():.1e}")
     neg = (pos["Weight"] < 0).sum()
     check("WARN" if neg else "PASS", "positions: no negative weights (13F is long-only)",
           f"{neg} rows" if neg else "")
@@ -187,16 +193,31 @@ def run(frames: dict | None = None) -> list[dict]:
     # deliberately NaN for these names.
     exp_l, pos_l = f["exposures"], f["positions"]
     d_last = pos_l["Date"].max()
-    held = pos_l[pos_l["Date"] == d_last].groupby("Position")["Weight"].sum()
+    last = pos_l[pos_l["Date"] == d_last]
     ed = exp_l[exp_l["Date"] == exp_l["Date"].max()]
     have = ed.pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first")
     if {"Size", "Value"}.issubset(have.columns):
-        prox = have.index[have["Size"].notna() & have["Value"].isna()]
-        w = float(held[held.index.isin(prox)].sum())
-        n = int(held.index.isin(prox).sum())
+        prox = set(have.index[have["Size"].notna() & have["Value"].isna()])
+        # Weight share is only meaningful WITHIN a book (weights normalise per book), so score
+        # each book and report the worst. Summing across books gave 178.7% — a share above 100%,
+        # which is how this surfaced.
+        if "Book" in last.columns and last["Book"].nunique() > 1:
+            per = (last.assign(_p=last["Position"].isin(prox))
+                       .groupby("Book").apply(lambda g: g.loc[g["_p"], "Weight"].sum(),
+                                              include_groups=False))
+            w = float(per.max()); worst = str(per.idxmax())
+            n = int(last.loc[last["Book"] == worst, "Position"].isin(prox).sum())
+            # Phrasing note: keep the literal "% of weight" — test_dq.py parses the share out of
+            # this string with r"([\d.]+)% of weight".
+            detail = (f"worst book {worst}: {n} held names, {w:.1%} of weight priced via the "
+                      f"estimation log-ADV fit (median across {len(per)} books {per.median():.1%})")
+        else:
+            held = last.groupby("Position")["Weight"].sum()
+            w = float(held[held.index.isin(prox)].sum())
+            n = int(held.index.isin(prox).sum())
+            detail = f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit"
         check("WARN" if w > 0.25 else "PASS",
-              "size-curve proxy loadings (imputed log-mcap, held book)",
-              f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit")
+              "size-curve proxy loadings (imputed log-mcap, held book)", detail)
 
     return _results
 

@@ -4,27 +4,33 @@ barra_build_frames.py
 Real, all-open data pipeline that produces the frames consumed by the Atoti factor-risk cube
 (barra_factor_risk_cube.py). Everything is free / public-domain:
 
-    positions     -> SEC EDGAR 13F (Soros Fund Management, CIK 0001029160)
+    positions     -> SEC EDGAR 13F (multi-manager -- see MANAGERS; Soros Fund Management, CIK
+                     0001029160, was the original single-book baseline)
     fundamentals  -> SEC EDGAR XBRL company-facts API  (point-in-time, CIK-keyed)
     prices/returns-> Stooq per-symbol daily CSV         (ticker-keyed)
     crosswalk     -> OpenFIGI v3 mapping  (CUSIP -> FIGI/ticker)  +  SEC company_tickers.json
 
 Design (settled with the desk):
   * Leaf = full estimation-universe exposure panel  (Date, Position, Factor) -> Loading.
-  * Soros 13F is a WEIGHT OVERLAY on that leaf, as-of joined (quarterly, lagged by filing date).
+  * Each manager's 13F is a WEIGHT OVERLAY on that leaf, as-of joined PER BOOK (quarterly, lagged
+    by filing date) -- see MANAGERS / build_frames for the multi-manager integration (Phase 1,
+    2026-07-30).
   * Two blocks only: linear factor P&L (factor-return cache) + diagonal specific risk.
   * factor_returns and specific_var are DERIVED from a DAILY cross-sectional regression on
     monthly-updated exposures, not downloaded -- so exposures, factor returns and specific
     risk are duals of one regression, and all scenario VaR numbers are 1-day horizon.
 
-Emits seven frames:
+Emits seven frames (the cube contract) plus an optional eighth (managers, dimension-like, not part
+of the contract -- see Task E notes on MANAGERS):
   exposures        (Date, Position, Factor) -> Loading      <-- GRANULAR LEAF
-  positions        (Date, Book, Position)   -> Weight, MV, ADV <-- Soros overlay (ADV = days-to-liquidate)
+  positions        (Date, Book, Position)   -> Weight, MV, ADV <-- per-manager overlay (ADV = days-to-liquidate)
   securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
   factor_meta      (Factor)                 -> FactorGroup
   factor_returns   (Date, Factor)           -> Return        <-- the shared cache
   specific_var     (Date, Position)         -> SpecificVar   <-- diagonal block
   specific_returns (Date, Position)         -> SpecificReturn <-- daily WLS residual u (PnL attribution)
+  managers         (Book)                   -> CIK, EntityName, FirmType, filing/coverage stats, ETP
+                                                drop disclosure  <-- OPTIONAL 8th frame, dimension-like
 
 NB Position == canonical SecId == FIGI (resolved up front so the cube only joins on SecId).
 
@@ -36,7 +42,7 @@ PRODUCTION CAVEATS (flagged, not hidden):
   - HTTP responses are disk-cached under CACHE_DIR so reruns are cheap and polite.
 """
 from __future__ import annotations
-import io, json, os, time, pathlib, hashlib, threading
+import io, json, os, re, time, pathlib, hashlib, threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 import pandas as pd
@@ -44,13 +50,25 @@ import requests
 
 # --------------------------------------------------------------------------- config
 SEC_UA          = "Conor Brennan conorpbrennan@gmail.com"   # <-- REQUIRED: put a real contact here
-SOROS_CIK       = 1029160
+SOROS_CIK       = 1029160          # kept: barra_build_frames_v1.py and other code import this
+                                    # constant directly (Soros-only, single-CIK). See MANAGERS below
+                                    # for the multi-manager 13F integration (Phase 1, 2026-07-30).
 OPENFIGI_KEY    = os.environ.get("OPENFIGI_KEY") or None   # optional; raises batch/rate limits if set
 CACHE_DIR       = pathlib.Path(__file__).resolve().parent.parent / "tmp"   # repo-local HTTP cache
+DATA_DIR        = pathlib.Path(__file__).resolve().parent.parent / "data"  # production frame output
+# ^ the ONE default output dir every frame-writer (the __main__ block below, and build_frames'
+# own regression_stats.parquet side-write) resolves against unless a caller overrides it via
+# build_frames(out_dir=...). Keeping both writers pointed at this single constant is what makes an
+# override actually redirect ALL outputs, not just the seven frames __main__ writes explicitly.
 START, END      = "2016-01-01", "2026-06-30"   # END = last complete month-end (extended 2026-07-04)
 EWMA_HALFLIFE_D = 63              # trading days, for the specific-variance EWMA (matches v1)
 MCAP_FLOOR      = 1e7             # $10M; below this, shares data is assumed corrupt (see build_exposures)
-UNIVERSE_CAP    = 3500            # safety bound only; the universe is now index-seeded (see SEED_INDEX)
+UNIVERSE_CAP    = 35000           # safety bound only; the universe is now index-seeded (see SEED_INDEX).
+                                  # Raised 2026-07-30 (multi-manager Phase 1): sec.head(UNIVERSE_CAP) is
+                                  # ORDER-DEPENDENT and silently truncates -- the measured union of held
+                                  # CUSIPs across the 11-manager MANAGERS table is ~22,113 (phase0b recon),
+                                  # so the old 3500 cap would have silently dropped the majority of names.
+                                  # 35000 leaves headroom above the measured union.
 UNIVERSE_EXTRA  = []             # add tickers (e.g. an index list) to broaden the estimation universe
 SEED_INDEX      = "sp500"         # seed the estimation cross-section with a market index (None to disable)
 UNCAP_COVERAGE  = True            # estimation/coverage split (Chris's DQ point): standardize on the
@@ -65,6 +83,83 @@ SP500_URL       = ("https://raw.githubusercontent.com/datasets/"
 MARKET_PROXY    = "spy"           # Stooq symbol for the market factor / beta regression
 RATE_PROXY      = "tlt"           # 20y+ Treasury ETF: the RateBeta (duration) descriptor's proxy
 NDX_PROXY       = "qqq"           # Nasdaq-100 ETF: the NdxBeta (mega-complex comovement) proxy
+
+# --------------------------------------------------------------------------- multi-manager 13F (Phase 1)
+# MANAGERS: one row per BOOK. "cik" is a single int, or a tuple of ints for a manager that renamed/
+# re-filed under a new legal entity (the FIRST cik in the tuple is the CURRENT entity and wins on any
+# report_date both cover -- see stitch_multi_cik). CIKs verified by phase0-recon (exact-name EDGAR
+# entity match + rejected-alternates check, see scratchpad/phase0-recon.md); measured per-manager
+# scale by phase0b (2026-07-30, positions_from_13f on `filings.recent` only, i.e. BEFORE the Task B
+# pagination fix below -- Renaissance/Citadel's true history is deeper than these counts show):
+#
+#   book          filings  cusips_all  latest_cusips  latest_value   etf_wb  (recent-only, pre-pagination)
+#   Soros              52       2,461            229    $5.53bn          10
+#   Bridgewater        52       2,293            993    $22.40bn         13
+#   Citadel            41      17,921          5,960    $138.7bn       1,100
+#   Millennium         52      13,668          3,735    $127.7bn         111
+#   Renaissance        26       8,619          3,213    $63.93bn         199
+#   AQR                52       7,420          3,739    $218.4bn         380
+#   TwoSigma           52       9,602          3,593    $117.1bn         155
+#   DEShaw             52      10,084          3,102    $119.0bn         128
+#   Point72            46       5,707          1,904    $54.89bn          60
+#   TigerGlobal        52         443             54    $22.85bn           0
+#   Elliott (current)  25         107             17    $15.90bn           0   CIK 1791786, 2020-03-31 on
+#   Elliott (pred.)    30         277              1    $0               0   CIK 1048445, dormant by 2026
+#
+# Two Sigma Advisers LP (CIK 1478735) is DELIBERATELY EXCLUDED -- measured (phase0b) latest table is
+# 1 name at $0 (dormant, same pattern as Elliott's predecessor once superseded) and its full-history
+# CUSIP set adds only 7 incremental CUSIPs over what Two Sigma Investments (1179392) already
+# contributes. Not a second book, not an oversight -- do not add it back without re-measuring.
+MANAGERS = [
+    {"book": "Soros",       "cik": 1029160,
+     "name": "Soros Fund Management LLC",              "type": "Long/short equity"},
+    {"book": "Bridgewater", "cik": 1350694,
+     "name": "Bridgewater Associates, LP",              "type": "Global macro"},
+    {"book": "Citadel",     "cik": 1423053,
+     "name": "Citadel Advisors LLC",                    "type": "Multi-strategy"},
+    {"book": "Millennium",  "cik": 1273087,
+     "name": "Millennium Management LLC",               "type": "Multi-strategy"},
+    {"book": "Renaissance", "cik": 1037389,
+     "name": "Renaissance Technologies LLC",            "type": "Systematic quant"},
+    {"book": "AQR",         "cik": 1167557,
+     "name": "AQR Capital Management LLC",              "type": "Systematic quant / factor"},
+    {"book": "TwoSigma",    "cik": 1179392,
+     "name": "Two Sigma Investments, LP",                "type": "Systematic quant"},
+    {"book": "DEShaw",      "cik": 1009207,
+     "name": "D. E. Shaw & Co., Inc.",                   "type": "Multi-strategy quant"},
+    {"book": "Point72",     "cik": 1603466,
+     "name": "Point72 Asset Management, L.P.",           "type": "Multi-strategy"},
+    {"book": "TigerGlobal", "cik": 1167483,
+     "name": "Tiger Global Management LLC",              "type": "Long/short equity - growth"},
+    {"book": "Elliott",     "cik": (1791786, 1048445),    # current, predecessor -- see stitch_multi_cik
+     "name": "Elliott Investment Management L.P. (current) / Elliott Management Corp (predecessor)",
+     "type": "Event-driven / activist"},
+]
+ACTIVE_MANAGERS: list[str] | None = None
+# ^ None = run every book in MANAGERS (the eventual default). Set to a list of "book" names (e.g.
+# ["Soros", "TigerGlobal"]) to scope build_frames() to a subset -- used for the Phase-1 2-manager
+# verification build so a full 11-manager pull isn't required to test the plumbing.
+
+DROP_ETPS = True
+# Exclude ETF / index-fund / commodity-crypto-trust rows from every manager's 13F book. Measured
+# value share on the latest filing (phase0b recon, word-boundary matched): Bridgewater 24.5%,
+# Millennium 11.7%, Citadel 6.7% -- these vehicles carry no XBRL fundamentals and no sector, so they
+# would produce meaningless cross-sectional style/industry loadings (an ETF IS a diversified slice of
+# the market, not a single-name factor bet, and Barra-style descriptors are not well-defined for it).
+# Matched on WORD BOUNDARIES, never substring -- a naive substring match flags "NETFLIX" for "ETF".
+# This list deliberately does NOT include bare TRUST, PORTFOLIO or FUND tokens: real operating
+# companies carry those words in their legal names (MEDICAL PROPERTIES TRUST, KITE REALTY GROUP
+# TRUST, AMERICOLD REALTY TRUST, REDWOOD TRUST, CONSUMER PORTFOLIO SVCS, ALTISOURCE PORTFOLIO
+# SOLUTIONS are all real REITs/operating companies seen in the recon sample) -- only brand names /
+# phrases that are ALWAYS a pooled vehicle in EDGAR issuer-name conventions are listed. "INVESCO" is
+# deliberately scoped to "INVESCO QQQ" (the flagship ETF trust), not bare "INVESCO", because Invesco
+# Ltd (ticker IVZ) is itself a real operating company that could legitimately be HELD as a stock.
+_ETP_TOKENS = [
+    r"\bETF\b", r"\bSPDR\b", r"\bISHARES\b", r"\bVANGUARD\b", r"\bVANECK\b",
+    r"\bPROSHARES\b", r"\bKRANESHARES\b", r"\bDIREXION\b", r"\bGRAYSCALE\b", r"\bBITWISE\b",
+    r"\bSELECT SECTOR\b", r"\bINVESCO QQQ\b", r"\bINDEX FDS?\b", r"\bTIDAL TRUST\b",
+]
+_ETP_RE = re.compile("|".join(_ETP_TOKENS))
 
 # Growth dropped 2026-07-04: |t|>2 on only 9% of regression days (the admission bar)
 # and a loading on only 21.3% of held weight (asset-growth needs two XBRL vintages).
@@ -334,14 +429,42 @@ def countries_for_ciks(ciks) -> pd.DataFrame:
     return pd.DataFrame([res[c] for c in uniq])
 
 
-# --------------------------------------------------------------------------- 1. Soros 13F positions
-def positions_from_13f(cik: int) -> pd.DataFrame:
-    """Parse every 13F-HR information table for `cik` into (report_date, cusip, issuer, shares, value)."""
+# --------------------------------------------------------------------------- 1. 13F positions (multi-manager)
+_FILING_COLS = ("form", "accessionNumber", "filingDate", "reportDate", "primaryDocument")
+
+
+def _13FHR_filings_all(cik: int) -> pd.DataFrame:
+    """All 13F-HR filing metadata for `cik`: `filings.recent` PLUS every `filings.files` pagination
+    block, de-duplicated by accessionNumber. SEC caps `recent` at ~1000 entries of ANY form type, so
+    a CIK with heavy non-13F filing volume can have its older 13F-HRs pushed out of `recent` into the
+    paginated blocks even though it filed 13F-HR continuously (measured: Renaissance's `recent` alone
+    starts 2019-12-31, missing 2016-2019 entirely; Citadel's misses the first ~6 weeks of 2016 -- see
+    scratchpad/phase0-recon.md Task B). Uses the same cached `_get_json` as everything else, so a
+    rerun costs nothing extra."""
     sub = _get_json(f"https://data.sec.gov/submissions/CIK{cik:010d}.json")
     recent = sub["filings"]["recent"]
-    f = pd.DataFrame({k: recent[k] for k in
-                      ("form", "accessionNumber", "filingDate", "reportDate", "primaryDocument")})
-    f = f[f["form"] == "13F-HR"]
+    frames = [pd.DataFrame({k: recent[k] for k in _FILING_COLS})]
+    for blk in sub["filings"].get("files", []):
+        url = f"https://data.sec.gov/submissions/{blk['name']}"
+        try:
+            data = _get_json(url)
+        except Exception:
+            continue
+        if not isinstance(data, dict) or "form" not in data:
+            continue
+        fb = pd.DataFrame({k: data.get(k, [None] * len(data["form"])) for k in _FILING_COLS})
+        frames.append(fb)
+    allf = pd.concat(frames, ignore_index=True)
+    allf = allf[allf["form"] == "13F-HR"].drop_duplicates(subset="accessionNumber")
+    return allf
+
+
+def positions_from_13f(cik: int) -> pd.DataFrame:
+    """Parse every 13F-HR information table for `cik` (recent + paginated filings.files blocks)
+    into (report_date, cusip, issuer, shares, value). Return contract is unchanged from the
+    single-CIK, recent-only version -- only the ROW set grows (older filings recovered via
+    pagination); no new columns."""
+    f = _13FHR_filings_all(cik)
     rows = []
     for _, r in f.iterrows():
         acc_nodash = r["accessionNumber"].replace("-", "")
@@ -382,26 +505,145 @@ def _parse_infotable(xml_bytes: bytes, report_date: str, filing_date: str) -> li
     return out
 
 
+def stitch_multi_cik(dfs: list[pd.DataFrame]) -> pd.DataFrame:
+    """Concatenate positions_from_13f frames for CIKs that are really ONE manager (an entity
+    rename/re-filing, e.g. Elliott's 2020 transition from CIK 1048445 to 1791786). `dfs` are given
+    in PREFERENCE order -- the first entity wins on any report_date the others also cover. Pure /
+    no network, so it's independently unit-testable against the documented Elliott overlap (both
+    CIKs filed for 2020-03-31, 2020-06-30, 2020-09-30)."""
+    out, covered = [], set()
+    for df in dfs:
+        if df is None or df.empty:
+            continue
+        keep = df[~df["report_date"].isin(covered)]
+        if not keep.empty:
+            out.append(keep)
+        covered |= set(df["report_date"].unique())
+    if not out:
+        return pd.DataFrame(columns=["report_date", "filing_date", "issuer", "cusip",
+                                     "value", "shares", "sshType", "putCall"])
+    return pd.concat(out, ignore_index=True)
+
+
+def _is_etp_issuer(issuer) -> bool:
+    """Word-boundary ETP/fund-vehicle match on a 13F issuer name. See DROP_ETPS above for the
+    token-selection rationale and the false-positive cases (REITs/operating cos named *TRUST /
+    *PORTFOLIO) it's deliberately tuned to avoid."""
+    return bool(_ETP_RE.search((issuer or "").upper()))
+
+
+def filter_etps(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Drop ETP/fund-like rows (see DROP_ETPS) from a positions_from_13f-shaped frame. Returns
+    (kept_df, disclosure) -- the drop is NEVER silent; disclosure carries both the full-history drop
+    counts and a latest-filing value share (a stable "how much of TODAY's book is ETPs" snapshot,
+    matching how phase0b recon measured it -- an all-history value share would be diluted by a
+    decade of size changes and mean less). disclosure is safe to persist even when df is empty."""
+    cols = ["report_date", "filing_date", "issuer", "cusip", "value", "shares", "sshType", "putCall"]
+    if df.empty:
+        return df, {"latest_report_date": None, "n_dropped_rows_all_history": 0,
+                    "n_dropped_cusips_all_history": 0, "n_dropped_latest": 0,
+                    "dropped_value_latest": 0.0, "total_value_latest": 0.0,
+                    "dropped_value_share_latest": 0.0}
+    if not DROP_ETPS:
+        latest = df["report_date"].max()
+        return df, {"latest_report_date": str(latest.date()), "n_dropped_rows_all_history": 0,
+                    "n_dropped_cusips_all_history": 0, "n_dropped_latest": 0,
+                    "dropped_value_latest": 0.0,
+                    "total_value_latest": float(df.loc[df["report_date"] == latest, "value"].sum()),
+                    "dropped_value_share_latest": 0.0}
+    is_etp = df["issuer"].apply(_is_etp_issuer)
+    latest = df["report_date"].max()
+    ldf = df[df["report_date"] == latest]
+    l_is_etp = ldf["issuer"].apply(_is_etp_issuer)
+    total_value_latest = float(ldf["value"].sum())
+    dropped_value_latest = float(ldf.loc[l_is_etp, "value"].sum())
+    disclosure = {
+        "latest_report_date": str(latest.date()),
+        "n_dropped_rows_all_history": int(is_etp.sum()),
+        "n_dropped_cusips_all_history": int(df.loc[is_etp, "cusip"].nunique()),
+        "n_dropped_latest": int(l_is_etp.sum()),
+        "dropped_value_latest": dropped_value_latest,
+        "total_value_latest": total_value_latest,
+        "dropped_value_share_latest": (dropped_value_latest / total_value_latest
+                                       if total_value_latest else 0.0),
+    }
+    return df.loc[~is_etp, cols].copy(), disclosure
+
+
 # --------------------------------------------------------------------------- 2. OpenFIGI crosswalk
+# --- persistent per-CUSIP crosswalk ----------------------------------------------------
+# The HTTP cache cannot protect the crosswalk. `_post_json` keys on url+BODY, and the bodies here
+# are batches cut from `sorted(set(cusips))` -- so changing the universe (adding a manager, say)
+# re-cuts every batch, misses every key, and re-asks OpenFIGI live. That matters because OpenFIGI
+# ANSWERS DRIFT: measured 2026-07-30, the 11-manager build lost 6 real Soros holdings worth 7.1%
+# of the book (Honeywell, Chart Industries, Clearwater, Select Medical, DuPont, National Storage)
+# purely because CUSIPs that resolved for the single-book build now return "No identifier found".
+# So resolutions are cached PER CUSIP and a positive answer is never overwritten by a later
+# negative -- a name that resolved once stays resolved, and rebuilds stop silently deleting
+# holdings. Negatives are stored too but always re-queried (cheap: ~180 batches, under a minute
+# with a key), so a genuinely new listing can still resolve on a later run.
+_XWALK_CACHE = CACHE_DIR / "cusip_crosswalk.json"
+
+def _load_xwalk() -> dict:
+    """Persistent cusip -> {figi, ticker, name}. Seeded from the last built securities frame so
+    the mapping survives even a cold `tmp/`."""
+    m: dict = {}
+    if _XWALK_CACHE.exists():
+        try:
+            m = json.loads(_XWALK_CACHE.read_text())
+        except Exception:
+            m = {}
+    sec_p = DATA_DIR / "securities.parquet"
+    if sec_p.exists():
+        try:
+            s = pd.read_parquet(sec_p)
+            for cu, fg, tk in zip(s["CUSIP"], s["Position"], s["Ticker"]):
+                cu = str(cu).upper().strip()
+                if cu and pd.notna(fg) and not (m.get(cu) or {}).get("figi"):
+                    m[cu] = {"figi": str(fg), "ticker": str(tk or "").lower(), "name": None}
+        except Exception:
+            pass
+    return m
+
+def _save_xwalk(m: dict) -> None:
+    _XWALK_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    _XWALK_CACHE.write_text(json.dumps(m, sort_keys=True))
+
 def crosswalk_cusips(cusips: list[str]) -> pd.DataFrame:
-    """CUSIP -> FIGI/ticker via OpenFIGI v3. Batches of 10 (no key) / 100 (with key)."""
+    """CUSIP -> FIGI/ticker via OpenFIGI v3. Batches of 10 (no key) / 100 (with key).
+
+    Only CUSIPs with no POSITIVE cached resolution are sent; see the _XWALK_CACHE note above."""
     url = "https://api.openfigi.com/v3/mapping"
     hdr = {"Content-Type": "application/json"}
     if OPENFIGI_KEY:
         hdr["X-OPENFIGI-APIKEY"] = OPENFIGI_KEY
     batch = 100 if OPENFIGI_KEY else 10
-    rows = []
     uniq = sorted(set(c for c in cusips if c))
-    for i in range(0, len(uniq), batch):
-        chunk = uniq[i:i + batch]
+    cache = _load_xwalk()
+    todo = [c for c in uniq if not (cache.get(c) or {}).get("figi")]
+    print(f"  crosswalk: {len(uniq)} cusips, {len(uniq) - len(todo)} already resolved, "
+          f"{len(todo)} to query", flush=True)
+    kept = 0
+    for i in range(0, len(todo), batch):
+        chunk = todo[i:i + batch]
         jobs = [{"idType": "ID_CUSIP", "idValue": c, "exchCode": "US"} for c in chunk]
         resp = json.loads(_post_json(url, jobs, headers=hdr,
                                      sleep=0.3 if OPENFIGI_KEY else 2.6))  # respect 25/min unauth limit
         for c, res in zip(chunk, resp):
             d = (res.get("data") or [{}])[0]
-            rows.append({"cusip": c, "figi": d.get("compositeFIGI") or d.get("figi"),
-                         "ticker": (d.get("ticker") or "").lower(), "name": d.get("name")})
-    return pd.DataFrame(rows)
+            figi = d.get("compositeFIGI") or d.get("figi")
+            if figi:
+                cache[c] = {"figi": figi, "ticker": (d.get("ticker") or "").lower(),
+                            "name": d.get("name")}
+            elif (cache.get(c) or {}).get("figi"):
+                kept += 1                      # live says "not found", cache says otherwise: keep
+            else:
+                cache.setdefault(c, {"figi": None, "ticker": "", "name": None})
+    _save_xwalk(cache)
+    if kept:
+        print(f"  crosswalk: kept {kept} cached resolutions OpenFIGI no longer returns", flush=True)
+    empty = {"figi": None, "ticker": "", "name": None}
+    return pd.DataFrame([{"cusip": c, **(cache.get(c) or empty)} for c in uniq])
 
 def ticker_to_cik() -> pd.DataFrame:
     j = _get_json("https://www.sec.gov/files/company_tickers.json")
@@ -882,11 +1124,62 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
 
 
 # --------------------------------------------------------------------------- 7. orchestrator
-def build_frames():
+def _pull_manager_positions(mgr: dict) -> tuple[pd.DataFrame, dict]:
+    """Pull, stitch (multi-CIK rename), and ETP-filter ONE manager's full 13F history. Returns
+    (kept_df with a Book column added, per-manager stats dict for the managers.parquet frame --
+    n_positions_distinct is filled in later by the caller, once the coverage-universe crosswalk +
+    as-of join exist)."""
+    ciks = mgr["cik"] if isinstance(mgr["cik"], tuple) else (mgr["cik"],)
+    dfs = [positions_from_13f(c) for c in ciks]
+    stitched = stitch_multi_cik(dfs)
+    kept, etp_disc = filter_etps(stitched)
+    kept = kept.copy()
+    kept["Book"] = mgr["book"]
+    stats = {
+        "Book": mgr["book"],
+        "CIK": ",".join(str(c) for c in ciks),
+        "EntityName": mgr["name"],
+        "FirmType": mgr["type"],
+        "first_filing_date": (str(stitched["report_date"].min().date())
+                              if not stitched.empty else None),
+        "last_filing_date": (str(stitched["report_date"].max().date())
+                             if not stitched.empty else None),
+        "n_filings": int(kept["report_date"].nunique()) if not kept.empty else 0,
+        "n_distinct_cusips_parsed": int(kept["cusip"].nunique()) if not kept.empty else 0,
+        **etp_disc,
+    }
+    return kept, stats
+
+
+def build_frames(out_dir=None):
+    """`out_dir` (optional) redirects the ONE side-effect write this function makes directly —
+    regression_stats.parquet — away from the production `DATA_DIR`. Defaults to `DATA_DIR`
+    (unchanged behaviour for a real intentional build run via `__main__`). A scoped/verification
+    caller that builds frames in-process (not through `__main__`) and writes the returned
+    DataFrames somewhere else MUST also pass `out_dir` here, or this side-write will still land
+    in the real `data/` dir regardless of where the caller sends the other eight frames — this
+    bit it once (see PROJECT_HISTORY / phase notes)."""
+    _out_dir = pathlib.Path(out_dir) if out_dir is not None else DATA_DIR
     cal = pd.date_range(START, END, freq="ME")          # monthly leaf calendar
 
     # --- positions + identity resolution -----------------------------------
-    pos13f = positions_from_13f(SOROS_CIK)
+    managers = [m for m in MANAGERS if (ACTIVE_MANAGERS is None or m["book"] in ACTIVE_MANAGERS)]
+    if not managers:
+        raise ValueError(f"ACTIVE_MANAGERS={ACTIVE_MANAGERS!r} matched none of MANAGERS")
+    print(f"managers: {[m['book'] for m in managers]}", flush=True)
+    pos_frames, mgr_stats = [], []
+    for mgr in managers:
+        print(f"  pulling 13F: {mgr['book']} (CIK {mgr['cik']}) ...", flush=True)
+        kept, stats = _pull_manager_positions(mgr)
+        pos_frames.append(kept)
+        mgr_stats.append(stats)
+        print(f"  {mgr['book']}: {stats['n_filings']} filings, "
+              f"{stats['n_distinct_cusips_parsed']} distinct cusips parsed, "
+              f"ETP drop {stats['n_dropped_latest']} rows / "
+              f"{stats['dropped_value_share_latest']:.1%} of latest filing value", flush=True)
+    pos13f = (pd.concat(pos_frames, ignore_index=True) if pos_frames else
+             pd.DataFrame(columns=["report_date", "filing_date", "issuer", "cusip", "value",
+                                   "shares", "sshType", "putCall", "Book"]))
     xw = crosswalk_cusips(pos13f["cusip"].tolist())
     t2c = ticker_to_cik()
     # The estimation universe = all 13F-held names (the book's opportunity set, kept whole so the
@@ -894,6 +1187,9 @@ def build_frames():
     # the cross-section a real market rather than the manager's holdings alone; no alphabetical
     # truncation. UNIVERSE_CAP is now only a safety bound. Index names are keyed by ticker (no FIGI)
     # and any already present as a held name are dropped to avoid double-counting one company.
+    # sec is now built from the UNION of every book's held CUSIPs (pos13f spans all managers), so the
+    # coverage universe automatically extends across managers -- is_estimation below still marks
+    # ONLY the S&P 500 seed, independent of which manager(s) hold a name.
     sec = (xw.dropna(subset=["figi", "ticker"])
              .merge(t2c, on="ticker", how="left")
              .dropna(subset=["cik"]).drop_duplicates("figi"))
@@ -939,9 +1235,8 @@ def build_frames():
     # regression-health side artifact (daily weighted R² + per-factor t-stats). Written here,
     # not in __main__, so it exists however build_frames is invoked; the cube never reads it —
     # only /regression does. Not part of the seven-frame contract.
-    _out = pathlib.Path(__file__).resolve().parent.parent / "data"
-    _out.mkdir(exist_ok=True)
-    reg_stats.to_parquet(_out / "regression_stats.parquet", index=False)
+    _out_dir.mkdir(parents=True, exist_ok=True)
+    reg_stats.to_parquet(_out_dir / "regression_stats.parquet", index=False)
     # Add Market as a LEAF loading of 1.0 for every (Date, Position). In v2 Market is the
     # cross-sectional regression intercept, so each name loads exactly 1.0 on it and a
     # fully-invested book (weights sum to 1) has unit market exposure. Done AFTER regress_factors
@@ -964,19 +1259,26 @@ def build_frames():
                 [["Date", "Position", "Factor", "Loading"]])
     exposures = pd.concat([exposures, ind_load], ignore_index=True)
 
-    # --- Soros weights, as-of joined onto the monthly calendar -------------
-    # Each calendar date carries exactly the latest filing's book: the as-of join
-    # picks the filing, then an inner join takes only names in *that* filing —
-    # positions exited in a newer filing expire instead of persisting forever.
+    # --- per-book weights, as-of joined onto the monthly calendar ----------
+    # Each calendar date carries exactly the latest filing's book: the as-of join picks the filing,
+    # then an inner join takes only names in *that* filing — positions exited in a newer filing
+    # expire instead of persisting forever. Weight is normalised PER (Book, filing_date) so each
+    # manager's own filing sums to 1.0 independent of every other manager. The as-of join is done
+    # PER BOOK (a plain loop, not merge_asof(..., by="Book")) because each manager has its own filing
+    # calendar -- a single global calendar (the old one-shot merge_asof) would silently assign one
+    # manager's filing dates to another once there's more than one book.
     p = pos13f.merge(sec[["cusip", "figi"]], on="cusip", how="inner")
-    p = (p.groupby(["filing_date", "figi"], as_index=False)["value"].sum()
+    p = (p.groupby(["Book", "filing_date", "figi"], as_index=False)["value"].sum()
            .rename(columns={"figi": "Position", "value": "MV"}))   # collapse multi-lot/multi-CUSIP rows
-    p["Weight"] = p.groupby("filing_date")["MV"].transform(lambda v: v / v.sum())
-    filings = pd.DataFrame({"filing_date": np.sort(p["filing_date"].unique())})
-    cal_df = pd.merge_asof(pd.DataFrame({"Date": cal}), filings,
-                           left_on="Date", right_on="filing_date", direction="backward")
-    positions = cal_df.dropna(subset=["filing_date"]).merge(p, on="filing_date")
-    positions["Book"] = "Soros"
+    p["Weight"] = p.groupby(["Book", "filing_date"])["MV"].transform(lambda v: v / v.sum())
+    pos_parts = []
+    for book, pb in p.groupby("Book"):
+        filings_b = pd.DataFrame({"filing_date": np.sort(pb["filing_date"].unique())})
+        cal_b = pd.merge_asof(pd.DataFrame({"Date": cal}), filings_b,
+                              left_on="Date", right_on="filing_date", direction="backward")
+        pos_parts.append(cal_b.dropna(subset=["filing_date"]).merge(pb, on="filing_date"))
+    positions = (pd.concat(pos_parts, ignore_index=True) if pos_parts else
+                pd.DataFrame(columns=["Date", "filing_date", "Book", "Position", "MV", "Weight"]))
     # --- ADV (avg daily $ volume) for days-to-liquidate (Step 11) ----------
     # Per (Date, Position): trailing-63-day mean dollar volume from the cached prices, sampled at each
     # month-end. Carried on the positions frame (held names only) so the API can read days-to-liquidate
@@ -1012,14 +1314,26 @@ def build_frames():
                                 "FactorGroup": (["Market"] + ["Style"] * len(STYLE_FACTORS)
                                                 + ["Industry"] * len(ind_facs))})
 
-    return exposures, positions, securities, factor_meta, factor_returns, specific_var, specific_returns
+    # --- 8th (optional) frame: managers.parquet -----------------------------
+    # One row per Book: CIK(s) used, EDGAR entity name, firm type/strategy, first/last filing date
+    # actually parsed, filing count, distinct-position count (POST crosswalk, i.e. what actually made
+    # it into `positions` -- a more meaningful number than the raw pre-crosswalk CUSIP count also kept
+    # here), and the Task C ETP-drop disclosure. Optional by contract like specific_returns: nothing
+    # else in this builder reads it back, so its absence never breaks anything downstream.
+    managers_df = pd.DataFrame(mgr_stats)
+    n_pos_by_book = positions.groupby("Book")["Position"].nunique().rename("n_positions_distinct")
+    managers_df = managers_df.merge(n_pos_by_book, left_on="Book", right_index=True, how="left")
+    managers_df["n_positions_distinct"] = managers_df["n_positions_distinct"].fillna(0).astype(int)
+
+    return (exposures, positions, securities, factor_meta, factor_returns, specific_var,
+           specific_returns, managers_df)
 
 
 if __name__ == "__main__":
-    frames = build_frames()
+    out = DATA_DIR
+    frames = build_frames(out_dir=out)
     names = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var",
-             "specific_returns"]
-    out = pathlib.Path(__file__).resolve().parent.parent / "data"
+             "specific_returns", "managers"]
     out.mkdir(exist_ok=True)
     for nm, df in zip(names, frames):
         df.to_parquet(out / f"{nm}.parquet", index=False)

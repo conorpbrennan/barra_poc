@@ -53,10 +53,22 @@ def hbar(frac: float, w: int = 110) -> str:
             f'<rect x="{x:.1f}" y="2" width="{px:.1f}" height="8" fill="{color}" opacity="0.75"/></svg>')
 
 
+REPORT_BOOK = "Soros"   # this document is written about ONE manager; see the filter in build()
+
+
 def build() -> None:
     f = load_frames()
     exposures, positions, securities = f["exposures"], f["positions"], f["securities"]
     factor_ret, specific, factor_meta = f["factor_returns"], f["specific_var"], f["factor_meta"]
+
+    # Every count and headline below is prose about REPORT_BOOK's 13F ("Soros filed 52 quarterly
+    # 13F-HR reports ..."), so the frame must be scoped to that book. Unscoped against the
+    # multi-manager build it summed all eleven -- the report claimed 19,593 names held at
+    # 2026-06-30 under Soros's name, and specific vol 1.20% against the true 0.26%.
+    if "Book" in positions.columns and positions["Book"].nunique() > 1:
+        positions = positions[positions["Book"] == REPORT_BOOK]
+        if positions.empty:
+            raise SystemExit(f"no positions for REPORT_BOOK={REPORT_BOOK!r}")
 
     last = positions["Date"].max()
     book = positions[positions["Date"] == last].merge(securities, on="Position")

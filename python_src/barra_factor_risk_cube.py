@@ -3,14 +3,17 @@ barra_factor_risk_cube.py
 =========================
 Atoti factor-risk cube (two-block historical model) + unified scenario/stress layer.
 
-Pairs with barra_build_frames.py. Seven input frames (the 7th is optional — v1 doesn't emit it):
+Pairs with barra_build_frames.py. Seven input frames, plus one optional 8th (Phase 2):
   exposures        (Date, Position, Factor) -> Loading        <-- GRANULAR LEAF
-  positions        (Date, Book, Position)   -> Weight, MV      <-- Soros overlay
+  positions        (Date, Book, Position)   -> Weight, MV      <-- multi-manager 13F overlay
   securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
   factor_meta      (Factor)                 -> FactorGroup
   factor_returns   (Date, Factor)           -> Return          <-- source of every scenario set
   specific_var     (Date, Position)         -> SpecificVar     <-- diagonal block
-  specific_returns (Date, Position)         -> SpecificReturn  <-- daily WLS residual (attribution)
+  specific_returns (Date, Position)         -> SpecificReturn  <-- daily WLS residual (attribution);
+                                                                    v2-only, optional
+  managers         (Book)                   -> CIK, EntityName, FirmType, ETP-drop disclosure;
+                                                                    optional, Phase 2 entity dim
 
 ALL THREE SCENARIO MODES ARE ONE OPERATION:  dPnL = sum_k x_k * df_k
   x_k = aggregated factor exposure (the cube's "Net exposure" at the Factor level)
@@ -28,7 +31,10 @@ import atoti as tt
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 FRAME_NAMES = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var"]
-OPTIONAL_FRAMES = ["specific_returns"]   # v2-only (PnL attribution); v1 data degrades gracefully
+# specific_returns: v2-only (PnL attribution); v1 data degrades gracefully.
+# managers: multi-manager entity metadata (Phase 2, keyed on Book); absent on any build before it
+# existed (incl. all v1 data) -- degrades gracefully, no entity dimension, nothing else affected.
+OPTIONAL_FRAMES = ["specific_returns", "managers"]
 
 # Historical event windows to replay (must fall inside the loaded sample; pre-2016 events need a
 # longer factor-return history -- splice published style-factor returns for those windows).
@@ -145,7 +151,30 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # intermediate for the attribution FactorPnL column (fwd returns baked at load; attribution
     # is deliberately NOT branch-sensitive). Unheld names: Weight join is None -> the product
     # contributes nothing, same as the old fillna(0) column.
-    w = positions[["Date", "Position", "Weight"]]
+    #
+    # KNOWN LIMITATION (Phase 2, multi-manager): FactorPnL/SpecPnL below are BOOK-INDEPENDENT --
+    # exactly as in the single-book (Soros-only) era -- because they are baked physical columns
+    # on tables keyed WITHOUT Book (deliberately: attribution must stay immune to the what-if
+    # trades branch, which lives on the Positions table's `scenarios[...]`, so these columns
+    # cannot read Positions' live/branchable Weight at query time the way Net exposure does).
+    # Making them genuinely per-book would need Book as a SECOND reused hierarchy dual on the
+    # same side table alongside Factor (reused from Exposures) -- tried and reverted: every join
+    # topology (single edge either way, or a two-edge "diamond" mapping Book via Positions AND
+    # Factor via Exposures) left one of the two axes as an unresolvable ambiguous duplicate
+    # hierarchy (`Disambiguate 'Book' to ... [('Positions','Book','Book'), ('FactorPnL','Book',
+    # 'Book')]`), confirmed empirically, not merely suspected. `w` is deduped below to a SINGLE,
+    # deterministic Weight per (Date, Position) (first book alphabetically) purely so the merge
+    # can no longer silently create a duplicate-keyed row for a name held by more than one book
+    # (a genuine data-corruption risk with the raw multi-book Positions frame) -- but the
+    # resulting Factor contribution / Specific PnL / Realized PnL are NOT reliable for per-book
+    # analysis when a name is held by more than one book; they read one arbitrary book's weight
+    # for that name regardless of which Book is sliced. Disclosed, not silently fixed. Follow-up:
+    # either confirm an Atoti-supported way to alias a table's column onto an EXISTING hierarchy
+    # from a different table, or build N book-keyed tables in a loop over the active books.
+    w = (positions[["Date", "Position", "Book", "Weight"]]
+         .sort_values(["Date", "Position", "Book"])
+         .drop_duplicates(subset=["Date", "Position"], keep="first")
+         [["Date", "Position", "Weight"]])
     exposures = exposures.merge(w, on=["Date", "Position"], how="left")
     exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
 
@@ -186,6 +215,9 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # specvar row is reached once per factor leaf -> ~10x inflated variance, observed √10
     # jump in Specific vol). Its measure keeps the OriginScope form below.
 
+    managers = frames.get("managers")
+    has_managers = managers is not None and len(managers) > 0
+
     session = tt.Session.start(tt.SessionConfig(port=port))   # pinned so the UI URL survives restarts
     t_exp = session.read_pandas(exposures,  keys={"Date", "Position", "Factor"}, table_name="Exposures")
     t_pos = session.read_pandas(positions,  keys={"Date", "Book", "Position"},   table_name="Positions")
@@ -196,6 +228,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     t_axis = session.read_pandas(scn_axis,  keys={"ScenarioSet"},                table_name="ScenarioAxis")
     t_sr = (session.read_pandas(spec_pnl, keys={"Date", "Position"}, table_name="SpecificPnL")
             if has_attribution else None)
+    t_mgr = (session.read_pandas(managers, keys={"Book"}, table_name="Managers")
+             if has_managers else None)
 
     t_exp.join(t_pos, (t_exp["Date"] == t_pos["Date"]) & (t_exp["Position"] == t_pos["Position"]))
     t_exp.join(t_sec, t_exp["Position"] == t_sec["Position"])
@@ -207,9 +241,26 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # is selected per (ScenarioSet, Factor); exposures fan across sets but Net exposure is unaffected.
     t_exp.join(t_scn, t_exp["Factor"] == t_scn["Factor"])
     t_scn.join(t_axis, t_scn["ScenarioSet"] == t_axis["ScenarioSet"])   # date axis, one row per set
+    if t_mgr is not None:
+        # Entity metadata for the Book dimension (Phase 2). PARTIAL join on Book only, off the
+        # SAME Positions table whose un-mapped Book key already makes Book a hierarchy -- so this
+        # degrades cleanly when managers.parquet is absent (v1 data / any pre-Phase-2 build has
+        # no entity dimension, nothing else affected).
+        t_pos.join(t_mgr, t_pos["Book"] == t_mgr["Book"])
 
     cube = session.create_cube(t_exp, mode="manual")
     h, l, m = cube.hierarchies, cube.levels, cube.measures
+
+    # Atoti guards a query's accumulated point count; the defaults are intermediate 1,000,000 /
+    # transient 10,000,000. The single-book PoC never came near them, but the multi-manager build
+    # (exposures 1.6M -> 5.7M leaf rows across 11 books) trips the intermediate limit on ordinary
+    # queries -- /dims 500'd on EVERY dimension with
+    #   RetrievalResultSizeException [points size before contribution = 1000000, max limit = 1000000]
+    # taking the whole Pivot lens down with it. These are guards against runaway memory, not
+    # correctness limits, so they are raised to keep the same headroom-to-universe ratio as before
+    # (cube RSS measured at 1.1 GB on this dataset, against 62 GB on the box).
+    cube.shared_context["queriesResultLimit.intermediateLimit"] = 20_000_000
+    cube.shared_context["queriesResultLimit.transientLimit"] = 200_000_000
 
     h["Security"]  = {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
                       "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]}
@@ -227,6 +278,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # partial joins (Positions, Scenarios). In manual cube mode atoti auto-creates their
     # hierarchies once the mapped key columns (Date, Position, Factor) have hierarchies.
     assert {"Book", "ScenarioSet"} <= {n for _, n in h}, sorted(n for _, n in h)
+    # Entity dimension (Phase 2): a SEPARATE hierarchy, not extra levels grafted onto "Book" --
+    # deliberately conservative so the pre-existing, auto-created, single-level "Book" hierarchy
+    # (and every filter/level lookup against it elsewhere, incl. risk_api.py) is untouched. Manager
+    # is 1:1 with Book (same t_pos->t_mgr row), so filtering by either stays consistent. It's never
+    # passed to a lift/OriginScope call, exactly like Book itself -- so it always reads whatever
+    # book is currently sliced, and is blank/ambiguous at the no-book grand total (same as any
+    # other book-scoped attribute; see the grand-total note near Net exposure).
+    if t_mgr is not None:
+        h["Manager"] = {"FirmType": t_mgr["FirmType"], "EntityName": t_mgr["EntityName"],
+                        "CIK": t_mgr["CIK"]}
 
     # ---- additive exposures (drill/slice; independent of ScenarioSet) -------------------------
     # MEASURE-LEVEL product of the leaf Loading and the JOINED Positions Weight (see the leaf-
@@ -237,6 +298,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         tt.agg.single_value(t_exp["Loading"]) * tt.agg.single_value(t_pos["Weight"]),
         scope=tt.OriginScope({l["Date"], l["Position"], l["Factor"]}))
     m["Net exposure"].formatter = "DOUBLE[0.000]"
+
+    # ---- entity dimension measures (Phase 2): the managers.parquet disclosure fields, read at
+    # whatever Book is currently sliced (single_value over the Book-keyed Managers table joined
+    # via Positions -- see the Manager hierarchy note above). Blank/ambiguous with no Book slice.
+    if t_mgr is not None:
+        m["Manager ETP dropped value share"] = tt.agg.single_value(t_mgr["dropped_value_share_latest"])
+        m["Manager ETP dropped value share"].formatter = "DOUBLE[0.00%]"
+        m["Manager n filings"] = tt.agg.single_value(t_mgr["n_filings"])
+        m["Manager n positions"] = tt.agg.single_value(t_mgr["n_positions_distinct"])
 
     # ---- ONE scenario engine: aggregate exposure to K factor scalars, scale each factor's shock
     #      vector once, sum K vectors -> P&L vector for the sliced ScenarioSet. (Confirm tt.array.*
@@ -392,6 +462,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #                         specific risk has no factor — use it in by-name/book views.
     #   Realized PnL        — the identity Factor contribution + Specific PnL.
     if t_sr is not None:
+        # KNOWN LIMITATION (Phase 2, multi-manager): book-independent, see the `w` note near the
+        # top of build_cube -- reads ONE arbitrary book's weight for a name held by >1 book.
         m["Factor contribution"] = tt.agg.sum(t_exp["FactorPnL"])
         m["Specific PnL"] = tt.agg.sum(
             tt.agg.single_value(t_sr["SpecPnL"]),

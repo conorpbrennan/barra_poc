@@ -45,6 +45,11 @@ export function Checks() {
           ) : <div className="muted small">no limits configured</div>
         }
       </QueryState>
+      {limits.data?.cross_book_thresholds && limits.data.calibration_note && (
+        <p className="muted small" style={{ maxWidth: "46rem", margin: "0.3rem 0 0" }}>
+          {limits.data.calibration_note}
+        </p>
+      )}
 
       <h2>Data quality</h2>
       <QueryState q={dq}>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { Field } from "../components/ui";
+import type { Manager } from "../api/types";
 
 // Static docs are served by the existing flexagg++ app (kept linking there per §8).
 const DOC_LINKS = [
@@ -10,18 +11,50 @@ const DOC_LINKS = [
   { label: "Model & data reference", href: "/flexagg++/app/static/barra_model_reference.html" },
 ];
 
+// One manager's label: entity_name (+ firm_type) when known, else the bare book code — every
+// field degrades silently when null (today's data has no entity attributes at all).
+function managerLabel(m: Manager): string {
+  if (!m.entity_name) return m.book;
+  return m.firm_type ? `${m.entity_name} · ${m.firm_type}` : m.entity_name;
+}
+
+// The book control (multi-manager Phase 4). Tufte/Few: a control that cannot change anything is
+// chartjunk — with a single book (today's data) this renders as plain text, not a one-option
+// dropdown. Only once a second manager actually exists does it become an interactive selector.
+function BookField({ book, managers, setBook }: {
+  book: string; managers: Manager[]; setBook: (b: string) => void;
+}) {
+  if (managers.length <= 1) {
+    const m = managers[0];
+    const label = m && m.book === book ? managerLabel(m) : book;
+    return (
+      <Field label="Book">
+        <span className="num">{label}</span>
+      </Field>
+    );
+  }
+  return (
+    <Field label="Book">
+      <select value={book} onChange={(e) => setBook(e.target.value)}>
+        {managers.map((m) => (
+          <option key={m.book} value={m.book}>{managerLabel(m)}</option>
+        ))}
+      </select>
+    </Field>
+  );
+}
+
 export function ContextBar() {
-  const { book, date, scenario, dates, scenarioSets, setBook, setDate, setScenario } = useApp();
+  const { book, date, scenario, dates, scenarioSets, managers, setBook, setDate, setScenario } = useApp();
   const [docsOpen, setDocsOpen] = useState(false);
 
   return (
     <div className="contextbar">
-      <span className="title">Soros factor risk</span>
-      <Field label="Book">
-        <select value={book} onChange={(e) => setBook(e.target.value)}>
-          <option value="Soros">Soros</option>
-        </select>
-      </Field>
+      {/* Not "<Book> factor risk": the book is named by BookField immediately to the right, so
+          baking it into the title duplicated it, and hardcoding "Soros" went outright wrong once
+          the multi-manager build put 11 books behind the selector. */}
+      <span className="title">Factor risk</span>
+      <BookField book={book} managers={managers} setBook={setBook} />
       <Field label="As-of">
         <select value={date} onChange={(e) => setDate(e.target.value)} className="num">
           {dates.map((d) => (

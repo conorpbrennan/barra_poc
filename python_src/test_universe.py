@@ -134,6 +134,21 @@ def t_universe_accepts_date():
     assert j["selected_date"] == d and j["latest"]["report_date"] == d
 
 
+@integ
+def t_universe_book_guard():
+    """Multi-manager Phase 3: barra_universe_membership.py hardcodes SOROS_CIK, so its artifact
+    ALWAYS covers Soros regardless of what's in positions.parquet. Default book (Soros) is
+    UNCHANGED (normal series shape); any other book comes back as a clean book_mismatch status
+    rather than silently showing Soros's membership split under another manager's label."""
+    import requests
+    base = requests.get(f"{API}/universe", timeout=60).json()
+    assert "status" not in base and base["series"], base
+    mism = requests.get(f"{API}/universe", params={"book": "TigerGlobal"}, timeout=60).json()
+    assert mism["status"] == "book_mismatch", mism
+    assert mism["requested_book"] == "TigerGlobal" and mism["artifact_book"] == "Soros", mism
+    assert mism["kind"] == "membership", mism
+
+
 def main():
     p = f = 0
     print("=== unit (no backend) ===")

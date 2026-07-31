@@ -10,7 +10,7 @@ import {
 } from "../api/hooks";
 import { Sparkline, BulletGraph, LabelBar } from "../components/svg";
 import { StreamPanel } from "../components/StreamPanel";
-import { RagDot } from "../components/ui";
+import { RagDot, isBookMismatch } from "../components/ui";
 import { pct, signedPct, num, ragLabel } from "../lib/format";
 import type { Rec } from "../api/types";
 
@@ -50,14 +50,18 @@ export function Overview() {
   const maxCtv = Math.max(...ctv.map((r) => Math.abs((r.pct_of_variance ?? 0) * 100)), 1e-6);
 
   // risk↔PnL reconcile status (Chris's step 4): genuine breaches only — an
-  // exposure_migration driver is a band artifact, not a risk the decomposition missed
-  const lkRows = lk.data ? [...lk.data.rows, lk.data.book_total] : [];
+  // exposure_migration driver is a band artifact, not a risk the decomposition missed.
+  // /pnl_attribution/linkage is a single-book artifact (multi-manager Phase 3 guard) — a
+  // book_mismatch reads as "not available" here rather than crashing on the missing fields.
+  const lkOk = lk.data && !isBookMismatch(lk.data) ? lk.data : null;
+  const lkRows = lkOk ? [...lkOk.rows, lkOk.book_total] : [];
   const genuine = lkRows.filter(
     (r) => r.verdict === "investigate" && r.driver?.kind !== "exposure_migration");
   const stressed = lkRows.filter((r) => r.verdict === "stress");
-  const lkStatus = !lk.data ? undefined
+  const lkStatus = !lk.data || isBookMismatch(lk.data) ? undefined
     : genuine.length ? "red" : (stressed.length ? "amber" : "green");
   const lkLabel = !lk.data ? "—"
+    : isBookMismatch(lk.data) ? "not available for this book"
     : genuine.length ? `${genuine.length} to investigate (${genuine.map((r) => r.name).join(", ")})`
     : stressed.length ? "stress regime" : "within band";
 
@@ -106,7 +110,13 @@ export function Overview() {
                 <BulletGraph value={c.value} warn={c.warn} limit={c.limit} status={c.status} />
               </div>
             ))
-          ) : (
+          ) : null}
+          {limits.data?.cross_book_thresholds && limits.data.calibration_note && (
+            <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
+              {limits.data.calibration_note}
+            </p>
+          )}
+          {!limits.data?.configured && (
             <div className="muted small">no limits configured</div>
           )}
         </div>

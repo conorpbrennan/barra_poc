@@ -10,6 +10,7 @@ import type {
   PnlAttributionResult, PnlResidualResult, PnlLinkageResult, ContributionsResult,
   ValidationResult, RegressionResult, FactorCovResult,
   HedgeResult, ExposureProfileResult, FactorPortfolioResult, PnlNamesResult,
+  BookMismatch,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -93,31 +94,36 @@ export function useReverseStress(loss: number | undefined, date: string, book: s
   });
 }
 
-export function useUniverse(date?: string) {
+// These four read a SINGLE-BOOK precomputed artifact (barra_universe_membership/funnel/span/
+// drift.py) — risk_api.py's `_book_guard` (multi-manager Phase 3) returns a `BookMismatch`
+// payload, HTTP 200, instead of the normal shape when `book` isn't verifiably the one the
+// artifact covers. `book` defaults to "Soros" to match the endpoints' own default exactly, so an
+// omitted book is byte-identical to pre-Phase-4 behaviour.
+export function useUniverse(date?: string, book = "Soros") {
   return useQuery({
-    queryKey: ["universe", date ?? ""],
-    queryFn: () => apiGet<UniverseResult>("/universe", { date }),
+    queryKey: ["universe", date ?? "", book],
+    queryFn: () => apiGet<UniverseResult | BookMismatch>("/universe", { date, book }),
     ...common,
   });
 }
-export function useFunnel(date?: string) {
+export function useFunnel(date?: string, book = "Soros") {
   return useQuery({
-    queryKey: ["funnel", date ?? ""],
-    queryFn: () => apiGet<FunnelResult>("/funnel", { date }),
+    queryKey: ["funnel", date ?? "", book],
+    queryFn: () => apiGet<FunnelResult | BookMismatch>("/funnel", { date, book }),
     ...common,
   });
 }
-export function useSpan(date?: string, fx = "Size", fy = "ResidVol") {
+export function useSpan(date?: string, fx = "Size", fy = "ResidVol", book = "Soros") {
   return useQuery({
-    queryKey: ["span", date ?? "", fx, fy],
-    queryFn: () => apiGet<SpanResult>("/span", { date, fx, fy }),
+    queryKey: ["span", date ?? "", fx, fy, book],
+    queryFn: () => apiGet<SpanResult | BookMismatch>("/span", { date, fx, fy, book }),
     ...common,
   });
 }
-export function useDrift(split = "2021-01-01") {
+export function useDrift(split = "2021-01-01", book = "Soros") {
   return useQuery({
-    queryKey: ["drift", split],
-    queryFn: () => apiGet<DriftResult>("/drift", { split }),
+    queryKey: ["drift", split, book],
+    queryFn: () => apiGet<DriftResult | BookMismatch>("/drift", { split, book }),
     ...common,
   });
 }
@@ -151,24 +157,26 @@ export function useWhatif(date: string, book: string, trades: Trade[]) {
 }
 
 // PnL attribution (Step 15). `from`/`to` empty strings mean the API default (trailing 12m).
+// All four /pnl_attribution* routes carry the same single-book artifact guard as
+// useUniverse/useFunnel/useSpan/useDrift above (barra_pnl_attribution.py's precompute).
 export function usePnlAttribution(from?: string, to?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_attribution", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlAttributionResult>("/pnl_attribution", { from, to, book }),
+    queryFn: () => apiGet<PnlAttributionResult | BookMismatch>("/pnl_attribution", { from, to, book }),
     ...common,
   });
 }
 export function usePnlResidual(from?: string, to?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_residual", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlResidualResult>("/pnl_attribution/residual", { from, to, book }),
+    queryFn: () => apiGet<PnlResidualResult | BookMismatch>("/pnl_attribution/residual", { from, to, book }),
     ...common,
   });
 }
 export function usePnlLinkage(horizon = 3, T?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_linkage", horizon, T ?? "", book],
-    queryFn: () => apiGet<PnlLinkageResult>("/pnl_attribution/linkage", { horizon, T, book }),
+    queryFn: () => apiGet<PnlLinkageResult | BookMismatch>("/pnl_attribution/linkage", { horizon, T, book }),
     ...common,
   });
 }
@@ -232,7 +240,7 @@ export function useFactorPortfolio(factor: string, date: string) {
 export function usePnlNames(from?: string, to?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_names", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlNamesResult>("/pnl_attribution/names", { from, to, book }),
+    queryFn: () => apiGet<PnlNamesResult | BookMismatch>("/pnl_attribution/names", { from, to, book }),
     ...common,
   });
 }

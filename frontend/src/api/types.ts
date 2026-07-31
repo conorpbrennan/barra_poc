@@ -4,6 +4,17 @@
 
 export type Rec = Record<string, string | number | null>;
 
+// One book/manager, as served by /meta's `managers` array (multi-manager Phase 3/4). On today's
+// single-book data this is exactly one entry with every entity field null — the UI must degrade
+// silently on null, never assume the attributes are populated.
+export interface Manager {
+  book: string;
+  entity_name: string | null;
+  firm_type: string | null;
+  cik: string | number | null;
+  n_positions_distinct: number | null;
+}
+
 export interface Meta {
   dates: string[];
   scenario_sets: string[];
@@ -11,6 +22,21 @@ export interface Meta {
   ts_measures: string[];
   by_levels: string[];
   hypo_shocks?: Record<string, Record<string, number>>;
+  managers?: Manager[];
+}
+
+// The shape a single-book-artifact endpoint (/universe, /funnel, /span, /drift,
+// /pnl_attribution*) returns INSTEAD of its normal payload when the requested book isn't
+// verifiably the one the precomputed artifact covers (risk_api.py's `_book_guard`, mirroring the
+// pre-existing /drawdown `status: "insufficient"` idiom — HTTP 200, never a crash or empty chart).
+// Field names are pinned exactly to `_book_guard`'s return dict.
+export interface BookMismatch {
+  status: "book_mismatch";
+  kind: string;
+  requested_book: string;
+  artifact_book: string | null;
+  basis: string;
+  reason: string;
 }
 
 export interface Dims {
@@ -59,6 +85,13 @@ export interface LimitsResult {
   configured: boolean;
   checks: LimitCheck[];
   breaches: LimitCheck[];
+  // multi-manager Phase 3 disclosure — additive, always present. limits.json is ONE flat
+  // threshold set tuned for `calibrated_for`; when the requested `book` differs,
+  // `cross_book_thresholds` is true and `calibration_note` explains the RAG verdict above is
+  // being read against another book's thresholds. `calibration_note` is null otherwise.
+  calibrated_for: string;
+  cross_book_thresholds: boolean;
+  calibration_note: string | null;
 }
 
 export interface DqCheck { level: "PASS" | "WARN" | "FAIL"; name: string; detail: string }

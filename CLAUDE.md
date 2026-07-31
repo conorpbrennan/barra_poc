@@ -5,14 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A proof-of-concept Barra-style equity factor-risk model built entirely on free/public data,
-demoed against the Soros Fund Management 13F book. It splits cleanly into two halves:
+originally demoed against the Soros Fund Management 13F book and extended (2026-07-30) to
+eleven hedge-fund/asset-manager 13F books — see "Multi-manager 13F integration" below. It
+splits cleanly into two halves:
 
-1. **Frame builders** pull raw data and emit seven canonical parquet frames.
+1. **Frame builders** pull raw data and emit seven canonical parquet frames, plus an optional
+   eighth (`managers`, multi-manager entity metadata).
 2. **The Atoti cube** consumes those frames and exposes exposures + a unified
    scenario/stress engine (historical sim, event replay, hypothetical shocks).
 
-The two halves communicate *only* through the seven parquet files written to the repo-local
-`data/` dir (gitignored). Run a builder, then run the cube — they share no in-process state.
+The two halves communicate *only* through the parquet files written to the repo-local `data/`
+dir (gitignored). Run a builder, then run the cube — they share no in-process state.
 
 ## Running
 
@@ -31,8 +34,9 @@ cd python_src
 `"name email"` string — SEC EDGAR blocks anonymous traffic and the pipeline will fail without it.
 `OPENFIGI_KEY` is read from the environment (optional; raises OpenFIGI batch/rate limits).
 
-Both builders write the six frames to `data/` at the repo root (created on demand) and the
-cube reads from there (`OUT` / `out` constants, resolved relative to the script file).
+Both builders write the frames (seven, plus the optional eighth `managers`) to `data/` at the
+repo root (created on demand) and the cube reads from there (`OUT` / `out` constants, resolved
+relative to the script file).
 
 ## LLM voice — CHRIS_VOICE (mandatory for every LLM feature)
 
@@ -822,25 +826,29 @@ that cache dir to force a fresh pull.
 cube only ever joins on `Position`. CUSIP/ticker/CIK exist only inside the builders to bridge the
 different source APIs; they are resolved to a single FIGI before frames are emitted.
 
-## The seven frames (contract between builders and cube)
+## The seven frames (contract between builders and cube), plus an optional eighth
 
 | Frame | Key | Payload | Role |
 |---|---|---|---|
 | `exposures` | (Date, Position, Factor) | Loading | the granular leaf |
-| `positions` | (Date, Book, Position) | Weight, MV, ADV | Soros 13F weight overlay, as-of joined (ADV = trailing-63d $ vol, for `/liquidity`) |
+| `positions` | (Date, Book, Position) | Weight, MV, ADV | multi-manager 13F weight overlay (Phase 1, 2026-07-30) — one `Book` per manager in `MANAGERS`; weights normalise per **(Book, filing_date)**, as-of joined PER BOOK against that book's own filing calendar (ADV = trailing-63d $ vol, for `/liquidity`) |
 | `securities` | (Position) | Ticker, CIK, CUSIP, Issuer, Sector, Country | dimension |
 | `factor_meta` | (Factor) | FactorGroup | dimension |
 | `factor_returns` | (Date, Factor) | Return | the shared scenario cache |
 | `specific_var` | (Date, Position) | SpecificVar | diagonal idiosyncratic block |
 | `specific_returns` | (Date, Position) | SpecificReturn | daily WLS residual `u` (PnL attribution); **v2-only, optional** — v1 doesn't emit it and the cube/API degrade gracefully (attribution measures/endpoints absent) |
+| `managers` | (Book) | CIK, EntityName, FirmType, filing/coverage stats, ETP-drop disclosure | **optional 8th frame** (Phase 2, 2026-07-30), dimension-like, NOT part of the seven-frame contract — absent on any pre-Phase-2 build (incl. all v1 data); the cube's `Manager` hierarchy + its three disclosure measures degrade cleanly to absent, same pattern as `specific_returns` |
 
 Two risk blocks only: a linear **factor P&L** block (driven by `factor_returns`) and a
 **diagonal specific-risk** block (`specific_var`). No full specific covariance matrix.
 
-The 13F book is a quarterly weight overlay **as-of joined** onto the monthly/COB calendar
-(lagged by filing date via `pd.merge_asof(..., direction="backward")`). The as-of join selects
-the latest *filing* per calendar date and takes only the names in that filing — exited positions
-expire on the next filing, so weights sum to 1.0 on every date.
+Each book's 13F filings are a quarterly weight overlay **as-of joined** onto the monthly/COB
+calendar (lagged by filing date via `pd.merge_asof(..., direction="backward")`), one join **PER
+BOOK** against that book's own filing calendar (`for book, pb in p.groupby("Book")`, not one
+global `merge_asof` across books — simpler to reason about than `merge_asof(..., by="Book")`;
+both were permitted, this one was chosen). The as-of join selects the latest *filing* per
+calendar date and takes only the names in that filing — exited positions expire on the next
+filing, so weights sum to 1.0 on every (Book, Date), not just every Date.
 
 ## The cube's central design: scenarios as one operation
 
@@ -866,14 +874,138 @@ has unit market exposure (`x_Market = Σ weights`) and the directional market re
 (~3.5% daily 99% VaR) rather than style-tilt-only (~1.5%). Market loadings are added in
 `build_frames` *after* `regress_factors` so the style factor returns are unaffected.
 
+## Multi-manager 13F integration (2026-07-30)
+
+The book was Soros-only through 2026-07-29. `barra_build_frames.py` now pulls **11 books** by
+default (`MANAGERS`, one row per book; CIKs verified against EDGAR's exact-name-match +
+rejected-alternates check, phase0-recon): Soros (1029160) · Bridgewater Associates (1350694) ·
+Citadel Advisors (1423053) · Millennium Management (1273087) · Renaissance Technologies
+(1037389) · AQR Capital Management (1167557) · Two Sigma Investments (1179392) · D. E. Shaw &
+Co. (1009207) · Point72 Asset Management (1603466) · Tiger Global Management (1167483) ·
+Elliott (1791786 current + 1048445 predecessor, stitched — see below).
+
+**Two Sigma Advisers, LP (CIK 1478735) is deliberately EXCLUDED**, not an oversight — measured:
+its latest 13F table is one name at $0 (dormant, the same pattern as Elliott's superseded
+predecessor) and its full-history CUSIP set adds only 7 incremental CUSIPs over what Two Sigma
+Investments (1179392) already contributes. Don't add it back without re-measuring — it isn't a
+second book, it's a filer that stopped mattering.
+
+**Elliott stitches two CIKs**: Elliott Investment Management L.P. (1791786, current, files
+2020-03-31 onward) and Elliott Management Corp (1048445, predecessor, files 1999-09-30 through
+2020-09-30). The two overlap on exactly three report dates — 2020-03-31, 2020-06-30,
+2020-09-30 — both CIKs filed a 13F-HR for each. `stitch_multi_cik` prefers the **current**
+entity (the first CIK in the tuple) on any overlapping `report_date`. `MANAGERS`'s `cik` field
+is a single int, or, for a renamed/re-filed manager, a tuple with the current entity first.
+
+**`ACTIVE_MANAGERS`** (default `None` = every book in `MANAGERS`) scopes a build to a subset —
+set it to a list of book names (e.g. `["Soros", "TigerGlobal"]`) to verify the plumbing without
+a full 11-manager pull. Used for the Phase 1 2-manager verification build.
+
+**Filing-history depth — the `filings.files` pagination fix.** `positions_from_13f` used to
+read only `filings.recent`, which SEC caps at roughly an entity's most recent ~1000 filings of
+ANY form type — a CIK with heavy non-13F filing volume gets its older 13F-HRs pushed out of
+`recent` even though it filed 13F-HR continuously. This silently truncated two managers:
+Renaissance reached only **2019-12-31** in `recent` (missing 2016–2019 entirely) and Citadel
+only **2016-03-31** (missing ~6 weeks at the model's 2016-01-01 start). New
+`_13FHR_filings_all(cik)` fetches `filings.recent` **plus every `filings.files` pagination
+block**, concatenates, filters to `form == "13F-HR"`, and dedupes on `accessionNumber`. Verified
+live against SEC: both managers (and, incidentally, Soros) now bottom out at **2013-06-30** — a
+hard floor for EVERY manager, not just the two fixed, because 13F-HRs before ~mid-2013 are
+plain `.txt` filings with no XML info-table (SEC's mandatory machine-readable format starts
+mid-2013); the pre-existing parser already skips filings with no XML info-table, unchanged. The
+pagination fix's real effect is recovering 2013-06-30 through the previous `recent` floor —
+comfortably inside the model's `START = "2016-01-01"` window, not closing a gap in it.
+
+**`DROP_ETPS` (default True)** filters ETF/index-fund/commodity-crypto-trust rows out of every
+manager's 13F, word-boundary matched (`_ETP_TOKENS`/`_ETP_RE` — never substring: a naive match
+flags "NETFLIX" for containing "ETF"). These vehicles carry no XBRL fundamentals and no sector,
+so a cross-sectional style/industry loading on one is meaningless — an ETF is a diversified
+slice of the market, not a single-name factor bet. Measured value share dropped from each
+manager's latest filing: **Bridgewater 24.47%, Millennium 11.64%, Citadel 6.76%, Soros 1.94%,
+TigerGlobal 0.00%**. Plainly: **Bridgewater loses roughly a quarter of its 13F by value** — its
+remaining book here is a small equity-only slice of its real macro book, not a fair picture of
+the fund. The drop disclosure (rows/value/CUSIPs) is carried per-book on the `managers` frame,
+never silently absorbed.
+
+**Universe scale.** The measured union of held CUSIPs across all 11 books is **22,113 distinct
+CUSIPs, 21,047 of them new** against the previous single-book (Soros-only) build's 1,199
+securities. `UNIVERSE_CAP` is raised **3500 → 35000** — `sec.head(UNIVERSE_CAP)` in
+`build_frames()` truncates order-dependently and silently (no warning), so the cap has to sit
+comfortably above the measured union, not just above whatever the current build happens to
+need.
+
+**The entity dimension (Phase 2, cube).** The optional `managers` frame joins onto `Positions`
+via a **partial join on `Book`** and backs a separate `Manager` hierarchy
+(`FirmType`/`EntityName`/`CIK`) plus three measures (`Manager ETP dropped value share`,
+`Manager n filings`, `Manager n positions`) — deliberately **NOT** grafted onto the existing
+auto-created single-level `Book` hierarchy, so every existing `l["Book"]` lookup elsewhere
+(including all of `risk_api.py`) is untouched. `Manager` is 1:1 with `Book`; like `Book` itself
+it's never passed to a lift/`OriginScope` call, so it reads whatever book is currently sliced
+and is blank/ambiguous with no book slice (same as any other book-scoped measure).
+
+**The book-independent attribution limitation.** `Factor contribution`, `Specific PnL` and
+`Realized PnL` are baked physical columns on tables keyed WITHOUT Book — deliberately, so
+attribution stays immune to the what-if trades branch (which lives on the Positions table's
+live weight, not a static column). With more than one book loaded, a name held by several
+managers reads **one arbitrary book's weight** (first alphabetically, after a deterministic
+dedupe) under every book's label. The proper fix — Book as a second reused hierarchy dual
+alongside Factor — was tried and **empirically blocked by atoti 0.9.15**: every join topology
+tried (single edge either way, a two-edge "diamond" mapping Book via Positions and Factor via
+Exposures) left one axis an unresolvable ambiguous `Book` hierarchy. So `_validate_pivot` — the
+ONE chokepoint `/pivot`, `/analysis`, and `/ask`'s `query_cube` tool all share — now **rejects
+these three measures whenever more than one book is loaded** (`BOOK_INDEPENDENT_MEASURES`,
+unconditional on whether the query is book-sliced, since even an unsliced query hits the same
+one arbitrary book's column), pointing the caller at `barra_pnl_attribution.py`'s `book=`
+precompute for correct per-book attribution instead. Single-book behaviour is byte-identical to
+before.
+
+**Per-book guards on single-book artifacts.** `/universe`, `/funnel`, `/span`, `/drift` and the
+four `/pnl_attribution*` routes each read a precomputed artifact or live frame built for exactly
+one book, with no per-book scoping of their own. A `_book_guard`/`_artifact_book` pair (Phase 3)
+checks whether the requested `book` matches the book the artifact actually covers; on a
+mismatch every one of those 8 endpoints returns **HTTP 200** with `{"status": "book_mismatch",
+"kind", "requested_book", "artifact_book", "basis", "reason"}` — mirroring `/drawdown`'s
+existing `status` idiom (never a silently-wrong 200, never a 500). Disclosed weakness, not
+fixed: `_artifact_book` infers the covered book from **today's live positions frame**, not a
+build-time stamp on the artifact — there is no version linkage in the frame/artifact contract,
+so an artifact that's stale relative to the currently-loaded frames could wave a real mismatch
+through.
+
+**`/limits` disclosure.** `limits.json` gained an additive `calibrated_for` field (default
+`"Soros"` if absent — true of every pre-Phase-3 config, since the thresholds were always tuned
+against Soros regardless). `/limits`'s response gained `calibrated_for`, `cross_book_thresholds`
+(bool), and `calibration_note` (a sentence, only when `cross_book_thresholds` is true) —
+additive only, no restructuring into per-book limit sets. **Thresholds remain Soros-calibrated
+and are NOT per-book yet.**
+
+**`/meta.managers`** is the UI's one source for the entity list (`_managers_meta()`, following
+the `hypo_shocks` precedent) — sourced from the live `positions` frame's `Book` column (never a
+hardcoded list, so it reflects whatever `ACTIVE_MANAGERS` scope actually ran), decorated with
+`EntityName`/`FirmType`/`CIK`/`n_positions_distinct` from the `managers` frame when present. The
+Vite context bar's book field renders **plain text for one manager** (a `<select>` with one
+immutable option is chartjunk — ink spent on a control that can't do anything) and a real
+`<select>` once two or more managers are loaded.
+
+**The funnel `held` fix.** `barra_universe_funnel.py`'s `held`/`held_survivors` flag used to
+mean "held by the union of positions," with no book concept — silently "held by ANY manager"
+once a second book exists. New `_held_positions(pos, book)` scopes it to one book;
+`run(book="Soros")`'s default preserves today's single-book behaviour exactly (`book=None` is
+kept as an explicit any-book-union escape hatch that nothing in the repo calls).
+
+Design decisions, measured numbers, and open follow-ups: `docs/multi-manager-plan.md`.
+
 ## Things that bite
 
 - **`atoti` array helper names** (`tt.array.mean/quantile/min`, `tt.agg.sum_product` with
   `scope=`) may vary by SDK version — the source flags this. Verify against the installed
   `atoti` before assuming a call signature.
-- **Universe is capped** at `UNIVERSE_CAP = 250` so the demo actually runs; factor-return
-  quality scales with cross-section breadth, so widen `UNIVERSE_EXTRA` / the cap for anything
-  real. v2's regression skips dates with `< 30` valid names.
+- **Universe is capped** at `UNIVERSE_CAP = 35000` (raised 2026-07-30 for the multi-manager
+  integration — this line used to say `250` in this doc, already stale before that work; the
+  real pre-integration value was `3500`). The measured union of held CUSIPs across the
+  11-manager `MANAGERS` table is ~22,113 (see "Multi-manager 13F integration" above), so
+  anything much below that silently, order-dependently truncates via `sec.head(UNIVERSE_CAP)`.
+  Factor-return quality scales with cross-section breadth, so widen `UNIVERSE_EXTRA` / the cap
+  for anything beyond this. v2's regression skips dates with `< 30` valid names.
 - **Sector** is populated from a free SEC SIC → GICS-11 crosswalk, CIK-keyed
   (`sic_to_gics` / `sectors_for_ciks` in `barra_build_frames.py`; SIC comes from the SEC
   submissions JSON). ~5 names (BDCs/closed-end funds) carry a blank SEC SIC and fall back to

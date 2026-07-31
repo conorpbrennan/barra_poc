@@ -18,7 +18,7 @@ import type {
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
 import { StreamPanel } from "../components/StreamPanel";
-import { HowToRead, QueryState, RagDot } from "../components/ui";
+import { HowToRead, QueryState, GuardedQueryState, RagDot, isBookMismatch } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
 const INK = "#111";
@@ -419,8 +419,8 @@ export function irSignificance(ir: number | null | undefined, nMonths: number) {
 }
 
 // ---- residual explorer: the specific PnL name by name (winners / losers + persistence) ----
-function ResidualExplorer({ from, to }: { from?: string; to?: string }) {
-  const q = usePnlNames(from, to);
+function ResidualExplorer({ from, to, book }: { from?: string; to?: string; book: string }) {
+  const q = usePnlNames(from, to, book);
   const cols = (
     <thead><tr><th className="label">Name</th><th>Specific</th><th>Factor</th>
       <th>Persistence</th><th>Months +</th></tr></thead>
@@ -439,7 +439,7 @@ function ResidualExplorer({ from, to }: { from?: string; to?: string }) {
   return (
     <>
       <h2>Residual explorer — the specific PnL, name by name</h2>
-      <QueryState q={q}>
+      <GuardedQueryState q={q}>
         {(n) => (
           <div style={{ maxWidth: "52rem" }}>
             <div className="row" style={{ gap: "2.5rem", alignItems: "flex-start" }}>
@@ -457,7 +457,7 @@ function ResidualExplorer({ from, to }: { from?: string; to?: string }) {
             </p>
           </div>
         )}
-      </QueryState>
+      </GuardedQueryState>
     </>
   );
 }
@@ -465,8 +465,9 @@ function ResidualExplorer({ from, to }: { from?: string; to?: string }) {
 type Preset = "t12m" | "ytd" | "inception" | "custom";
 
 function PnlTab() {
-  const base = usePnlAttribution();          // default window; also supplies the calendar bounds
-  const cal = base.data?.calendar;
+  const { book } = useApp();
+  const base = usePnlAttribution(undefined, undefined, book);   // default window; also supplies the calendar bounds
+  const cal = base.data && !isBookMismatch(base.data) ? base.data.calendar : undefined;
   const [preset, setPreset] = useState<Preset>("t12m");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -476,9 +477,9 @@ function PnlTab() {
     preset === "inception" && cal ? cal.min :
     preset === "custom" && customFrom ? customFrom : undefined;
   const to = preset === "custom" && customTo ? customTo : undefined;
-  const q = usePnlAttribution(from, to);
-  const rq = usePnlResidual(from, to);
-  const lq = usePnlLinkage(horizon);
+  const q = usePnlAttribution(from, to, book);
+  const rq = usePnlResidual(from, to, book);
+  const lq = usePnlLinkage(horizon, undefined, book);
   const meta = useMeta();
   // one drill open at a time (accordion) — a chart dot opens a factor drawer, a table row a
   // position drawer; opening either closes the other so the overview stays scannable.
@@ -503,7 +504,7 @@ function PnlTab() {
         )}
       </div>
 
-      <QueryState q={q}>
+      <GuardedQueryState q={q}>
         {(a: PnlAttributionResult) => (
           <div style={{ maxWidth: "52rem" }}>
             <p style={{ margin: "0 0 0.6rem" }}>
@@ -621,7 +622,7 @@ function PnlTab() {
             </p>
           </div>
         )}
-      </QueryState>
+      </GuardedQueryState>
 
       <h2>Residual diagnostics</h2>
       <p className="muted small" style={{ margin: "0 0 0.5rem" }}>
@@ -629,7 +630,7 @@ function PnlTab() {
         factor products; the specific stream is stock selection, the part the model
         can&rsquo;t span.
       </p>
-      <QueryState q={rq}>
+      <GuardedQueryState q={rq}>
         {(r) => (
           <div style={{ maxWidth: "52rem" }}>
             <HowToRead>
@@ -731,9 +732,9 @@ function PnlTab() {
             <p className="muted small">{r.note}</p>
           </div>
         )}
-      </QueryState>
+      </GuardedQueryState>
 
-      <ResidualExplorer from={from} to={to} />
+      <ResidualExplorer from={from} to={to} book={book} />
 
       <h2>Risk ↔ PnL reconcile</h2>
       <div className="row" style={{ marginBottom: "0.5rem" }}>
@@ -743,7 +744,7 @@ function PnlTab() {
           {[1, 3, 6, 12].map((h) => <option key={h} value={h}>{h}m</option>)}
         </select>
       </div>
-      <QueryState q={lq}>
+      <GuardedQueryState q={lq}>
         {(lk) => (
           <div style={{ maxWidth: "52rem" }}>
             <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
@@ -839,7 +840,7 @@ function PnlTab() {
             <p className="muted small" style={{ marginTop: "0.4rem" }}>{lk.note}</p>
           </div>
         )}
-      </QueryState>
+      </GuardedQueryState>
 
       <hr className="rule" />
 

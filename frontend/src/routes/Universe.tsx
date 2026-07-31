@@ -5,12 +5,12 @@ import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { useUniverse, useFunnel, useSpan } from "../api/hooks";
 import { LineChart } from "../components/LineChart";
-import { QueryState } from "../components/ui";
+import { GuardedQueryState } from "../components/ui";
 import { pct, num } from "../lib/format";
 import type { Rec, SpanResult } from "../api/types";
 
 export function Universe() {
-  const { date } = useApp();
+  const { date, book } = useApp();
   const [tab, setTab] = useState<"membership" | "funnel" | "span">("membership");
 
   return (
@@ -24,17 +24,17 @@ export function Universe() {
           </button>
         ))}
       </div>
-      {tab === "membership" && <Membership date={date} />}
-      {tab === "funnel" && <Funnel date={date} />}
-      {tab === "span" && <Span date={date} />}
+      {tab === "membership" && <Membership date={date} book={book} />}
+      {tab === "funnel" && <Funnel date={date} book={book} />}
+      {tab === "span" && <Span date={date} book={book} />}
     </main>
   );
 }
 
-function Membership({ date }: { date: string }) {
-  const q = useUniverse(date);
+function Membership({ date, book }: { date: string; book: string }) {
+  const q = useUniverse(date, book);
   return (
-    <QueryState q={q}>
+    <GuardedQueryState q={q}>
       {(d) => (
         <>
           <div className="hgroup" style={{ marginBottom: "1rem" }}>
@@ -74,14 +74,14 @@ function Membership({ date }: { date: string }) {
           )}
         </>
       )}
-    </QueryState>
+    </GuardedQueryState>
   );
 }
 
-function Funnel({ date }: { date: string }) {
-  const q = useFunnel(date);
+function Funnel({ date, book }: { date: string; book: string }) {
+  const q = useFunnel(date, book);
   return (
-    <QueryState q={q}>
+    <GuardedQueryState q={q}>
       {(d) => (
         <>
           <h2>Population → survivors ({d.selected_date})</h2>
@@ -120,16 +120,16 @@ function Funnel({ date }: { date: string }) {
           <p className="muted small" style={{ maxWidth: "46rem", marginTop: "1rem" }}>{d.note}</p>
         </>
       )}
-    </QueryState>
+    </GuardedQueryState>
   );
 }
 
-function Span({ date }: { date: string }) {
+function Span({ date, book }: { date: string; book: string }) {
   const [fx, setFx] = useState("Size");
   const [fy, setFy] = useState("ResidVol");
-  const q = useSpan(date, fx, fy);
+  const q = useSpan(date, fx, fy, book);
   return (
-    <QueryState q={q}>
+    <GuardedQueryState q={q}>
       {(d) => (
         <>
           <div className="hgroup" style={{ marginBottom: "1rem" }}>
@@ -158,7 +158,7 @@ function Span({ date }: { date: string }) {
           <p className="muted small" style={{ maxWidth: "46rem", marginTop: "1rem" }}>{d.note}</p>
         </>
       )}
-    </QueryState>
+    </GuardedQueryState>
   );
 }
 
