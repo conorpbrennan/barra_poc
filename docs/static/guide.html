@@ -44,21 +44,66 @@
 <div class="wrap">
 <header>
   <h1>Flex Agg ++ — dashboard guide</h1>
-  <p class="sub">Barra-style factor-risk on the Soros 13F book · what each panel means and how to use it</p>
+  <p class="sub">Barra-style factor-risk on eleven hedge-fund 13F books · what each panel means and how to use it</p>
 </header>
 
 <p class="lead">Everything you see is computed by the Atoti cube and served through a small guarded
 API — the dashboard never invents a number. This guide covers each panel.</p>
 
-<h2>Two pages: Overview and Pivot</h2>
-<p>The sidebar switches between two pages. <b>Overview</b> is the landing page — a whole-book read
-that doesn't depend on any pivot: a scorecard of the book's key risk numbers (Scenario VaR 99,
-Expected shortfall, max drawdown, effective bets, net/gross), each with a sparkline of its trend; a
-compact red/amber/green status line for limits / data quality / backtest; and every whole-book panel
-below as a closed drill-down (Risk · Universe · Changes &amp; Q&amp;A · Checks). <b>Pivot</b> is the
-exploration workspace — the generic grid over the cube, with its own per-view risk-analyst commentary.
-The split keeps book-level tooling off the view: nothing on Overview is tied to a specific pivot. Use
-<b>Open Pivot →</b> on the Overview header, or the sidebar switch, to move between them.</p>
+<h2>The book: eleven managers</h2>
+<p>The model was built on the Soros 13F book and now carries <b>eleven</b>: Soros plus Bridgewater,
+Citadel, Millennium, Renaissance, AQR, Two Sigma, D. E. Shaw, Point72, Tiger Global and Elliott. Each
+is a separate <b>Book</b> — a quarterly weight overlay from that manager's own 13F filings, on its own
+filing calendar. Pick one in the context bar; every number on every panel is for the book you picked.
+The factor model itself is shared: one cross-section, one set of factor returns, eleven books priced
+against it.</p>
+<p>Four things to know before you read a number for a manager other than Soros.</p>
+<ul>
+  <li><b>ETFs and trusts are dropped.</b> A cross-sectional style loading on a diversified fund is
+      meaningless, so index / commodity / crypto vehicles are filtered out of every filing. The share
+      dropped is disclosed per book, not absorbed: <b>Bridgewater 24.5%</b> of its 13F by value,
+      Millennium 11.6%, Citadel 6.8%, Soros 1.9%. Read Bridgewater's book as a small equity slice of
+      its real macro book — most of what it runs never appears in a 13F at all.</li>
+  <li><b>The desk limits are still calibrated for Soros.</b> Thresholds are not per-book yet, so a
+      RAG status on another manager compares that book to Soros's tolerances. <code>/limits</code>
+      says so in its response (<code>calibrated_for</code>, <code>cross_book_thresholds</code>).</li>
+  <li><b>Four panels are Soros-only.</b> Estimation universe (membership, funnel, span), style drift
+      and PnL attribution read precomputed artifacts built for one book. Ask for another and they
+      return a clear <code>book_mismatch</code> rather than serving Soros's numbers under the wrong
+      name.</li>
+  <li><b>Attribution measures are off in the grid</b> while more than one book is loaded — they're
+      baked without a book key, so a name two managers both hold would read one arbitrary manager's
+      weight. The pivot rejects them outright and points at the per-book precompute instead.</li>
+</ul>
+<div class="card"><span class="label">Where the books come from</span>
+  <p style="margin:.3em 0">SEC EDGAR 13F-HR information tables, one CIK per manager (Elliott stitches
+  two — the current entity and its predecessor). History bottoms out at <b>2013-06-30</b> for every
+  manager: earlier 13F-HRs are plain text with no machine-readable table. The model's sample starts
+  2016.</p></div>
+
+<h2>Two UIs, the same numbers</h2>
+<p>There are two front-ends, both pure clients of the same API — no number is computed differently
+between them.</p>
+<ul>
+  <li><b>flexagg2++</b> (the Vite app) is the current UI. A left rail of <b>lenses</b>, one job each:
+      Overview · Pivot · Trends · Stress · What-if · Universe · Drift · Attribution · Changes ·
+      Model · Checks · Ask. A context bar across the top sets <b>book, date and scenario set</b> for
+      every lens at once.</li>
+  <li><b>flexagg++</b> (the older Streamlit app) is still served during the transition, with two
+      pages — Overview and Pivot — and the whole-book panels as drill-downs under Overview.</li>
+</ul>
+<p>This guide is organised by <b>panel</b>, so it reads against either. Where the two differ it says
+so. The panel-to-lens mapping is mostly one-to-one: each section below is its own lens in
+flexagg2++, and a drill-down under Overview in Streamlit.</p>
+<p><b>Overview</b> is the landing page in both: a scorecard of the book's key risk numbers (Scenario
+VaR 99, Expected shortfall, factor/specific split, <b>Top-5 risk share</b>, net/gross), each with a
+sparkline of its trend; a red/amber/green strip for limits / data quality / backtest / reconcile; and
+the top risk contributions (CTV) with net exposures as the secondary read.</p>
+<div class="card"><span class="label">Two panels are Streamlit-only</span>
+  <p style="margin:.3em 0"><b>Drawdown</b> and <b>Liquidity</b> were cut from the Vite rail in the
+  2026-07-02 scope review, along with the "Risk by level" attribution tab and the Basel-zone display.
+  The endpoints still serve and are still tested — the panels just aren't on the new UI. Both are
+  documented below.</p></div>
 
 <h2>Overview — status strips</h2>
 
@@ -69,15 +114,20 @@ book-level and independent of the pivot you're looking at.</p>
   <li><span class="chip g">green</span> within limits ·
       <span class="chip a">amber</span> past the <code>warn</code> threshold ·
       <span class="chip r">breach</span> past the hard <code>limit</code>.</li>
-  <li>Checks: <b>Total VaR 99</b>, <b>Scenario ES 97.5</b>, <b>Risk HHI</b> (book-level, read against
-      one scenario set), plus <b>single-name</b> and <b>sector weight</b> concentration.</li>
+  <li>Checks: <b>Scenario VaR 99</b>, <b>Scenario ES 97.5</b> (book-level, read against one scenario
+      set) and <b>Top-5 risk share</b>, plus <b>single-name</b> and <b>sector weight</b>
+      concentration. The limits sit on the two Kupiec-backtested scenario metrics; the house
+      <b>Total VaR 99</b> composite is kept as a measure but is legacy, and <b>model vol</b>
+      σ&nbsp;=&nbsp;√(x′Fx&nbsp;+&nbsp;w′Δw) is the desk's reference risk number.</li>
   <li>All limits are <b>upper bounds</b>. Expand <i>Limit detail</i> for value vs warn vs cap and the
       offending name/sector.</li>
 </ul>
 <div class="card"><span class="label">Edit the limits</span>
   <p style="margin:.3em 0">Edit <code>limits.json</code> at the repo root — reloaded on every check,
-  no restart. The VaR/ES/HHI limits read against the scenario set in <code>scenario_set</code>
-  (default <code>HistFull</code>).</p></div>
+  no restart. The VaR/ES limits read against the scenario set in <code>scenario_set</code>
+  (default <code>HistFull</code>); Top-5 risk share is full-history and scenario-set independent.
+  <b>The thresholds are calibrated for the Soros book</b> — <code>calibrated_for</code> in the file,
+  echoed by the API, and flagged when you read another manager against them.</p></div>
 
 <h3>🔎 Data quality</h3>
 <p>A pass/warn/fail trust check on the exact frames the cube is serving — key integrity, referential
@@ -121,9 +171,11 @@ beta, so it takes the smallest move).</p>
 <p>Edit the weight of any holding (0 = drop), or <b>add a name from the coverage universe</b> (the
 "add from coverage universe" picker lists every name with loadings that isn't currently held), then
 run. You see the book risk impact <em>before vs after</em> — Scenario VaR / ES, Total VaR, Specific
-vol, Risk HHI, and gross/net. Risk is recomputed from the same loadings, factor returns and specific
-variance the cube uses, so the "before" column matches the cube's reported numbers and the Δ column
-is the trade's effect. Trim a concentrated name and watch HHI fall; double one and watch it rise.</p>
+vol, <b>Top-5 risk share</b>, and gross/net. Risk is recomputed from the same loadings, factor returns
+and specific variance the cube uses, so the "before" column matches the cube's reported numbers and the
+Δ column is the trade's effect. Trim a concentrated name and watch the Top-5 share fall; double one and
+watch it rise. The panel also discloses <b>unpriced</b> held names — names with no loadings that date,
+outside free-data coverage — so holdings plus unpriced always recover the full 13F weight.</p>
 
 <h3>📉 Drawdown</h3>
 <p>The path lens VaR and ES miss. The current book is applied to the scenario set's daily factor-return
@@ -162,7 +214,7 @@ participation ~87% of weight clears within 5 days, weighted-average ≈ 2.2 days
 <p>A deterministic diff between this 13F filing and the prior one. Three reads: <b>positions</b> entered
 / exited / resized by weight; <b>factor-exposure drift</b> attributed to its sources (rotation from names
 entering/exiting vs re-pricing from held-name loading drift — the same split as the style-drift panel);
-and the <b>book risk delta</b> (Scenario VaR / ES, Total VaR, Risk HHI, specific vol, gross/net) computed
+and the <b>book risk delta</b> (Scenario VaR / ES, Total VaR, Top-5 risk share, specific vol, gross/net) computed
 at each date with the what-if math, so it's cube-consistent. An on-demand button writes a grounded "what
 changed" read that leads with the biggest move and flags drift as intentional (rotation) vs not (loading
 drift).</p>
@@ -185,11 +237,11 @@ fourth is its own.</p>
   <li><b>Span / high-confidence check.</b> Is each holding <i>inside</i> the factor-space the
       estimation universe spans (high confidence) or out beyond it (extrapolation)? Measured by
       Mahalanobis distance from the estimation cloud, with a 2D factor-pair scatter (cloud vs book) and
-      a per-name verdict. ~82% of the book sits inside on average, drifting out since 2021.</li>
+      a per-name verdict. ~82% of the Soros book sits inside on average, drifting out since 2021.</li>
 </ul>
 
 <h3>🧭 Style-drift attribution (intentional vs not)</h3>
-<p>The book drifted out of the S&amp;P 500's factor space since ~2021 (into smaller, higher-vol names).
+<p>The Soros book drifted out of the S&amp;P 500's factor space since ~2021 (into smaller, higher-vol names).
 Was that <b>intentional</b> (a deliberate tilt / new PM) or <b>unintentional</b> (risk re-pricing)? The
 panel tracks the book's net factor exposure over time and decomposes each factor's drift into
 <b>rotation</b> (new names entering / exiting) vs <b>held-name loading drift</b>. Rotation-dominated

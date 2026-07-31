@@ -77,7 +77,7 @@ every check.</p>
 <p>This document is the audit trail for every number the model produces: where each input comes
 from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
-1029160). The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
+1029160). The build carries <strong>11</strong> books in all (AQR, Bridgewater, Citadel, DEShaw, Elliott, Millennium, Point72, Renaissance, Soros, TigerGlobal, TwoSigma); this document covers Soros only, and the risk numbers in §6 are Soros's. The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
 splits into 11&nbsp;style factors plus 11&nbsp;GICS industry factors plus a market
 intercept (the systematic block) and a diagonal name-specific block. Every scenario is the same
 calculation, <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub> · Δf<sub>k</sub></span>,
@@ -138,8 +138,8 @@ row, factor returns, is the estimated output from the callout above, listed here
 sit in one place.</p>
 <table>
 <tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>Grain</th><th>What we rely on it for</th><th>Known caveats</th></tr>
-<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK 1029160)</td><td>Quarterly, ~45d lag</td>
-    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; shorts and intra-quarter trades invisible; public by construction</td></tr>
+<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK 1029160; one CIK per book, 11 in this build)</td><td>Quarterly, ~45d lag</td>
+    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; ETFs and commodity/crypto trusts dropped (no fundamentals, no sector); shorts and intra-quarter trades invisible; public by construction</td></tr>
 <tr><td>Identity</td><td>OpenFIGI v3 mapping API (CUSIP→FIGI→ticker) + SEC <code>company_tickers.json</code> (ticker→CIK)</td>
     <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
 <tr><td>Fundamentals</td><td>SEC XBRL company-facts API, CIK-keyed; tags: Assets, Liabilities,
@@ -185,7 +185,7 @@ per-<strong>factor</strong>. That collapse is §3, the substance of the model.</
 <h2>2·b · Estimation universe &amp; its intersection with the 13F filings</h2>
 <p>The factor model is estimated cross-sectionally (§3), so each day it needs a <em>population of
 names</em> to regress over. That is the <strong>estimation universe</strong>. It is built in two
-parts: <strong>the whole 13F book plus a market-index seed</strong>. Across the sample Soros filed <strong>52</strong> quarterly 13F-HR reports holding a median of <strong>166</strong> cash-equity names each (<strong>2,461</strong> distinct CUSIPs in total, options and bond lots dropped). Those resolve to <strong>4796</strong> names, and the universe keeps them <em>all</em>, so the book is always a subset of the universe. To make the cross-section a genuine market rather than one manager's holdings, the universe is then <strong>seeded with the S&amp;P 500</strong>: its constituents are unioned in, adding <strong>35</strong> names not already in the book, for a total estimation universe of <strong>4831</strong>.
+parts: <strong>the whole 13F book plus a market-index seed</strong>. Across the sample Soros filed <strong>52</strong> quarterly 13F-HR reports holding a median of <strong>166</strong> cash-equity names each (<strong>2,461</strong> distinct CUSIPs in total, options and bond lots dropped), resolving to <strong>980</strong> names here. The universe keeps them <em>all</em>, so the book is always a subset of the universe. The universe is not book-scoped: it spans all <strong>11</strong> books in this build (4796 13F-sourced names between them). This report is written about Soros alone. To make the cross-section a genuine market rather than one manager's holdings, the universe is then <strong>seeded with the S&amp;P 500</strong>: its constituents are unioned in, adding <strong>35</strong> names not already in those books, for a total estimation universe of <strong>4831</strong>.
 The result is a market cross-section that fully contains the book, which is what a Barra-style
 model needs.</p>
 
@@ -200,15 +200,15 @@ model needs.</p>
 <tr><td>Active book per month-end</td><td class="num">83 <span class="small">(med)</span></td><td>Names in the latest filing ∩ universe on a given date (range 54–183)</td></tr>
 </table>
 
-<p><strong>How the populations nest.</strong> The 4831-name universe is the whole 13F book
+<p><strong>How the populations nest.</strong> The 4831-name universe is the union of all 11 books' 13F names
 (4796 names) plus the index seed (+35 names not already held). 4820 of them
-have usable loadings and enter the daily regression. The held book is always a strict
+have usable loadings and enter the daily regression. Soros's book is always a strict
 <em>subset</em>: 980 names are held at some point in the sample, and on any one date the
 active book is the names in the latest filing that are also in the universe (median 83,
 range 54–183). The point worth making: the regression that builds the factor returns
-(§3) runs over the full 4820-name market cross-section, not just the names Soros holds. So the
-factors describe a market, and index names Soros has never held still add breadth. The cube prices
-the full filed 13F book each quarter, and every §6 number reflects that.</p>
+(§3) runs over the full 4820-name market cross-section, not just the names Soros holds.
+So the factors describe a market, and names Soros has never held still add breadth. The
+cube prices the full filed 13F book each quarter, and every §6 number reflects that.</p>
 
 <p><strong>Why this shape.</strong> Factor-return quality goes up with breadth, and the daily
 regression skips any date with fewer than 30 valid names, so a wide market cross-section beats the

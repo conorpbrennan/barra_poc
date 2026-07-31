@@ -65,6 +65,11 @@ def build() -> None:
     # 13F-HR reports ..."), so the frame must be scoped to that book. Unscoped against the
     # multi-manager build it summed all eleven -- the report claimed 19,593 names held at
     # 2026-06-30 under Soros's name, and specific vol 1.20% against the true 0.26%.
+    # The universe frames (securities/exposures) are NOT book-scoped -- they span every book in the
+    # build -- so the §4 prose needs the pre-filter book count to describe them honestly.
+    all_books = (sorted(positions["Book"].unique().tolist())
+                 if "Book" in positions.columns else [REPORT_BOOK])
+    n_books = len(all_books)
     if "Book" in positions.columns and positions["Book"].nunique() > 1:
         positions = positions[positions["Book"] == REPORT_BOOK]
         if positions.empty:
@@ -136,26 +141,40 @@ def build() -> None:
     except Exception:
         f13_filings = f13_cusips = f13_npf = 0
         f13_ok = False
+    # With several books loaded, held_uni_n is the union across ALL of them -- attributing it to
+    # REPORT_BOOK alone read as "2,461 CUSIPs resolve to 4,796 names". Keep the two separate.
+    multi = n_books > 1
+    books_clause = (
+        f" The universe is not book-scoped: it spans all <strong>{n_books}</strong> books in this "
+        f"build ({held_uni_n} 13F-sourced names between them). This report is written about "
+        f"{REPORT_BOOK} alone." if multi else "")
     if f13_ok:
         f13_source = (
-            f"Across the sample Soros filed <strong>{f13_filings}</strong> quarterly 13F-HR "
+            f"Across the sample {REPORT_BOOK} filed <strong>{f13_filings}</strong> quarterly 13F-HR "
             f"reports holding a median of <strong>{f13_npf}</strong> cash-equity names each "
             f"(<strong>{f13_cusips:,}</strong> distinct CUSIPs in total, options and bond lots "
-            f"dropped). Those resolve to <strong>{held_uni_n}</strong> names, and the universe keeps "
-            f"them <em>all</em>, so the book is always a subset of the universe.")
+            f"dropped), resolving to <strong>{held_n}</strong> names here. The universe keeps "
+            f"them <em>all</em>, so the book is always a subset of the universe." + books_clause)
     else:
-        f13_source = (f"The book is drawn from the union of CUSIPs across all of Soros's 13F-HR "
-                      f"tables (options and bond lots dropped), resolving to {held_uni_n} names, all "
-                      f"kept so the full book is covered.")
+        f13_source = (f"The book is drawn from the union of CUSIPs across all of {REPORT_BOOK}'s "
+                      f"13F-HR tables (options and bond lots dropped), resolving to {held_n} names, "
+                      f"all kept so the full book is covered." + books_clause)
+    _not_in = "those books" if multi else "the book"
+    nest_pop = (f"the union of all {n_books} books' 13F names" if multi else "the whole 13F book")
+    cik_note = (f"; one CIK per book, {n_books} in this build" if multi else "")
+    multi_book_note = (
+        f" The build carries <strong>{n_books}</strong> books in all ({', '.join(all_books)}); this "
+        f"document covers {REPORT_BOOK} only, and the risk numbers in §6 are {REPORT_BOOK}'s."
+        if multi else "")
     if seed_name:
         seed_clause = (
             f"To make the cross-section a genuine market rather than one manager's holdings, the "
             f"universe is then <strong>seeded with {seed_name}</strong>: its constituents are unioned "
-            f"in, adding <strong>{idx_only_n}</strong> names not already in the book, for a total "
+            f"in, adding <strong>{idx_only_n}</strong> names not already in {_not_in}, for a total "
             f"estimation universe of <strong>{uni_n}</strong>.")
     else:
         seed_clause = (f"No market index is seeded (<code>SEED_INDEX</code> is off), so the universe "
-                       f"is the {uni_n} 13F-sourced names alone, the manager's own opportunity set.")
+                       f"is the {uni_n} 13F-sourced names alone, the managers' own opportunity set.")
 
     # --- factor table with sparklines ---------------------------------------------------
     fgrp = factor_meta.set_index("Factor")["FactorGroup"]
@@ -350,7 +369,7 @@ every check.</p>
 <p>This document is the audit trail for every number the model produces: where each input comes
 from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
-{SOROS_CIK}). The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
+{SOROS_CIK}).{multi_book_note} The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
 splits into {n_style}&nbsp;style factors plus {n_ind}&nbsp;GICS industry factors plus a market
 intercept (the systematic block) and a diagonal name-specific block. Every scenario is the same
 calculation, <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub> · Δf<sub>k</sub></span>,
@@ -411,8 +430,8 @@ row, factor returns, is the estimated output from the callout above, listed here
 sit in one place.</p>
 <table>
 <tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>Grain</th><th>What we rely on it for</th><th>Known caveats</th></tr>
-<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK {SOROS_CIK})</td><td>Quarterly, ~45d lag</td>
-    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; shorts and intra-quarter trades invisible; public by construction</td></tr>
+<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK {SOROS_CIK}{cik_note})</td><td>Quarterly, ~45d lag</td>
+    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; ETFs and commodity/crypto trusts dropped (no fundamentals, no sector); shorts and intra-quarter trades invisible; public by construction</td></tr>
 <tr><td>Identity</td><td>OpenFIGI v3 mapping API (CUSIP→FIGI→ticker) + SEC <code>company_tickers.json</code> (ticker→CIK)</td>
     <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
 <tr><td>Fundamentals</td><td>SEC XBRL company-facts API, CIK-keyed; tags: Assets, Liabilities,
@@ -473,15 +492,15 @@ model needs.</p>
 <tr><td>Active book per month-end</td><td class="num">{hpd_med} <span class="small">(med)</span></td><td>Names in the latest filing ∩ universe on a given date (range {hpd_min}–{hpd_max})</td></tr>
 </table>
 
-<p><strong>How the populations nest.</strong> The {uni_n}-name universe is the whole 13F book
+<p><strong>How the populations nest.</strong> The {uni_n}-name universe is {nest_pop}
 ({held_uni_n} names) plus the index seed (+{idx_only_n} names not already held). {exp_n} of them
-have usable loadings and enter the daily regression. The held book is always a strict
+have usable loadings and enter the daily regression. {REPORT_BOOK}'s book is always a strict
 <em>subset</em>: {held_n} names are held at some point in the sample, and on any one date the
 active book is the names in the latest filing that are also in the universe (median {hpd_med},
 range {hpd_min}–{hpd_max}). The point worth making: the regression that builds the factor returns
-(§3) runs over the full {exp_n}-name market cross-section, not just the names Soros holds. So the
-factors describe a market, and index names Soros has never held still add breadth. The cube prices
-the full filed 13F book each quarter, and every §6 number reflects that.</p>
+(§3) runs over the full {exp_n}-name market cross-section, not just the names {REPORT_BOOK} holds.
+So the factors describe a market, and names {REPORT_BOOK} has never held still add breadth. The
+cube prices the full filed 13F book each quarter, and every §6 number reflects that.</p>
 
 <p><strong>Why this shape.</strong> Factor-return quality goes up with breadth, and the daily
 regression skips any date with fewer than 30 valid names, so a wide market cross-section beats the

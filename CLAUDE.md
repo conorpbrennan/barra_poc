@@ -806,7 +806,8 @@ editing its data-fetch functions or constants affects both builders.
 
 All sources are free/public, fetched over HTTP with a polite disk cache:
 
-- **positions** → SEC EDGAR 13F (Soros, CIK 0001029160) — the book held as a *weight overlay*.
+- **positions** → SEC EDGAR 13F, one CIK per manager in `MANAGERS` (11 books by default; Soros
+  1029160 is the original and still the reference book) — each book held as a *weight overlay*.
 - **crosswalk** → OpenFIGI v3 (CUSIP→FIGI/ticker) + SEC `company_tickers.json` (ticker→CIK).
 - **fundamentals** → SEC EDGAR XBRL company-facts API (point-in-time, CIK-keyed).
 - **prices/returns** → Stooq per-symbol daily CSV (ticker-keyed), with a **Yahoo chart-API
