@@ -59,11 +59,16 @@ def t_whatif_noop_zero_delta():
 
 @integ
 def t_whatif_holdings_sorted():
-    """Holdings come back sorted by weight, descending, summing to ~1 (long-only overlay)."""
+    """Holdings come back sorted by weight, descending. Priced holdings + the disclosed
+    `unpriced` names (held but no loadings that date — e.g. a TSX-only entrant) recover the
+    full 13F weight of 1; the unpriced share must stay small and never be silently absorbed."""
     j = _whatif([])
     ws = [h["weight"] for h in j["holdings"]]
     assert ws == sorted(ws, reverse=True), "holdings not weight-sorted"
-    assert abs(sum(ws) - 1.0) < 1e-6, sum(ws)
+    unpriced_w = sum(u["weight"] for u in j["unpriced"])
+    assert abs(sum(ws) + unpriced_w - 1.0) < 1e-6, (sum(ws), unpriced_w)
+    assert abs(sum(ws) - j["priced_weight"]) < 1e-9
+    assert unpriced_w < 0.05, f"unpriced weight {unpriced_w:.4%} — coverage problem, investigate"
 
 
 @integ
@@ -77,12 +82,62 @@ def t_whatif_drop_reduces_gross_net():
 
 
 @integ
-def t_whatif_concentrating_raises_hhi():
-    """Doubling the top name (more concentrated) raises Risk HHI."""
+def t_whatif_concentrating_raises_top5_share():
+    """Taking the top name to HALF the book raises the top-5 risk share (the ch-09 CTR
+    concentration idiom that replaced Risk HHI). NB a mere 2× is NOT an invariant: top-5 share
+    is covariance-dependent, and doubling a mega-cap can rotate the book toward the common
+    Market/MegaCap block that every name covaries with, spreading contributions and LOWERING
+    the top-5 share even as total risk rises (observed on the 2026-07-04 imputed frames:
+    2× amzn read 0.40 → 0.35 while model vol rose 1.38% → 1.53%). A decisive concentration
+    must dominate regardless."""
     j = _whatif([])
     top = j["holdings"][0]
-    res = _whatif([{"position": top["position"], "weight": 2 * top["weight"]}])
-    assert res["after"]["risk_hhi"] > res["before"]["risk_hhi"], (res["before"]["risk_hhi"], res["after"]["risk_hhi"])
+    res = _whatif([{"position": top["position"], "weight": 0.5}])
+    assert res["after"]["top5_ctr_share"] > res["before"]["top5_ctr_share"], \
+        (res["before"]["top5_ctr_share"], res["after"]["top5_ctr_share"])
+    assert 0 < res["before"]["top5_ctr_share"] <= 1
+
+
+@integ
+def t_whatif_served_from_cube():
+    """/whatif risk keys are SERVED from the cube (base cell + a transient trades branch), with
+    the numpy engine as the live cross-check: vol diffs at float precision, tail (quantile)
+    diffs within interpolation tolerance, and a second call identical (branch dropped)."""
+    j = _whatif([])
+    assert j.get("source") == "cube", j.get("source")
+    top = j["holdings"][0]
+    res = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
+    assert res.get("source") == "cube"
+    v = res["verification"]
+    assert v["max_abs_diff_vols"] < 5e-10, v
+    assert v["max_rel_diff_tails"] < 1e-3, v
+    res2 = _whatif([{"position": top["position"], "weight": top["weight"] / 2}])
+    assert abs(res2["after"]["model_vol_1d"] - res["after"]["model_vol_1d"]) < 1e-15
+
+
+@integ
+def t_pivot_whatif_param():
+    """/pivot?whatif= runs the SAME guarded pivot on a transient trades branch: the book-level
+    Model vol under the trade equals /whatif's after; missing Date filter 400s; unknown
+    position 400s."""
+    import json as _json
+    import urllib.parse
+    import requests
+    j = _whatif([])
+    top = j["holdings"][0]
+    trades = [{"position": top["position"], "weight": 0}]
+    res = _whatif(trades)
+    q = {"rows": "ScenarioSet", "measures": "Model vol",
+         "filters": _json.dumps({"Book": ["Soros"], "Date": [j["date"]],
+                                 "ScenarioSet": ["HistFull"]}),
+         "whatif": _json.dumps(trades)}
+    p = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
+    mv = p["records"][0]["Model vol"]
+    assert abs(mv - res["after"]["model_vol_1d"]) < 5e-10, (mv, res["after"]["model_vol_1d"])
+    q2 = dict(q); q2["filters"] = _json.dumps({"Book": ["Soros"], "ScenarioSet": ["HistFull"]})
+    assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=30).status_code == 400
+    q3 = dict(q); q3["whatif"] = _json.dumps([{"position": "NOPE", "weight": 0.1}])
+    assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q3)}", timeout=30).status_code == 400
 
 
 @integ

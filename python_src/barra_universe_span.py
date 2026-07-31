@@ -38,7 +38,7 @@ OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_span.parquet"
 FUNNEL = OUT / "universe_funnel.parquet"
 
-STYLE = ["Beta", "Momentum", "Size", "Value", "Growth",
+STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
 EDGE_Q = 0.99            # the cloud's own 99th-pct D² is the edge of "the space"
 MIN_CLOUD = 30           # need a real cross-section to estimate the covariance
@@ -86,11 +86,19 @@ def _cloud_positions_by_month(months) -> dict:
             for m, g in surv.groupby("month")}
 
 
-def run(write: bool = True) -> dict:
+def run(write: bool = True, book: str = "Soros") -> dict:
     print("[span] loading frames ...", flush=True)
     exp = pd.read_parquet(OUT / "exposures.parquet")
     pos = pd.read_parquet(OUT / "positions.parquet")
     sec = pd.read_parquet(OUT / "securities.parquet")
+    # Since the multi-manager build, positions holds every book. The inside-share is aggregated BY
+    # 13F WEIGHT, and weights are normalised per book, so an unfiltered frame would both mix books
+    # and total to 11.0 per month. `book=None` keeps the any-book union as an explicit escape
+    # hatch; no caller uses it.
+    if book is not None:
+        pos = pos[pos["Book"] == book]
+        if pos.empty:
+            raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
     exp = exp[exp["Factor"].isin(STYLE)]
     months = pd.DatetimeIndex(sorted(pd.to_datetime(exp["Date"].unique())))
 

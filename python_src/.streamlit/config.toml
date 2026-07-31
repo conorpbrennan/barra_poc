@@ -13,6 +13,8 @@ font = "serif"
 gatherUsageStats = false
 
 [server]
-# serve python_src/static/* at <baseUrlPath>/app/static/* so the UI can link to the
-# dashboard guide (static/guide.html) for remote users behind the tunnel.
+# serve the static docs at <baseUrlPath>/app/static/* so the UI can link to the dashboard
+# guide for remote users behind the tunnel. The files now live in repo-root docs/static/;
+# python_src/static is a symlink to ../docs/static (Streamlit requires the served folder be
+# named `static` beside the entrypoint, so the symlink keeps serving while the files live in docs/).
 enableStaticServing = true

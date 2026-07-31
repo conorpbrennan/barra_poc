@@ -5,14 +5,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A proof-of-concept Barra-style equity factor-risk model built entirely on free/public data,
-demoed against the Soros Fund Management 13F book. It splits cleanly into two halves:
+originally demoed against the Soros Fund Management 13F book and extended (2026-07-30) to
+eleven hedge-fund/asset-manager 13F books — see "Multi-manager 13F integration" below. It
+splits cleanly into two halves:
 
-1. **Frame builders** pull raw data and emit six canonical parquet frames.
-2. **The Atoti cube** consumes those six frames and exposes exposures + a unified
+1. **Frame builders** pull raw data and emit seven canonical parquet frames, plus an optional
+   eighth (`managers`, multi-manager entity metadata).
+2. **The Atoti cube** consumes those frames and exposes exposures + a unified
    scenario/stress engine (historical sim, event replay, hypothetical shocks).
 
-The two halves communicate *only* through the six parquet files written to the repo-local
-`data/` dir (gitignored). Run a builder, then run the cube — they share no in-process state.
+The two halves communicate *only* through the parquet files written to the repo-local `data/`
+dir (gitignored). Run a builder, then run the cube — they share no in-process state.
 
 ## Running
 
@@ -31,8 +34,41 @@ cd python_src
 `"name email"` string — SEC EDGAR blocks anonymous traffic and the pipeline will fail without it.
 `OPENFIGI_KEY` is read from the environment (optional; raises OpenFIGI batch/rate limits).
 
-Both builders write the six frames to `data/` at the repo root (created on demand) and the
-cube reads from there (`OUT` / `out` constants, resolved relative to the script file).
+Both builders write the frames (seven, plus the optional eighth `managers`) to `data/` at the
+repo root (created on demand) and the cube reads from there (`OUT` / `out` constants, resolved
+relative to the script file).
+
+## LLM voice — CHRIS_VOICE (mandatory for every LLM feature)
+
+**Every LLM system prompt in `risk_api.py` starts from the shared `CHRIS_VOICE` persona block**
+(defined above `ANALYST_SYSTEM`): the voice and doctrine of the desk's senior quantitative risk
+manager, modelled on the It's Just Beta primer's editorial discipline (plain compressed
+sentences, cite the figure next to every claim, no filler) and the reviewer's documented
+corrections (understand ALL risks — unexplained gains investigated like losses; it's-usually-
+just-beta; exposure ≠ risk contribution; correlated residuals = missing factor; t = IR·√T
+humility; artifacts before alarms). It deliberately never signs a name or claims a specific
+identity. **Any new LLM endpoint must be written as `NEW_SYSTEM = CHRIS_VOICE + """..."""`** —
+`test_analysis.py::t_all_llm_prompts_carry_chris_voice` fails otherwise. Current prompts:
+`ANALYST_SYSTEM`, `OVERVIEW_SYSTEM`, `TRENDS_SYSTEM`, `WHATCHANGED_SYSTEM`, `ASK_SYSTEM`,
+`PNLATTR_SYSTEM` (`POST /pnl_attribution/analysis {frm?, to?, horizon?, notes?}` — the
+PnL-attribution lens narrated: linked window split, factor table with t-stat humility,
+residual RAG, linkage breach verdicts; StreamPanel at the bottom of the Attribution PnL tab,
+cached per window+horizon). NB internal calls to Query-defaulted routes must pass EVERY such
+param explicitly or they receive FastAPI Query objects (the /overview min_weight lesson).
+`POST /trends/analysis {set?, notes?}` is the Trends-lens read: the monthly book-measure series
++ quarterly-sampled factor-exposure paths + the limits config, narrated as regimes / current
+level vs history / drift / headroom, ending with a "Watch:". UI: "Risk-manager read" StreamPanel
+at the bottom of the Trends lens (cached per scenario set).
+
+## Overview morning summary (`/overview/analysis`)
+
+`POST /overview/analysis {date?, book?, set?, notes?}` streams the whole-book morning read in
+the CHRIS_VOICE persona: assembles the monitor's own numbers (limits RAG, `_risk_from_weights`
+heroes + Euler variance split/top CTV, the trimmed reconcile verdicts + drivers + breach
+co-movement via the linkage route, Kupiec backtest headline, trailing-12m attribution headline,
+DQ counts) and narrates them in the daily-loop order, ending with a "Do next". Same plain
+Messages-API no-tools pattern and rate limit as `/analysis`. UI: the "Risk-manager summary"
+StreamPanel at the bottom of the Vite Overview (on-demand, cached per date/book/set).
 
 ## Risk-analyst commentary (`/analysis`)
 
@@ -47,9 +83,13 @@ lives in `ANALYST_SYSTEM`. The Streamlit UI calls it from an on-demand "🔍 Ris
 commentary" button under the grid (no token spend unless clicked; cached per view+slice).
 
 `ANTHROPIC_API_KEY` is required for `/analysis` only. The process env wins; otherwise the key
-is read **only** from the repo `.env` (`_anthropic_key`) — the rest of `.env` is never sourced
-because its `ATOTI_LICENSE` path is broken and would break the cube. Without a key, `/analysis`
-returns a clean 502 and nothing else is affected. Model: `claude-opus-4-8`. Tests:
+is read **only** from the repo `.env` (`_anthropic_key`) — the API still does **not** source the
+whole `.env` (it extracts just the key) to keep the service env minimal. The Atoti license is
+supplied out-of-band by the `flexagg-api.service` systemd unit
+(`Environment=ATOTI_LICENSE=…/ActivePivot.lic.43457`), which disables telemetry; the `.env`
+`ATOTI_LICENSE` path typo (`barra-_poc` → `barra_poc`) was fixed 2026-06-30, so it now resolves
+too. Without a key, `/analysis` returns a clean 502 and nothing else is affected. Model:
+`claude-opus-4-8`. Tests:
 `test_analysis.py` (unit guards always run; integration needs the backend; the one live LLM
 call is opt-in via `RUN_LLM=1`).
 
@@ -59,7 +99,7 @@ call is opt-in via `RUN_LLM=1`).
 filings: positions **entered / exited / resized** (by 13F weight), the book's net factor-exposure
 **drift attributed** with Phase 4's `barra_universe_drift.decompose` (each factor's Δ split into
 rotation = entered/exited vs re-pricing = loading_drift, summing to Δ exactly), and the **book risk
-delta** (Scenario VaR/ES, Total VaR 99, Risk HHI, specific vol, gross/net) computed at each date with
+delta** (Scenario VaR/ES, Total VaR 99, Top-5 risk share, specific vol, gross/net) computed at each date with
 the what-if math (`_book_inputs` + `_risk_from_weights`, so it's cube-consistent, on the full
 factor-return history). `prev` defaults to the previous *distinct* book (`_prior_filing_date` walks
 back past the flat monthly as-of months to the prior quarterly filing).
@@ -93,6 +133,26 @@ inline (`> 🔎 query_cube …`) so the grounding is visible. UI "💬 Ask the r
 risk-tooling roadmap.
 
 ## Desk limits (`/limits`)
+
+**Reference-metric decision (2026-07-03): MODEL VOL is the reference; VaR/ES are the limits.**
+The desk's reference risk number is model vol `σ = √(x'Fx + w'Δw)` with its factor/specific
+split (`model_vol_1d`, now first in `_risk_from_weights` and the what-if/Overview displays).
+**`Model vol` is also a cube measure** (`barra_factor_risk_cube.py`: `√(Scenario PnL vol² +
+Specific variance)` — atoti sample-std == np.cov ddof=1, so sliced to HistFull it ties the API
+implementations to float precision; per-cell, so it drills by sector/name and serves `/trends`;
+on Evt sets it reads as window/regime vol, on length-1 Hypo sets it is degenerate → blank). The decomposition pair: **`Marginal Model vol`** (the Euler contribution — cov(member, book)
+via the polarization identity on the same sample std, + own specific variance, over book σ;
+sums EXACTLY to Model vol; per NAME it equals the ch-09 CTR — by Factor the specific block
+fans out, same caveat as Marginal Total VaR), **`% of Model vol`**, and **`Incremental Model
+vol`** (σ released by removing the member — sub-additive, ties the `/whatif` drop delta). On
+the `/pivot` allowlist + `TS_MEASURES`; accuracy pinned by `test_model_vol.py` (9 tests:
+tie-outs to `/contributions` CTR and `/whatif` at 5e-10, the in-cube identity, Euler sums,
+sub-additivity, set semantics, trends);
+the desk limits are written on **Scenario VaR 99 / ES 97.5** (the Kupiec-backtested metrics —
+`limits.json`'s Total VaR 99 limit was replaced by Scenario VaR 99, same thresholds); the house
+**Total VaR 99** composite (empirical factor quantile ⊕ Gaussian specific, in quadrature) is
+kept as a measure but demoted to "(legacy)" in the UIs, and `/reverse_stress` defaults to the
+Scenario VaR 99 limit. CHRIS_VOICE prompts carry the same hierarchy.
 
 `risk_api.py` has a `GET /limits?date=&set=&book=` endpoint that compares the book's numbers to a
 desk limit set in repo-root `limits.json` (reloaded each call) and returns a red/amber/green status
@@ -153,7 +213,7 @@ the cube for the scenario/HHI measures across all ~108 dates in one plan materia
 vector per date and OOMs the Java heap, so it loops one date (one vector) at a time. The `by=Factor`
 path is a single query (Net exposure is additive, no vectors). The UI "📈 Risk trends" panel
 (`render_trends`) charts Scenario VaR 99 / ES 97.5, Risk HHI, and the top style-factor exposures over
-2016–2024. Tests: `test_trends.py`.
+the full sample. Tests: `test_trends.py`.
 
 ## Stress (`/stress`, `/reverse_stress`)
 
@@ -162,21 +222,125 @@ A hypothetical shock's book P&L is linear: `dPnL = Σ_k x_k·(σ_k·vol_k)` — 
 exposures (cube `Net exposure` by Factor) + factor vols (`_factor_vols`, matching `build_scenarios`'s
 `wide.std()`), so neither needs a cube rebuild. `POST /stress {shocks:{Factor:σ}}` returns the book
 P&L + per-factor contribution breakdown — verified to match the cube's baked-in Hypo sets to float
-precision. `GET /reverse_stress?loss=` inverts it: for a target loss `L`, the single-factor move
+precision. **`conditional: true`** adds the correlated read: `E[f|f_S=s] = F[:,S]·F[S,S]⁻¹·s`
+(`_conditional_shock`, pure) propagates the shock through the factor covariance so co-moving factors
+move too — the naive result holds them still and understates a real event. `GET /reverse_stress?loss=`
+inverts it: for a target loss `L`, the single-factor move
 `σ_k = −L/(x_k·vol_k)` per factor, ranked by `|σ|` (smallest = most vulnerable; default `L` = the
-Total VaR 99 desk limit). UI "🧪 Stress test" panel (`render_stress`). Tests: `test_stress.py`.
+Total VaR 99 desk limit). The naive shock is **SERVED from the cube's StressShock parameter
+simulation** (`Custom stress PnL` — a transient uuid scenario per request, dropped in finally;
+numpy `_stress_result` retained as the live `verification` cross-check, < 1e-12, with a
+`numpy_fallback`). The grid can drill it too: **`/pivot` takes stateless `whatif` and `shocks`
+params** — the same guarded pivot on a transient hypothetical branch/scenario — and the Vite
+Pivot lens has the control: a **Hypothetical bar** (amber strip; trade picker from holdings +
+universe, factor-σ shocks, removable chips; every query incl. drills and the grand corner
+carries the branch; cleared on saved-view load — views stay canonical). `/analysis` accepts the
+same `whatif`/`shocks` (shared `_parse_hypo`/`_hypothetical_pivot` helpers) so commentary
+prices the SAME hypothetical view and says so in its headline. UI "🧪 Stress test" panel (`render_stress`); the Vite Stress lens has the
+conditional toggle (naive vs conditional side by side + the propagation table) plus **presets**
+that fill the σ inputs — the cube's `HYPO_SHOCKS` definitions (served via `/meta.hypo_shocks`,
+ONE source, guarded by `t_meta_serves_hypo_shocks`), the primer's ch-09 Value −2σ example, and
+the reverse-stress weakest factor at breach size. Both the Stress and What-if lenses carry a
+**"How to read this" disclosure** (`HowToRead` in `components/ui.tsx` — the per-lens explainer
+pattern: formula, conventions, caveats in a collapsed `<details>`; extend to other lenses as
+needed). Tests: `test_stress.py`.
+
+## Euler risk contributions (`/contributions`) & model trust (`/calibration`, `/regression`, `/factor_cov`)
+
+The It's Just Beta alignment set (see `itsjustbeta/additional-views-plan.md`), shipped 2026-07-02:
+
+- **`GET /contributions?date=&book=`** — the ch-09 standard reports, **served from the cube
+  measures** since 2026-07-03 (`Marginal Model vol` per name == CTR, `Factor variance
+  contribution` per factor == CTV, `Model vol` book σ — endpoint and grid can never disagree):
+  per-factor **CTV** `x_k(Fx)_k` (sums to factor VARIANCE, cross-terms 50/50, negative = hedge)
+  and per-position **CTR** `w·MCR` (sums EXACTLY to book daily vol); never compare CTR (vol
+  units) with CTV (variance units). `_euler_contributions` (pure numpy) is retained and
+  **recomputed on every call as an independent cross-check**, reported in `verification`
+  (live diffs ~1e-17 — the tie-out made permanent). Vite Attribution lens "Contributions
+  (Euler)" tab, sums pinned. Tests: `test_contributions.py`.
+- **`GET /calibration?window=&book=`** — the ROLLING bias statistic (`_rolling_bias`, pure):
+  `b = std(realized/predicted vol)` over a trailing window with the `1 ± √(2/window)` acceptance
+  band, book + specific, plus 2σ exceedance counts (expected ≈ 4.6%). NB the route is
+  `/calibration` because `/validation` was already the scenario cross-check. Reads the attribution
+  artifact + `_pred_book_vols` (cached full-calendar on `S`).
+- **`GET /regression`** — the builder's WLS fit health from the **`regression_stats.parquet` side
+  artifact** (`barra_build_frames.py` now persists per-day weighted cross-sectional R², per-factor
+  t-stats, and N — an eighth parquet, NOT part of the seven-frame cube contract; written inside
+  `build_frames`, needs a rebuild to populate, 404s cleanly when absent). Serves the monthly R²
+  trend (mean ≈ 0.19 daily — the trend matters, not the monthly 0.2–0.4 rule) and the admission
+  table: % of days `|t|>2` per factor (Market 85% … Growth 9% — which led to Growth being
+  DROPPED from the model on 2026-07-04; see "Descriptor health" below).
+- **`GET /factor_cov?date=`** — the F matrix made visible: correlation matrix + per-factor daily
+  vols, full window vs recent-1y side by side (vol-clustering warning where the ratio ≫ 1).
+
+UI: the Vite **Model lens** (`frontend/src/routes/Model.tsx`, rail entry "Model") — rolling-bias
+small multiples with the acceptance band, R² trend + admission table, shaded correlation matrix.
+Tests: `test_model_trust.py` (integ), `_rolling_bias` unit in `test_attribution.py`, `BiasChart`
+render in `Model.test.tsx`.
+
+Second wave (plan items #6–#10, same day):
+
+- **`GET /exposure_profile?factor=&date=`** — one factor's cross-section: histogram + quantiles,
+  the ±3 estimation-winsor lines, the uncapped beyond-±3 tail (off-index names' true tilts, e.g.
+  a held name at Size −5.5), the held book overlaid (dot size = weight), and the descriptor
+  recipe (`FACTOR_RECIPES`) — the "model-conditional: what OUR Value means" view. Model lens.
+- **`GET /hedge?date=&book=`** — ch-12/D6: book vol before/after NEUTRALIZING each factor (−x_k
+  units of the pure factor-k portfolio), ranked by vol saved, plus the single-instrument
+  minimum-variance market hedge `h* = −(Fx)_m/F_mm` (beats full neutralization — it nets the
+  correlated style covariance too). Specific vol is the floor no factor hedge touches.
+  **Served from the cube measures** since the Tier-1 migration (`Vol ex factor` — book σ minus
+  the factor's P&L vector with the FULL specific block kept, the factor-aware incremental;
+  `Min-variance hedge ratio` = −cov/(x·vol²), exposure units, x cancels algebraically;
+  `Vol at min-variance hedge`); `_hedge_table` (pure) retained as the live `verification`
+  cross-check (~1e-17). `/stress`/`/reverse_stress` factor vols likewise now come from the
+  cube's `Factor return vol` (std of the ShockVec — the old pandas `wide.std()` estimator;
+  in-cube identity `Scenario PnL vol == |Net exposure|·Factor return vol` is tested). What-if
+  lens panel.
+- **`GET /factor_portfolio?factor=&date=`** — ch-07's dual made visible: reconstructs
+  `P = (X'W²X)⁻¹X'W²` on the funnel survivors (≈ estimation universe; W = the builder's
+  exp(Size/4) sqrt-cap proxy) and serves one factor's pure portfolio: top longs/shorts, gross,
+  net, and the PX = I purity check (self-exposure 1, cross ~1e-16). Empirical note: style
+  portfolios are dollar-neutral and gross runs ~0.9–1.4× on this broad cross-section (the
+  primer's 11.9× is a 10-stock artifact); Market nets to exactly +1. Model lens.
+- **`GET /pnl_attribution/names?from=&to=`** — ch-13 scope: specific PnL name by name (winners /
+  losers), each with sign persistence (share of consecutive same-sign months; ≈0.5 memoryless,
+  ≫0.5 = edge / stale 13F / missing factor) and months-positive. `_name_attr` gained a
+  `monthly=True` mode returning the per-month specific panel. Attribution lens, PnL tab.
+- **DQ model gates** — `barra_dq_checks.py` §6: estimation-universe style medians ≈ 0
+  (standardization gate, on funnel survivors — full-cross-section medians legitimately sit off 0
+  because the uncapped coverage tail is smaller/less liquid BY DESIGN), factor covariance PSD,
+  and regression_stats sanity (N ≥ 30, R² ∈ [0,1]). Inherited by `/dq` + the Checks lens.
 
 ## Pre-trade / what-if (`/whatif`)
 
 `risk_api.py` `POST /whatif {trades:[{position, weight}]}` recomputes book risk under a modified weight
 vector — resize/drop held names, or add a universe name (absolute target weight; 0 drops). It
 reproduces the cube's risk math in numpy (`_book_inputs` + `_risk_from_weights`): factor P&L vector
-`R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and Risk HHI from the marginal-Total-VaR shares —
+`R·(Lᵀw)`, the diagonal specific block `Σ wᵢ²σᵢ²`, and the **Top-5 risk share** from the
+marginal-Total-VaR contributions (the ch-09 CTR concentration idiom; replaced Risk HHI in the
+what-if/limits/whatchanged payloads 2026-07-02; **a cube measure since 2026-07-04** — `tt.rank`
+over the hidden flat `PositionRank` hierarchy, whose creation required every book-level
+`tt.total` in the cube to ALSO lift `PositionRank` so measures inside rank contexts still see
+true book totals; `/limits` and the what-if before/after serve the cube number, which is
+SET-DEPENDENT like the old Risk HHI — Hypo:MomentumCrash reads ~0.74/breach vs HistFull 0.29 by
+the documented Hypo-concentration mechanism; the numpy mtv variant remains in
+`_risk_from_weights` as the verification twin, diff ~3e-6 from tail-day conventions) —
 so **"before" matches the cube's reported figures exactly** and only the BEFORE→AFTER delta is the
-new information. No cube rebuild. Empty `trades` returns the current holdings (ticker+weight) so the
+new information. No cube rebuild. The payload also discloses `unpriced` (held names with NO loadings that date —
+outside free-data coverage, e.g. a TSX-only entrant like MDA Space in the 2026 book) +
+`priced_weight`; holdings + unpriced recover the full 13F weight of 1, never silently absorbed
+(What-if lens shows the note; pinned by `t_whatif_holdings_sorted` / `t_gross_net_weight_measures`).
+Empty `trades` returns the current holdings (ticker+weight) so the
 UI bootstraps its editor, and `universe` (every tradeable name with loadings that date) so the UI's
 "add from coverage universe" control can add a non-held name. Returns before/after/delta for Scenario
-VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Risk HHI, gross, net. UI panel `render_whatif`.
+VaR 99/97.5, ES 97.5/99, Total VaR 99, Specific vol, Top-5 risk share, gross, net. **The before/after risk keys are SERVED from the cube**
+(base cell + a transient trades branch; numpy `_risk_from_weights` retained as the live
+`verification` cross-check + the gross/net/top-5 arithmetic, with a `numpy_fallback`):
+`Net exposure` is now a MEASURE-LEVEL product of the leaf Loading × the JOINED Positions Weight
+(benchmarked at parity with the old baked WLoading column — the ~9s penalty is gone on atoti 0.9.15),
+so a Positions branch flows through every chained measure; live diffs vs the numpy engine ~1e-17.
+Attribution measures stay deliberately branch-INsensitive (baked FactorPnL/SpecPnL — a what-if doesn't
+rewrite realized history). UI panel `render_whatif`.
 Tests: `test_whatif.py`.
 
 ## Liquidity / days-to-liquidate (`/liquidity`)
@@ -193,6 +357,71 @@ each name's ADV you'll trade per day; `horizon` (default 5) is the cutoff. No cu
 `S["frames"]` positions + securities. UI "💧 Liquidity (days-to-liquidate)" panel `render_liquidity`
 (participation/horizon sliders). Tests: `test_liquidity.py`. NB on the Soros book at 20%
 participation: ~87% of weight liquidatable within 5 days, wavg ≈ 2.2d, worst ≈ 13.4d (GFL), no-ADV 0.
+
+## PnL attribution & factor-model validation (`/pnl_attribution`)
+
+Step 15 (spec: `docs/pnl-attribution-plan.md`, roadmap §9 — shipped 2026-07-02). Splits the book's
+**realized** PnL into a factor-explained part + a residual, tests the residual, and links both back
+to the ex-ante risk decomposition. Three layers:
+
+- **Builder/cube (the drill).** The 7th frame `specific_returns` persists the un-squared WLS
+  residual `u` daily. The cube derives three **additive** measures — `Factor contribution`
+  (= WLoading × fwd-month factor return, a physical leaf column), `Specific PnL` (as-of weight ×
+  fwd-month residual, OriginScope like `Specific variance` — fans out by Factor, read it by
+  name/book), `Realized PnL` (their sum, an identity) — all on the **forward-month convention**:
+  the value at Date d0 is the PnL over the month after d0 (the month d0's exposures explain).
+  They're on the `/pivot` allowlist (pruned at startup on v1 data), so the grid, `/ask` and
+  `/analysis` inherit the factor→name drill.
+- **Precompute `barra_pnl_attribution.py`** → `data/pnl_attribution.parquet` (tidy daily
+  Date/Kind/Source/Value). Reconstructs each name's daily return **from the frames alone**
+  (`R_i = L_i·f + ε_i` — exact, ε is the model's own residual, so realized = factor + specific ties
+  out at machine precision; that identity is unit-tested), compounds **drifting buy-and-hold
+  weights** re-anchored at each 13F filing, and discloses coverage (priced share + unpriced names).
+  Pure stats importable for tests: `_carino_link`, `_info_ratio`, `_autocorr`, `_bias_stat`,
+  `_concentration_hhi`, `_hit_rate`, `_resid_factor_regression`, `_stressed_cov`. Rerun after a
+  rebuild.
+- **API + UI.** `GET /pnl_attribution?from=&to=&by=` — Carino-linked period headline (linked
+  contributions sum to the geometric return exactly), the cumulative hero series, the by-factor
+  table (avg exposure, cum factor return, contribution, t-stat), coverage. `GET
+  /pnl_attribution/residual` — the §2 diagnostics with **RAG verdicts** (IR, realized/predicted
+  specific vol, lag-1/2 autocorr, residual-vs-factor regression at **daily** resolution, Barra bias
+  stats book/specific/per-factor, residual HHI, hit rate; thresholds start loose). `GET
+  /pnl_attribution/linkage?T=&horizon=` — the §4 reconcile: per factor + Specific + book total, the
+  start-of-period ±2σ **base band** and a **stressed band** (vols ×`vol_mult` 1.25, correlations
+  blended toward 1 by `rho` 0.75 via `_stressed_cov`), the realized dot, surprise z, and a
+  within / stress-regime / investigate verdict, plus per-position surprises. Rows outside the ±2σ
+  base band also carry a **driver read** (`_linkage_driver`, pure): the band freezes `x` at T, so
+  each breach is classified `exposure_migration` (x(T) unrepresentative — z rebuilt on the
+  in-window avg exposure `exposure_window_avg` sits within band; loading churn / 13F re-anchor,
+  drawn as a hollow dot in the Vite UI), `factor_move` (exposure stable, factor moved ≥1.5σ), or
+  `mixed`, each with a one-sentence `text`; specific/book breaches point at the bias stats /
+  backtest instead (`vol_underforecast`). **Positions get the same treatment** (`_position_driver`,
+  pure): each name's row carries its factor/specific PnL split + `weight_window_avg`, and breaches
+  classify as `weight_migration` (13F re-anchor/resize made w(T) unrepresentative — band artifact),
+  `specific_move` (idiosyncratic event, ≥65% specific — cross-check the residual explorer),
+  `factor_move` (loadings carried a factor move, with the largest factor named), or `mixed`; the
+  Vite positions table shows the split + a stock-level driver-read block. Two joint reads on top:
+  **`breach_comovement`** (`_pairwise_mean_corr`, pure — Chris's missing-factor test, cheap
+  version): pairwise daily-residual correlation among the specific/mixed breach names; mean ρ ≥
+  0.25 ⇒ `common_thread` (one driver the model has no factor for), else `independent` (separate
+  stock events). And **`hidden_beta`** on `factor_move` AND `mixed` breaches (the flag reads on
+  the factor component): if the driving factor's own row sits WITHIN its band, the factor moved
+  normally — the name's realized comovement exceeded its T loading, so suspect the loading, not
+  the factor. NB `mixed` means neither component dominates (specific share 35–65%); it is a
+  composition statement, orthogonal to the hidden-beta inference. `/stress` gained the
+  same correlation-stress mode (optional `vol_mult`/`rho` → `correlation_stress` block).
+  `/analysis` folds in a trailing-12m headline. UI: Streamlit `render_attribution` (Risk tab —
+  period presets, vega-lite stacked hero, RAG table, reconcile SVG) and the Vite Attribution lens
+  "PnL attribution" tab (same views, hand-rolled SVG). The Vite reconcile is **drillable**:
+clicking a positions-table row (or a factor dot on the band chart — linked selection) opens an
+inline hairline drawer (one at a time) that explains the driver from the same guarded `/pivot`
+the grid uses — per-factor `Factor contribution` bars over the window [T, to) (fwd-month
+convention; the bars sum to the row's realized exactly), the T loadings beside each bar with an
+"N of M loadings" thin-set warning (the hidden-beta suspect), the inverse who-carried-it view by
+Issuer for factor rows, and an "open in Pivot →" link — the Pivot lens applies a one-shot
+`?drill=` param ({rows, cols?, measures, filters}) after dims load, then strips it from the URL.
+Tests: `test_attribution.py` (+ a panel
+  test in `test_pivot_app.py`, React tests in `Attribution.test.tsx`).
 
 ## Estimation universe — index membership (`/universe`)
 
@@ -307,25 +536,262 @@ The six-frame schema and the cube are unchanged — `is_estimation` lives only i
 Rebuild to take effect (it changes factor returns, specific risk, and every downstream number; book
 Total VaR ≈ 3.6%, unchanged headline). See `docs/estimation-coverage-design.md`.
 
+## Descriptor health — the Liquidity respec + audit (2026-07-04)
+
+The residual diagnostics' hidden-beta flag (R² 0.50, "loads on Liquidity" β 0.89 t 7.9) traced to a
+**descriptor construction fault, not stale loadings**: raw Liquidity was `z(log 63d dollar-ADV)` —
+mechanically a second Size (`log ADV ≈ log mcap`; factor-return ρ −0.81 with Size). Three builder
+changes in `barra_build_frames.py` (rebuild to take effect):
+
+- **Per-descriptor history gates** in `price_descriptors` — Beta/ResidVol need 120 return days,
+  Momentum its own 252, ADV only 21 volume days; the old single 120-day gate dropped ALL price
+  descriptors for young listings (post-2021 entrants = 51% of book weight lost Liquidity entirely).
+- **Liquidity = turnover**: raw `log ADV − log mcap` at merge time (still shared Size's driver,
+  ρ +0.71 alone) **plus Size-orthogonalization of the loading on the estimation fit** (the
+  NonLinSize pattern) → final factor-return ρ vs Size **−0.06 full / +0.26 window**. `FACTOR_RECIPES`
+  in `risk_api.py` documents the respec.
+- **Coverage trade-off, accepted + disclosed**: turnover needs mcap, so ~40 held names (20.1% of
+  weight — tsm, tko, cwan…) carry no Liquidity loading (they had raw-ADV before). Better no
+  descriptor than wrong units; `/dq` and the audit's coverage section disclose it.
+
+**`barra_descriptor_audit.py`** generalizes the three tests that caught this, run per factor from
+`python_src/` after a build: (1) **collinearity** — factor-return |ρ| ≥ 0.6 pairs, full + trailing
+window; (2) **hidden beta** — each held name's daily specific return regressed on the factor return
+(β ~ 0 if loadings right; `Σw·β` = the unmodeled book exposure, |t|>2 share = breadth); (3) **held-weight
+loading coverage**. Pure helpers (`_collinear_pairs`, `_residual_betas`, `_coverage`) are unit-tested
+in `test_descriptor_audit.py` (no backend needed). Post-fix audit findings: the residual R² stays ~0.51
+but the top loading moved Liquidity → **Size (β 1.04) / NonLinSize (β −1.43)** — the mislabel is gone
+and the remaining hidden beta is a real **mega-cap regime driver** (amzn/googl/aapl/nvda/msft carry
+it) the linear+cubic size terms don't span; and **Growth covered only 21.3% of held weight**,
+which combined with `/regression`'s 9% |t|>2 admission rate led to **Growth being dropped from
+the model on 2026-07-04** (removed from `STYLE_FACTORS`, the fundamentals descriptor block, the
+precompute/frontend STYLE lists, `FACTOR_RECIPES`, and the CRO report).
+
+The mega-cap cluster got its own fix the same day: **`MegaCap`, a spline knot in the size
+curve** — the hinge of RAW log-mcap above the estimation 90th percentile (raw, because the ±3
+estimation winsor is a leverage bound, not a validity judgment: it deliberately flattens the top
+tail of Size, which is why NVDA ≈ a $600B name at +3 and the mega regime landed in residuals),
+scaled by the estimation hinge std, then orthogonalized to Size + NonLinSize on the estimation
+fit (lstsq) so it carries exactly the tail shape the linear+cubic terms can't span. Standardized
+on the estimation residual mean/std WITHOUT a winsor (inputs bounded by construction),
+`COVERAGE_CAP` backstop, NaN for no-mcap names. Special-cased out of the generic `_split_z` loop
+in `build_exposures` (it must hinge on raw values). The model carries ten style factors + Market.
+
+MegaCap moved the residual R² 0.51 → 0.44 and migrated the remaining hidden-beta carriers from
+mega- to small/mid-caps (hto/itri/ida/gtls) — which exposed the second construction fault:
+**NonLinSize was a U, not an S**. Cubing raw log-mcap (all positive, mean ~24) leaves the
+post-Size-fit residual dominated by the QUADRATIC term (corr +0.74 with Size² on the
+cross-section), so small/mid-caps sat pinned together at +6/+7 on the U's left arm.
+**Respec 2026-07-04: NonLinSize = cube of the STANDARDIZED Size** (USE4 convention — centre
+first, then cube, so the residual is genuinely odd: small −, mid ~0, large +), computed in the
+per-date loop from the z-scored Size (also excluded from the generic `_split_z` pass), then the
+existing Size-orthogonalization. The excel section-3 mirror still shows raw m³ with a
+divergence note.
+
+**Size-curve imputation (the no-mcap coverage fix, 2026-07-04).** ~40 held names / 20.1% of
+weight (tsm, tko, cwan…) had prices but no usable share count — foreign filers report IFRS in
+native currency (wrong-units ratios) and 20-F cover pages count ORDINARY shares against an ADR
+price (a 5:1 ratio fakes log-mcap by +1.6), so tag-widening was rejected. Instead the builder
+imputes raw log-mcap for COVERAGE names from the per-date estimation regression of log-mcap on
+log-ADV (ρ ≈ 0.9, `_logadv` stash in `build_exposures`), which fills Size/NonLinSize/MegaCap for
+them. Estimation rows are NEVER imputed (factor-return estimation untouched); Liquidity stays
+NaN for imputed names (turnover against its own imputation basis is circular) and Value/
+EarnYield stay NaN (no fundamentals). Disclosed: builder prints the count, `/dq` carries a
+"size-curve proxy loadings" check (held names with Size but no Value ⇒ imputed; WARN above 25%
+weight), `FACTOR_RECIPES` and the CRO report document it.
+
+**GICS industry block (2026-07-04): Market + 11 styles + 11 industries.** `regress_factors`
+adds eleven 0/1 sector dummies to the daily cross-section under the **Barra constraint
+Σ_s c_s·f_s = 0** (c = the sector's WLS weight mass in the estimation fit), imposed by
+substituting the reference (heaviest) sector out of the design — `D̃_j = D_j − (c_j/c_ref)·D_ref`
+— so **Market remains the weighted-market intercept**, industries are pure relative-sector
+returns, and the transformed design predicts every name correctly (the residual path is
+unchanged; the reference sector's return is recovered from the constraint and emitted to the
+scenario cache but omitted from the t-stat table). Each name carries an `Ind:<Sector>` LEAF
+loading of 1.0 (the dual of the dummies) so sector P&L flows the scenario engine and the cube
+drills factor risk by industry; `factor_meta` gains `FactorGroup="Industry"`; "Unknown" sectors
+carry no dummy. Sector is joined onto `sec` BEFORE the regression (one `sectors_for_ciks`
+fetch, reused by the securities dimension). Results: daily cross-sectional R² 0.19 → 0.30,
+Leverage's hidden-beta flag clears (the utilities carriers absorbed), industries admit strongly
+(Energy 51%). **`/factor_portfolio` mirrors the same constrained design** — raw dummies + the
+intercept are exactly collinear on an all-known-sector fit cross-section and the solve error
+lands in the Market row (self-exposure read −0.11 pre-fix); the reference sector has no free
+portfolio row and 400s with a clear message; pure `Ind:*` portfolios are requestable
+(dollar-neutral, like styles).
+
+**NdxBeta (2026-07-04): the mega-complex comovement factor.** Post-industries the last two
+flags (Liquidity +0.63, MegaCap −0.64) were carried by amzn/googl/msft/tsm — the mega complex
+trades as a GROUP beyond any smooth function of log-mcap (MegaCap grades size; the regime is
+club membership), and tsm's imputed size can't see its Taipei volume. `NdxBeta` = partial beta
+to QQQ (`NDX_PROXY`) residualized against the market, the RateBeta construction. Result:
+**Liquidity's flag cleared** (+0.36 watch, amzn/msft leave the carriers), **residual R²
+0.40 → 0.26** (the largest single drop of the program; 0.51 at session start), admission 43%,
+collinearity clean (no NdxBeta~Ind:IT pair), RateBeta cleared to ok. The ONE remaining flag is
+MegaCap (−0.60), localized to the imputed-size names (tsm +3.9, tko +1.9) — the log-ADV
+imputation understates mega-ness where US volume underrepresents global size, a free-data
+boundary, disclosed. MegaCap's admission fell to 13% as NdxBeta took over the club's pricing.
+
+**MegaCap DROPPED (2026-07-04, same day it was added)** — admission 13% (weakest) and its one
+remaining flag was carried by imputed-size names whose hinge loading the log-ADV fit cannot
+estimate. A measured trade, both sides in §7·b: gained Liquidity fully clean (−0.03), span
+inside-share 72% → 85% (the hinge's extreme loadings pushed the megas past the cloud edge BY
+CONSTRUCTION — the earlier span note is thereby resolved), fit R² unchanged; cost residual R²
+0.26 → 0.32 and a modest new Momentum flag (−0.22, mega carriers) — the hinge was doing real
+work for the correctly-measured megas. **Eleven style factors + 11 industries + Market.**
+
+**RateBeta (2026-07-04): the missing rates/duration factor.** The post-respec audit's three
+remaining flags (Leverage/Liquidity/MegaCap) shared one carrier list — hto/tsm/ida/cms/amzn:
+utilities, a hotel REIT, rate-sensitive mega-caps — the missing-factor signature. `RateBeta` =
+the PARTIAL duration beta: TLT's (`RATE_PROXY`) daily return residualized against the market
+over the 252d window, then the stock's beta to that residual (rate sensitivity BEYOND equity
+beta — not a second Beta). Same per-descriptor 120-day gate as Beta/ResidVol; `rates=None`
+call sites (excel mirror) emit the column NaN. Eleven style factors + Market.
+
+**Span inside-share note (2026-07-04).** The drop 80.6% → ~73% after the size-curve respecs is
+NOT the imputed block (3.6% of the outside weight) — it's MegaCap BY CONSTRUCTION: the hinge
+gives the top tail extreme loadings, so nvda/googl/aapl sit past the estimation cloud's p99
+Mahalanobis edge on MegaCap alone. For ESTIMATION members "outside" means "sparse tail of the
+cloud", not model extrapolation (their exposures are fit on their own data) — read the span
+drill-down with that distinction.
+
+**Leverage respec (2026-07-04): Liabilities/Assets, not Assets/Equity.** A/E is unbounded as
+equity→0 (insurers 40×, buyback/distressed names 100×+), so 28 coverage names pinned at one
+clipped loading and every S&P financial saturated at the estimation winsor — the factor
+degenerated into a financials-sector dummy, and the audit's Leverage hidden beta (−0.31 with
+amzn/aapl/ida/cms/hto carriers at moderate true ratios) was the residuals cancelling the
+manufactured tilt. Liab/A = 1 − 1/(A/E): same information, bounded ~[0,1], differentiates within
+the financials block. `Liabilities` falls back to `Assets − Equity` when the tag is missing.
+
+**Momentum respec (2026-07-04): LOG relative strength, not arithmetic return.** The audit's last
+HIDDEN BETA row (Momentum −0.22, 42% breadth, carried by tsm/googl/tko/msft) traced to two layers.
+The construction fault: raw momentum was the arithmetic 12-1 ratio — bounded at −1, unbounded
+above — so the z-scored winner tail ran to +8/+10 (skew +2.2; 4.3% of names pinned at the +3
+estimation winsor vs 0.0% at −3) while realized momentum sensitivity saturates near +1.
+`ln(P(t−21d)/P(t−252d))` (the USE4 RSTR convention) symmetrizes it (skew +0.5). Result: canonical
+residual R² 0.32 → 0.30, Momentum leaves the book-residual regression (β −0.17 t −2.8 → −0.11
+t −1.8, below significance), tsm exits the carriers, admission 51%. The audit row itself still
+reads −0.19/42% — that remainder is STRUCTURAL, measured and left disclosed rather than chased:
+(1) realized momentum sensitivity is concave in the characteristic on both tails (pooled
+γ ≈ −0.35, every era since 2016, flat in loading-refresh age so not staleness; z-rescaling is
+regression-invariant so no transform of scale fixes it — every linear momentum factor carries
+this); (2) half the book number is loading-independent name effects (googl/tko/crm/msft) whose
+residuals are mutually uncorrelated (pairwise ρ −0.02) — no common thread, so no missing factor
+by the desk's own comovement test.
+
+**NonLinSize winsor (2026-07-04): cube the ±3 Size, and cap the output at ±3.** The audit's
+largest watch row (Σw·b +1.65 at 38% breadth; slope −1.04, corr −0.89 vs loading) was mostly
+fictional tails: cubing the UNCAPPED coverage Size amplifies any Size error by 3z², so held
+small-caps carried NonLinSize loadings of −9/−10 (35% of held weight sat beyond |3|) whose
+predicted comovement was fully cancelled in residuals (hidden-beta γ ≈ −1 every era — the
+no-pricing-content signature; the deep tail even realized sign-WRONG, ≈ +1). Both winsors:
+the cube is evaluated at `clip(Size, ±3)` (the estimation range — cubic extrapolation beyond
+the fitted range is not truth-telling, unlike Size's linear tail) and the standardized output
+is clipped to ±3 for coverage rows too (the cube-residual's MAD-z alone puts the ±3 edge at
+z ≈ ±9). Result: Σw·b +1.65 → +1.15, and the fiction had been leaking into neighbours —
+Momentum −0.183 → −0.159, Size +0.72 → +0.66, canonical residual R² 0.298 → 0.276, span
+inside-share 84.8% → 87.9%; fit R² unchanged. The remainder is the same STRUCTURAL intercept
+family as Momentum's (book-wide +0.9 comovement with a noisy factor return, 18% admission),
+disclosed, not chased. **Drop test run and REJECTED, both sides measured**: without NonLinSize
+residual R² 0.272 / fit 0.294 (a wash), Size/Momentum hidden betas worsen (the curvature work
+lands back on them), and ~17k young-IPO name-dates lose book pricing — NonLinSize is available
+from a listing's FIRST month (needs only mcap; Beta/ResidVol wait 120d, Momentum 252d) so it
+keeps young names above the regression's majority-of-loadings gate. That gate was itself a
+latent fault the test exposed: a hard-coded "6 of 10" count in `regress_factors` silently moved
+pricing coverage whenever the factor set changed — now `>= n_styles // 2 + 1` (identical today).
+
 ## In-UI docs (static serving)
 
 Two HTML docs are linked from the top of the dashboard (📖 Dashboard guide, 📐 Model & data
 reference). Streamlit static serving is enabled (`.streamlit/config.toml` → `enableStaticServing`),
-so files in `python_src/static/` are served at `<baseUrlPath>/app/static/...` (behind the same gate).
-`static/guide.html` is hand-written (the feature guide). `static/barra_model_reference.html` is
-**generated** by `barra_cro_report.py`, which now writes to both `tmp/` (the CLI artifact) and
-`python_src/static/`; rerun it to refresh. Tests: `test_docs.py`.
+served at `<baseUrlPath>/app/static/...` (behind the same gate). **The files live in repo-root
+`docs/static/`; `python_src/static` is a symlink to `../docs/static`** — Streamlit requires the served
+folder be named `static` beside the entrypoint, so the symlink keeps serving working while the docs sit
+with the rest of `docs/`. So a filesystem path like `python_src/static/<f>` still resolves (through the
+symlink) and the served URL `app/static/<f>` is unchanged. `guide.html` is hand-written (the feature
+guide). `barra_model_reference.html` is **generated** by `barra_cro_report.py`, which writes to both
+`tmp/` (the CLI artifact) and `python_src/static/` (→ `docs/static/`); rerun it to refresh. The
+client-facing review docs also live here: `factor-model-roadmap.html` + `factor-model-roadmap-summary.html`
+and their PDFs (`Factor-Model-Roadmap.pdf`, `Factor-Model-Summary.pdf`, rendered with weasyprint).
+Tests: `test_docs.py`.
+
+## New UI (Vite) — layout & design (Tufte & Few)
+
+A Vite SPA is being built to **replace** the Streamlit `risk_pivot_app.py`, served at base path
+`flexagg2++` (alongside the current `flexagg++` Streamlit app during the transition). It **replicates
+all existing functionality against the same `risk_api.py` endpoints** — no API changes. **All layout,
+charts and tables follow Edward Tufte and Stephen Few — a hard requirement, not a preference:**
+
+- **Overview-first monitor screen.** A single at-a-glance Overview (Few's dashboard sense): hero numbers
+  (Total VaR 99, ES, factor/specific variance split, Top-5 risk share, gross/net) + the
+  limits/DQ/backtest/**reconcile** RAG strip + **top risk contributions (CTV)** with net exposures
+  as the secondary read, no scrolling for the summary. The reconcile line counts only GENUINE
+  linkage breaches (exposure_migration drivers are band artifacts, excluded). Everything else is
+  a lens reached on demand.
+- **Details on demand.** One route per lens (Pivot, Trends, Stress, What-if, Universe, Drift,
+  Attribution, Model, the LLM panels). Drill-downs stay hidden until asked for.
+- **Data-ink.** Grey + one accent; colour encodes status (RAG) or data only, never decoration; no
+  cards/shadows/gratuitous borders — whitespace and hairline rules separate. Numbers are the hero
+  (large, tabular-nums). Direct labelling on charts, not legends.
+- **Few idioms:** bullet graphs for limits (actual vs warn/limit bands, not gauges); sparklines inline
+  with each scorecard number; small-multiples for the trends grid (shared axes).
+- **Tufte table for the pivot:** horizontal hairlines only, right-aligned tabular numerals, no zebra,
+  drill shown by indentation.
+- **Prose (LLM commentary) in a ~46rem reading column**, matching the static docs' et-book serif;
+  on-demand/streamed, no token spend until requested.
+
+Palette/typography match the static docs (`python_src/static/*.html`): `--bg:#fffff8`, `--ink:#111`,
+grey `--faint:#6b6b63`, one accent `#3b5e8c`; RAG green/amber/red for status only. Full plan:
+`docs/vite-ui-plan.md`.
+
+**Implemented** under `frontend/` (Vite + React + TS; `npm run dev|build|test`). It is a pure client
+of the existing endpoints — the **only** backend change is the saved-views CRUD wrapper `views_api.py`
+(a FastAPI `APIRouter` over `views_repo`, mounted in `risk_api.py`; no cube dependency, tested by
+`test_views_api.py`). Lenses: Overview (hero + sparklines + limits bullet graphs + RAG strip + top
+exposures + QoQ), Pivot (dnd-kit field list → server-side `/pivot` drill in AG Grid as a pure
+renderer, grand-total only since VaR is non-additive; react-vega chart mode; `/views` Repository;
+on-demand `/analysis`), Trends, Stress, What-if (+ hedge panel), Universe (membership/funnel/span
++ live scatter), Drift, Attribution (Euler + PnL tabs), Changes, Model, Ask, Checks. Global context
+bar (book/date/scenario, §9). **Scope cuts 2026-07-02** (itsjustbeta audit, `itsjustbeta/
+risk-manager-read.md` Part 2, steps 1–2 applied): the Attribution "Risk by level" tab, the Drawdown
+panel, the Liquidity rail entry, and the Basel zone display were removed from the Vite UI (the
+`/attribution`, `/drawdown`, `/liquidity` endpoints and `_basel_zone` are parked, still served and
+tested; the Streamlit app still shows them); the backtest badge reads Kupiec pass/reject; **Risk
+HHI was replaced by Top-5 risk share** in `_risk_from_weights` (`top5_ctr_share`), `/limits`
+(computed set-independently from the what-if math, not the cube), `limits.json`
+(warn 0.40 / limit 0.50), the what-if/whatchanged payloads and both UIs — the cube's `Risk HHI`
+measure remains on the pivot allowlist. Streamed LLM panels consume raw `text/markdown` via `ReadableStream`. Served at `/flexagg2++/`
+same-origin under `/flexagg2++/api` — **alongside** the unchanged `flexagg++` Streamlit app; ops in
+`docs/vite-ui-serving.md` (build → nginx alias + proxy with `proxy_buffering off`; restart the cube
+once for `/views`). The Attribution lens's "PnL attribution" tab is live against the Step-15
+`/pnl_attribution*` endpoints (stacked hero, by-factor table, RAG residual diagnostics, reconcile
+band chart).
+
+## Reading email (Gmail over IMAP — NOT the MCP connector)
+
+To read the project email threads (Chris / Soros), connect to Gmail **over IMAP with the app password
+in the repo `.env`**. Do **not** reach for the claude.ai Gmail MCP connector — it needs an interactive
+`/mcp` browser OAuth that isn't available in a headless/CLI session, so it dead-ends.
+
+- Account `conorpbrennan@gmail.com`; app password is `GMAIL_PWD` in `.env` (read it from the file,
+  never print it; 2FA + app password are already set up).
+- `imaplib.IMAP4_SSL("imap.gmail.com")` → `login(user, GMAIL_PWD)` → `select("INBOX", readonly=True)`
+  → `search(None, "FROM", "chris")`. Reliable mailbox is `INBOX` (`"[Gmail]/All Mail"` select can fail
+  on quoting). The latest message in a thread quotes the whole chain, so fetching it (`RFC822`, take the
+  `text/plain` part) gives the conversation in one go.
+- The main correspondent is **Chris Haltiner `<Chris.Haltiner@soros.com>`** (Soros Fund Management) —
+  the "Chris" whose model feedback the docs cite.
 
 ## The two model versions (v1 vs v2)
 
-Both produce the **identical six-frame schema** and feed the same unchanged cube. They differ
-only in how `exposures`, `factor_returns`, and `specific_var` are computed:
+Both produce the **same core six-frame schema** and feed the same unchanged cube (v2 also emits
+the optional 7th `specific_returns` frame — v1 doesn't, so v1 data has no PnL attribution). They
+differ only in how `exposures`, `factor_returns`, and `specific_var` are computed:
 
 - **v2 — `barra_build_frames.py`** (the primary/canonical builder). Exposures are
   cross-sectional characteristic **z-scores** (Size, Value, Momentum, etc.). Factor returns
   and specific risk are **derived** from a monthly cross-sectional WLS regression of forward
   returns on lagged exposures — so exposures, factor returns, and specific risk are duals of
-  one regression. Monthly calendar, sample 2016–2024.
+  one regression. Monthly calendar, sample 2016 → the latest complete month-end (END in the builder; extended to 2026-06-30 on 2026-07-04).
 
 - **v1 — `barra_build_frames_v1.py`** (alternative). Exposures are per-name **time-series
   betas** regressed against *published* daily factor returns (JKP clusters, else Ken French
@@ -360,24 +826,29 @@ that cache dir to force a fresh pull.
 cube only ever joins on `Position`. CUSIP/ticker/CIK exist only inside the builders to bridge the
 different source APIs; they are resolved to a single FIGI before frames are emitted.
 
-## The six frames (contract between builders and cube)
+## The seven frames (contract between builders and cube), plus an optional eighth
 
 | Frame | Key | Payload | Role |
 |---|---|---|---|
 | `exposures` | (Date, Position, Factor) | Loading | the granular leaf |
-| `positions` | (Date, Book, Position) | Weight, MV, ADV | Soros 13F weight overlay, as-of joined (ADV = trailing-63d $ vol, for `/liquidity`) |
+| `positions` | (Date, Book, Position) | Weight, MV, ADV | multi-manager 13F weight overlay (Phase 1, 2026-07-30) — one `Book` per manager in `MANAGERS`; weights normalise per **(Book, filing_date)**, as-of joined PER BOOK against that book's own filing calendar (ADV = trailing-63d $ vol, for `/liquidity`) |
 | `securities` | (Position) | Ticker, CIK, CUSIP, Issuer, Sector, Country | dimension |
 | `factor_meta` | (Factor) | FactorGroup | dimension |
 | `factor_returns` | (Date, Factor) | Return | the shared scenario cache |
 | `specific_var` | (Date, Position) | SpecificVar | diagonal idiosyncratic block |
+| `specific_returns` | (Date, Position) | SpecificReturn | daily WLS residual `u` (PnL attribution); **v2-only, optional** — v1 doesn't emit it and the cube/API degrade gracefully (attribution measures/endpoints absent) |
+| `managers` | (Book) | CIK, EntityName, FirmType, filing/coverage stats, ETP-drop disclosure | **optional 8th frame** (Phase 2, 2026-07-30), dimension-like, NOT part of the seven-frame contract — absent on any pre-Phase-2 build (incl. all v1 data); the cube's `Manager` hierarchy + its three disclosure measures degrade cleanly to absent, same pattern as `specific_returns` |
 
 Two risk blocks only: a linear **factor P&L** block (driven by `factor_returns`) and a
 **diagonal specific-risk** block (`specific_var`). No full specific covariance matrix.
 
-The 13F book is a quarterly weight overlay **as-of joined** onto the monthly/COB calendar
-(lagged by filing date via `pd.merge_asof(..., direction="backward")`). The as-of join selects
-the latest *filing* per calendar date and takes only the names in that filing — exited positions
-expire on the next filing, so weights sum to 1.0 on every date.
+Each book's 13F filings are a quarterly weight overlay **as-of joined** onto the monthly/COB
+calendar (lagged by filing date via `pd.merge_asof(..., direction="backward")`), one join **PER
+BOOK** against that book's own filing calendar (`for book, pb in p.groupby("Book")`, not one
+global `merge_asof` across books — simpler to reason about than `merge_asof(..., by="Book")`;
+both were permitted, this one was chosen). The as-of join selects the latest *filing* per
+calendar date and takes only the names in that filing — exited positions expire on the next
+filing, so weights sum to 1.0 on every (Book, Date), not just every Date.
 
 ## The cube's central design: scenarios as one operation
 
@@ -403,14 +874,138 @@ has unit market exposure (`x_Market = Σ weights`) and the directional market re
 (~3.5% daily 99% VaR) rather than style-tilt-only (~1.5%). Market loadings are added in
 `build_frames` *after* `regress_factors` so the style factor returns are unaffected.
 
+## Multi-manager 13F integration (2026-07-30)
+
+The book was Soros-only through 2026-07-29. `barra_build_frames.py` now pulls **11 books** by
+default (`MANAGERS`, one row per book; CIKs verified against EDGAR's exact-name-match +
+rejected-alternates check, phase0-recon): Soros (1029160) · Bridgewater Associates (1350694) ·
+Citadel Advisors (1423053) · Millennium Management (1273087) · Renaissance Technologies
+(1037389) · AQR Capital Management (1167557) · Two Sigma Investments (1179392) · D. E. Shaw &
+Co. (1009207) · Point72 Asset Management (1603466) · Tiger Global Management (1167483) ·
+Elliott (1791786 current + 1048445 predecessor, stitched — see below).
+
+**Two Sigma Advisers, LP (CIK 1478735) is deliberately EXCLUDED**, not an oversight — measured:
+its latest 13F table is one name at $0 (dormant, the same pattern as Elliott's superseded
+predecessor) and its full-history CUSIP set adds only 7 incremental CUSIPs over what Two Sigma
+Investments (1179392) already contributes. Don't add it back without re-measuring — it isn't a
+second book, it's a filer that stopped mattering.
+
+**Elliott stitches two CIKs**: Elliott Investment Management L.P. (1791786, current, files
+2020-03-31 onward) and Elliott Management Corp (1048445, predecessor, files 1999-09-30 through
+2020-09-30). The two overlap on exactly three report dates — 2020-03-31, 2020-06-30,
+2020-09-30 — both CIKs filed a 13F-HR for each. `stitch_multi_cik` prefers the **current**
+entity (the first CIK in the tuple) on any overlapping `report_date`. `MANAGERS`'s `cik` field
+is a single int, or, for a renamed/re-filed manager, a tuple with the current entity first.
+
+**`ACTIVE_MANAGERS`** (default `None` = every book in `MANAGERS`) scopes a build to a subset —
+set it to a list of book names (e.g. `["Soros", "TigerGlobal"]`) to verify the plumbing without
+a full 11-manager pull. Used for the Phase 1 2-manager verification build.
+
+**Filing-history depth — the `filings.files` pagination fix.** `positions_from_13f` used to
+read only `filings.recent`, which SEC caps at roughly an entity's most recent ~1000 filings of
+ANY form type — a CIK with heavy non-13F filing volume gets its older 13F-HRs pushed out of
+`recent` even though it filed 13F-HR continuously. This silently truncated two managers:
+Renaissance reached only **2019-12-31** in `recent` (missing 2016–2019 entirely) and Citadel
+only **2016-03-31** (missing ~6 weeks at the model's 2016-01-01 start). New
+`_13FHR_filings_all(cik)` fetches `filings.recent` **plus every `filings.files` pagination
+block**, concatenates, filters to `form == "13F-HR"`, and dedupes on `accessionNumber`. Verified
+live against SEC: both managers (and, incidentally, Soros) now bottom out at **2013-06-30** — a
+hard floor for EVERY manager, not just the two fixed, because 13F-HRs before ~mid-2013 are
+plain `.txt` filings with no XML info-table (SEC's mandatory machine-readable format starts
+mid-2013); the pre-existing parser already skips filings with no XML info-table, unchanged. The
+pagination fix's real effect is recovering 2013-06-30 through the previous `recent` floor —
+comfortably inside the model's `START = "2016-01-01"` window, not closing a gap in it.
+
+**`DROP_ETPS` (default True)** filters ETF/index-fund/commodity-crypto-trust rows out of every
+manager's 13F, word-boundary matched (`_ETP_TOKENS`/`_ETP_RE` — never substring: a naive match
+flags "NETFLIX" for containing "ETF"). These vehicles carry no XBRL fundamentals and no sector,
+so a cross-sectional style/industry loading on one is meaningless — an ETF is a diversified
+slice of the market, not a single-name factor bet. Measured value share dropped from each
+manager's latest filing: **Bridgewater 24.47%, Millennium 11.64%, Citadel 6.76%, Soros 1.94%,
+TigerGlobal 0.00%**. Plainly: **Bridgewater loses roughly a quarter of its 13F by value** — its
+remaining book here is a small equity-only slice of its real macro book, not a fair picture of
+the fund. The drop disclosure (rows/value/CUSIPs) is carried per-book on the `managers` frame,
+never silently absorbed.
+
+**Universe scale.** The measured union of held CUSIPs across all 11 books is **22,113 distinct
+CUSIPs, 21,047 of them new** against the previous single-book (Soros-only) build's 1,199
+securities. `UNIVERSE_CAP` is raised **3500 → 35000** — `sec.head(UNIVERSE_CAP)` in
+`build_frames()` truncates order-dependently and silently (no warning), so the cap has to sit
+comfortably above the measured union, not just above whatever the current build happens to
+need.
+
+**The entity dimension (Phase 2, cube).** The optional `managers` frame joins onto `Positions`
+via a **partial join on `Book`** and backs a separate `Manager` hierarchy
+(`FirmType`/`EntityName`/`CIK`) plus three measures (`Manager ETP dropped value share`,
+`Manager n filings`, `Manager n positions`) — deliberately **NOT** grafted onto the existing
+auto-created single-level `Book` hierarchy, so every existing `l["Book"]` lookup elsewhere
+(including all of `risk_api.py`) is untouched. `Manager` is 1:1 with `Book`; like `Book` itself
+it's never passed to a lift/`OriginScope` call, so it reads whatever book is currently sliced
+and is blank/ambiguous with no book slice (same as any other book-scoped measure).
+
+**The book-independent attribution limitation.** `Factor contribution`, `Specific PnL` and
+`Realized PnL` are baked physical columns on tables keyed WITHOUT Book — deliberately, so
+attribution stays immune to the what-if trades branch (which lives on the Positions table's
+live weight, not a static column). With more than one book loaded, a name held by several
+managers reads **one arbitrary book's weight** (first alphabetically, after a deterministic
+dedupe) under every book's label. The proper fix — Book as a second reused hierarchy dual
+alongside Factor — was tried and **empirically blocked by atoti 0.9.15**: every join topology
+tried (single edge either way, a two-edge "diamond" mapping Book via Positions and Factor via
+Exposures) left one axis an unresolvable ambiguous `Book` hierarchy. So `_validate_pivot` — the
+ONE chokepoint `/pivot`, `/analysis`, and `/ask`'s `query_cube` tool all share — now **rejects
+these three measures whenever more than one book is loaded** (`BOOK_INDEPENDENT_MEASURES`,
+unconditional on whether the query is book-sliced, since even an unsliced query hits the same
+one arbitrary book's column), pointing the caller at `barra_pnl_attribution.py`'s `book=`
+precompute for correct per-book attribution instead. Single-book behaviour is byte-identical to
+before.
+
+**Per-book guards on single-book artifacts.** `/universe`, `/funnel`, `/span`, `/drift` and the
+four `/pnl_attribution*` routes each read a precomputed artifact or live frame built for exactly
+one book, with no per-book scoping of their own. A `_book_guard`/`_artifact_book` pair (Phase 3)
+checks whether the requested `book` matches the book the artifact actually covers; on a
+mismatch every one of those 8 endpoints returns **HTTP 200** with `{"status": "book_mismatch",
+"kind", "requested_book", "artifact_book", "basis", "reason"}` — mirroring `/drawdown`'s
+existing `status` idiom (never a silently-wrong 200, never a 500). Disclosed weakness, not
+fixed: `_artifact_book` infers the covered book from **today's live positions frame**, not a
+build-time stamp on the artifact — there is no version linkage in the frame/artifact contract,
+so an artifact that's stale relative to the currently-loaded frames could wave a real mismatch
+through.
+
+**`/limits` disclosure.** `limits.json` gained an additive `calibrated_for` field (default
+`"Soros"` if absent — true of every pre-Phase-3 config, since the thresholds were always tuned
+against Soros regardless). `/limits`'s response gained `calibrated_for`, `cross_book_thresholds`
+(bool), and `calibration_note` (a sentence, only when `cross_book_thresholds` is true) —
+additive only, no restructuring into per-book limit sets. **Thresholds remain Soros-calibrated
+and are NOT per-book yet.**
+
+**`/meta.managers`** is the UI's one source for the entity list (`_managers_meta()`, following
+the `hypo_shocks` precedent) — sourced from the live `positions` frame's `Book` column (never a
+hardcoded list, so it reflects whatever `ACTIVE_MANAGERS` scope actually ran), decorated with
+`EntityName`/`FirmType`/`CIK`/`n_positions_distinct` from the `managers` frame when present. The
+Vite context bar's book field renders **plain text for one manager** (a `<select>` with one
+immutable option is chartjunk — ink spent on a control that can't do anything) and a real
+`<select>` once two or more managers are loaded.
+
+**The funnel `held` fix.** `barra_universe_funnel.py`'s `held`/`held_survivors` flag used to
+mean "held by the union of positions," with no book concept — silently "held by ANY manager"
+once a second book exists. New `_held_positions(pos, book)` scopes it to one book;
+`run(book="Soros")`'s default preserves today's single-book behaviour exactly (`book=None` is
+kept as an explicit any-book-union escape hatch that nothing in the repo calls).
+
+Design decisions, measured numbers, and open follow-ups: `docs/multi-manager-plan.md`.
+
 ## Things that bite
 
 - **`atoti` array helper names** (`tt.array.mean/quantile/min`, `tt.agg.sum_product` with
   `scope=`) may vary by SDK version — the source flags this. Verify against the installed
   `atoti` before assuming a call signature.
-- **Universe is capped** at `UNIVERSE_CAP = 250` so the demo actually runs; factor-return
-  quality scales with cross-section breadth, so widen `UNIVERSE_EXTRA` / the cap for anything
-  real. v2's regression skips dates with `< 30` valid names.
+- **Universe is capped** at `UNIVERSE_CAP = 35000` (raised 2026-07-30 for the multi-manager
+  integration — this line used to say `250` in this doc, already stale before that work; the
+  real pre-integration value was `3500`). The measured union of held CUSIPs across the
+  11-manager `MANAGERS` table is ~22,113 (see "Multi-manager 13F integration" above), so
+  anything much below that silently, order-dependently truncates via `sec.head(UNIVERSE_CAP)`.
+  Factor-return quality scales with cross-section breadth, so widen `UNIVERSE_EXTRA` / the cap
+  for anything beyond this. v2's regression skips dates with `< 30` valid names.
 - **Sector** is populated from a free SEC SIC → GICS-11 crosswalk, CIK-keyed
   (`sic_to_gics` / `sectors_for_ciks` in `barra_build_frames.py`; SIC comes from the SEC
   submissions JSON). ~5 names (BDCs/closed-end funds) carry a blank SEC SIC and fall back to

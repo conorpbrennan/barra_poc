@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Marginal Scenario VaR 99 and % share aggregated to factor GROUP (Market vs Style) \u2014 the top-level split of the systematic tail before drilling into individual factors."
   }
 }

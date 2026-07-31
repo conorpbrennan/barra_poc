@@ -75,6 +75,44 @@ and 13 → 14 once data sources are chosen.
   "💬 Ask the risk model" panel. Tests in `test_ask.py` (unit tool-schema + guard; integ 400; live
   loop opt-in via RUN_LLM=1). Done.
 
+- [ ] **Step 15 · PnL attribution & factor-model validation.** [M] The factor + residual split of the
+  book's realized PnL over a period, with residual diagnostics. Built
+  for Chris's request (Soros risk review). Decomposition `R_p = Σ_k x_k·f_k + u_p` reconciles three ways
+  to machine precision (realized = factor + specific). Built **cube-native** (Chris's call): residual persisted as a **7th frame** `specific_returns`
+  (un-squared `barra_build_frames.py:640`; rebuild required, six-frame contract → seven), and three
+  additive cube measures (`Factor contribution = Σ Weight×Loading×FactorReturn`, `Specific PnL`,
+  `Realized PnL`) on regular `(Date,Factor)`/`(Date,Position)` joins — additive scalars like `Net
+  exposure`, so no per-date OOM. They foot at every Factor×Sector×Position level, so the existing pivot
+  grid gives a reconciling **parent→child drill** (click a factor → its names) both directions
+  (Factor→Name, Name→Factor); added to the `/pivot` allowlist so `/ask` + `/analysis` inherit them.
+  Design principle: additional / quant-defined measures go in the cube by default so they inherit slice /
+  drill / what-if / stress; only non-cube statistics (linking, autocorrelation, regression, bias) stay in
+  Python.
+  Diagnostics answer the "large & correlated?" ask: size + realized-vs-predicted specific vol + IR; the
+  cheap correlation tests (lag-1/2 autocorrelation, residual-vs-factor regression; Ljung-Box / PCA
+  optional per Chris's 2026-06-30 steer); bias stats (book/factor/specific). Plus residual concentration HHI, hit rate, factor-timing vs static tilt. The
+  stats the cube can't express stay in Python: precompute `barra_pnl_attribution.py` →
+  `data/pnl_attribution.parquet` (daily drifting-weight realized NAV + Carino-linked period return +
+  diagnostics); `GET /pnl_attribution` + `/pnl_attribution/residual`; UI `render_attribution` (Tufte
+  stacked-area "where the money came from" + the pivot drill + residual sub-panel); headline folded into
+  `/analysis`. Cube attribution is monthly on as-of weights (additive, foots); the daily drifting-weight
+  return + linking is the API headline. Price-only both sides (dividends disclosed). By-product: a true
+  realized track record that upgrades `/backtest`/`/drawdown`'s constant-portfolio inputs. **Endorsed by
+  Chris (2026-06-29)** with one addition — **link the attribution to the ex-ante risk decomposition at
+  the start of the period**: pair the risk decomposition at T (marginal Total VaR by factor/position)
+  with the PnL attribution over T→T+1 in the same pivot grid (two columns), a per-factor/position
+  surprise z-score (`realized contribution / ex-ante risk-implied sd`), and a surprise ranking leading
+  with the biggest loss relative to its ex-ante risk (`GET /pnl_attribution/linkage?T=&horizon=`). Reuses the
+  marginal-VaR / `/backtest` / `/limits` machinery, not a new engine — it's the connection, more than the
+  standalone attribution, that shows how well the book is risk-managed. The linkage's headline visual is
+  a **band/dot reconcile chart** — each factor's realized contribution (dot) vs its start-of-period ±σ
+  band, with a **base** band (today's vols & correlations) and a **stressed** band (vols ↑, correlations
+  → 1); it subsumes the backtest exception (book row), the specific bias (specific row), and the surprise
+  z-score (factor rows). Full fidelity adds a **correlation-stress mode** to `/stress` (today it shocks
+  vols only). A **mock of this view is embedded in §9 of the factor-model roadmap page** (the
+  client-facing review doc) for Chris's sign-off. Tests in `test_attribution.py` + extends
+  `test_risk_measures.py`/`test_pivot_app.py`. See `docs/pnl-attribution-plan.md`.
+
 ## Tier B — buildable but needs pipeline work
 
 - [x] **Step 11 · Liquidity risk (days-to-liquidate).** [M] `GET /liquidity?date=&participation=&horizon=`

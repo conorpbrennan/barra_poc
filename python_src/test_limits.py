@@ -4,7 +4,7 @@ test_limits.py — checks for the desk-limit RAG monitoring (Step 1).
   * UNIT  — always run, no backend: _rag traffic-light logic, and limits.json parses with the
             expected shape.
   * INTEG — need the live backend on :8010; SKIP if down. /limits returns a configured RAG status
-            with well-formed checks, and the book Total VaR 99 limit is evaluated.
+            with well-formed checks, and the book Scenario VaR 99 limit is evaluated.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_limits.py
 """
@@ -60,10 +60,21 @@ def t_limits_json_shape():
     import risk_api
     cfg = risk_api._load_limits()
     assert cfg, "limits.json missing or empty"
-    assert "Total VaR 99" in cfg.get("book", {}), cfg.get("book")
+    assert "Scenario VaR 99" in cfg.get("book", {}), cfg.get("book")
     for spec in cfg["book"].values():
         assert isinstance(spec.get("limit"), (int, float)), spec
     assert "single_name_weight" in cfg.get("concentration", {}), cfg.get("concentration")
+
+
+@unit
+def t_limits_json_carries_calibrated_for():
+    """Multi-manager Phase 3: limits.json discloses which book its thresholds were tuned for --
+    additive field, doesn't restructure the flat limit set into per-book sets."""
+    import risk_api
+    cfg = risk_api._load_limits()
+    assert cfg.get("calibrated_for") == "Soros", cfg.get("calibrated_for")
+
+
 
 
 # --------------------------------------------------------------------------- INTEG
@@ -84,28 +95,59 @@ def t_limits_endpoint_configured():
 
 @integ
 def t_limits_evaluates_book_var():
-    """The Total VaR 99 limit is present and (when data exists) carries a numeric value + headroom."""
+    """The Scenario VaR 99 limit (the limit metric since the 2026-07-03 vol-reference
+    decision) is present and (when data exists) carries a numeric value + headroom."""
     import requests
     j = requests.get(f"{API}/limits", timeout=30).json()
-    var = next((c for c in j["checks"] if c["name"] == "Total VaR 99"), None)
-    assert var is not None, "Total VaR 99 limit not evaluated"
+    var = next((c for c in j["checks"] if c["name"] == "Scenario VaR 99"), None)
+    assert var is not None, "Scenario VaR 99 limit not evaluated"
     if var["value"] is not None:                          # green/amber/breach (not unknown)
         assert var["status"] != "unknown"
         assert abs(var["headroom"] - (var["limit"] - var["value"])) < 1e-9, var
 
 
 @integ
+def t_limits_calibration_disclosure():
+    """Multi-manager Phase 3: /limits discloses which book the thresholds were calibrated for,
+    additive to the pre-existing response shape (date/set/book/status/checks unchanged).
+    Requesting the calibrated book (default Soros) carries no cross-book flag; any other book
+    is flagged with a non-empty human-readable note, and status/checks still compute normally
+    (this is a DISCLOSURE, not a refusal -- /limits still evaluates the numbers, just against
+    another book's thresholds, which the RAG verdict now says out loud)."""
+    import requests
+    base = requests.get(f"{API}/limits", timeout=30).json()
+    assert base["calibrated_for"] == "Soros", base
+    assert base["cross_book_thresholds"] is False, base
+    assert base["calibration_note"] is None, base
+    other = requests.get(f"{API}/limits", params={"book": "Bridgewater"}, timeout=30).json()
+    assert other["calibrated_for"] == "Soros", other
+    assert other["cross_book_thresholds"] is True, other
+    assert other["calibration_note"] and "Bridgewater" in other["calibration_note"], other
+    # shape is still backward compatible -- every pre-Phase-3 field is present
+    for k in ("date", "set", "book", "status", "configured", "checks", "breaches"):
+        assert k in other, (k, other)
+
+
+@integ
 def t_limits_set_override():
-    """`set` overrides the scenario set the book VaR/ES/HHI limits read against (e.g. a Hypo set,
-    where HHI runs far more concentrated)."""
+    """`set` overrides the scenario set every book limit reads against — including Top-5 risk
+    share (a cube measure since 2026-07-04, set-DEPENDENT like the old Risk HHI): a Hypo set
+    zeroes the Market move, so risk collapses onto the style-tilt names and concentration
+    reads far higher than the historical set."""
     import requests
     base = requests.get(f"{API}/limits", timeout=30).json()
     hypo = requests.get(f"{API}/limits", params={"set": "Hypo:MomentumCrash"}, timeout=30).json()
     assert hypo["set"] == "Hypo:MomentumCrash", hypo["set"]
-    bh = next((c for c in base["checks"] if c["name"] == "Risk HHI"), None)
-    hh = next((c for c in hypo["checks"] if c["name"] == "Risk HHI"), None)
-    if bh and hh and bh["value"] and hh["value"]:
-        assert hh["value"] > bh["value"], (bh["value"], hh["value"])   # Hypo concentrates
+    bv = next((c for c in base["checks"] if c["name"] == "Scenario VaR 99"), None)
+    hv = next((c for c in hypo["checks"] if c["name"] == "Scenario VaR 99"), None)
+    if bv and hv and bv["value"] and hv["value"]:
+        assert abs(bv["value"] - hv["value"]) > 1e-9                    # set changed the VaR read
+    bt = next((c for c in base["checks"] if c["name"] == "Top-5 risk share"), None)
+    ht = next((c for c in hypo["checks"] if c["name"] == "Top-5 risk share"), None)
+    assert bt is not None and ht is not None
+    if bt["value"] is not None and ht["value"] is not None:
+        assert 0 < bt["value"] <= 1
+        assert ht["value"] >= bt["value"]                               # Hypo concentrates
 
 
 def _run(group):

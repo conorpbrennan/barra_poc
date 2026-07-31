@@ -789,7 +789,7 @@ def render_whatchanged():
         rows = []
         for k, lab, pct in [("scenario_var_99", "Scenario VaR 99", True), ("es_975", "ES 97.5", True),
                             ("total_var_99", "Total VaR 99", True), ("specific_vol", "Specific vol", True),
-                            ("risk_hhi", "Risk HHI", False), ("gross", "Gross", True), ("net", "Net", True)]:
+                            ("top5_ctr_share", "Top-5 risk share", True), ("gross", "Gross", True), ("net", "Net", True)]:
             v = wc["risk"].get(k, {})
             def fmt(x, pct=pct):
                 return "—" if x is None else (f"{x:.2%}" if pct else f"{x:.3f}")
@@ -969,18 +969,230 @@ def render_whatif():
                     spec = [("Scenario VaR 99", "scenario_var_99"), ("Scenario VaR 97.5", "scenario_var_975"),
                             ("Scenario ES 97.5", "es_975"), ("Scenario ES 99", "es_99"),
                             ("Total VaR 99", "total_var_99"), ("Specific vol", "specific_vol"),
-                            ("Risk HHI", "risk_hhi"), ("Net exposure", "net"), ("Gross exposure", "gross")]
+                            ("Top-5 risk share", "top5_ctr_share"), ("Net exposure", "net"), ("Gross exposure", "gross")]
 
                     def cell(v, key):
-                        return "—" if v is None else (f"{v:.3f}" if key == "risk_hhi" else f"{v:.2%}")
+                        return "—" if v is None else f"{v:.2%}"
 
                     def dcell(v, key):
-                        return "—" if v is None else (f"{v:+.3f}" if key == "risk_hhi" else f"{v:+.2%}")
+                        return "—" if v is None else f"{v:+.2%}"
                     tbl = [{"Measure": lab, "Before": cell(b.get(k), k), "After": cell(a.get(k), k),
                             "Δ": dcell(d.get(k), k)} for lab, k in spec]
                     st.dataframe(pd.DataFrame(tbl), hide_index=True, use_container_width=True)
                     st.caption("Traded: " + ", ".join(
                         f"{t['ticker']} {t['old']:.1%}→{t['new']:.1%}" for t in res["trades"]))
+
+_RAG_HEX = {"green": "#2e7d32", "amber": "#c77f00", "red": "#b03030"}
+
+
+def _reconcile_svg(lk: dict) -> str:
+    """The §4 reconcile band chart (matches the roadmap §9 mock): one row per factor + Specific +
+    Book total; each row read against its OWN start-of-period band, so position = the surprise z.
+    Base band ±2σ (fixed width), stressed band scaled by that row's stressed/base ratio; the dot is
+    the realized contribution, coloured within / stress-regime / investigate."""
+    rows = [r for r in lk["rows"]] + ["sep", lk["book_total"]]
+    px, cx, zx = 60.0, 420, 700           # px per σ, zero line, z-label column
+    y, rh = 40, 34
+    dotc = {"within": "#33332f", "stress": "#b07d2b", "investigate": "#a8322a"}
+    body = []
+    for r in rows:
+        if r == "sep":
+            body.append(f'<line x1="60" y1="{y + 2}" x2="{zx}" y2="{y + 2}" '
+                        f'stroke="#d8d5cd" stroke-width="1"/>')
+            y += 14
+            continue
+        ratio = (r["sd_stressed"] / r["sd_base"]) if r["sd_base"] else 1.0
+        half_s = min(2 * px * ratio, 260)
+        z = r["z"] or 0.0
+        dx = cx + max(-4.5, min(4.5, z)) * px
+        c = dotc.get(r["verdict"], "#33332f")
+        w = "font-weight=\"600\" " if r.get("kind") == "book" else ""
+        body.append(f'<rect x="{cx - half_s:.0f}" y="{y}" width="{2 * half_s:.0f}" height="16" fill="#ece9e0"/>')
+        body.append(f'<rect x="{cx - 2 * px:.0f}" y="{y}" width="{4 * px:.0f}" height="16" fill="#d9d5ca"/>')
+        body.append(f'<text x="132" y="{y + 12}" text-anchor="end" font-size="13" {w}fill="#2a2a26">{r["name"]}</text>')
+        body.append(f'<circle cx="{dx:.0f}" cy="{y + 8}" r="4.5" fill="{c}"/>')
+        body.append(f'<text x="{zx}" y="{y + 12}" font-size="12" font-family="monospace" '
+                    f'fill="{c}">{z:+.1f}σ</text>')
+        y += rh
+    ax = y + 4
+    ticks = "".join(f'<line x1="{cx + s * px}" y1="{ax}" x2="{cx + s * px}" y2="{ax + 5}"/>'
+                    for s in range(-3, 4))
+    labs = "".join(f'<text x="{cx + s * px}" y="{ax + 16}">{("%+dσ" % s) if s else "0"}</text>'
+                   for s in range(-3, 4))
+    ly = ax + 40
+    h = ly + 40
+    return f"""<svg viewBox="0 0 800 {h}" role="img" aria-label="Reconcile — realized vs the expected band"
+  style="width:100%;height:auto;font-family:inherit;background:transparent;">
+  <line x1="{cx}" y1="34" x2="{cx}" y2="{ax - 8}" stroke="#c9c5bb" stroke-width="1" stroke-dasharray="2 3"/>
+  {''.join(body)}
+  <g stroke="#c9c5bb" stroke-width="1">{ticks}</g>
+  <g font-size="10" fill="#6b6b63" text-anchor="middle" font-family="monospace">{labs}</g>
+  <rect x="110" y="{ly}" width="22" height="11" fill="#d9d5ca"/>
+  <text x="138" y="{ly + 9}" font-size="11" fill="#2a2a26">base band ±2σ (vols &amp; correlations at T)</text>
+  <rect x="430" y="{ly}" width="22" height="11" fill="#ece9e0"/>
+  <text x="458" y="{ly + 9}" font-size="11" fill="#2a2a26">stressed (vols ×{lk['stress']['vol_mult']}, ρ→1 blend {lk['stress']['rho_blend']})</text>
+  <circle cx="121" cy="{ly + 29}" r="4.5" fill="#33332f"/>
+  <text x="132" y="{ly + 33}" font-size="11" fill="#2a2a26">within — as expected</text>
+  <circle cx="330" cy="{ly + 29}" r="4.5" fill="#b07d2b"/>
+  <text x="341" y="{ly + 33}" font-size="11" fill="#2a2a26">beyond base — stress regime</text>
+  <circle cx="560" cy="{ly + 29}" r="4.5" fill="#a8322a"/>
+  <text x="571" y="{ly + 33}" font-size="11" fill="#2a2a26">beyond stressed — investigate</text>
+</svg>"""
+
+
+def render_attribution():
+    """Step 15: realized PnL attribution (factor + residual), the §2 residual diagnostics with RAG
+    verdicts, and the §4 risk↔PnL reconcile band chart. Reads /pnl_attribution* (artifact +
+    frames); the drill by name lives in the Pivot via the cube measures."""
+    with st.expander("💰 PnL attribution (realized, factor + residual)", expanded=False):
+        try:
+            att = get("/pnl_attribution")
+        except Exception as e:
+            st.info(f"PnL attribution unavailable — run barra_pnl_attribution.py after a v2 build. ({e})")
+            return
+        cal = att.get("calendar", {})
+        preset = st.radio("Period", ["Trailing 12m", "YTD", "Since inception", "Custom"],
+                          horizontal=True, key="pv_att_period", label_visibility="collapsed")
+        params: dict = {}
+        if preset == "YTD":
+            params = {"from": f"{str(cal.get('max', ''))[:4]}-01-01"}
+        elif preset == "Since inception":
+            params = {"from": cal.get("min")}
+        elif preset == "Custom":
+            c1, c2 = st.columns(2)
+            lo_d = c1.date_input("From", value=pd.Timestamp(cal["max"]) - pd.DateOffset(years=1),
+                                 min_value=pd.Timestamp(cal["min"]), max_value=pd.Timestamp(cal["max"]),
+                                 key="pv_att_from")
+            hi_d = c2.date_input("To", value=pd.Timestamp(cal["max"]),
+                                 min_value=pd.Timestamp(cal["min"]), max_value=pd.Timestamp(cal["max"]),
+                                 key="pv_att_to")
+            params = {"from": str(lo_d), "to": str(hi_d)}
+        if params:
+            try:
+                att = get("/pnl_attribution", **params)
+            except Exception as e:
+                st.info(f"No attribution data for that window: {e}")
+                return
+
+        t_att, t_resid, t_link = st.tabs(["Attribution", "Residual diagnostics", "Risk ↔ PnL reconcile"])
+        with t_att:
+            h = att["headline"]
+            share = (f" ({h['specific_share']:+.0%} of total)"
+                     if h.get("specific_share") is not None else "")
+            st.markdown(f"**Realized {h['realized_geometric']:+.1%}** · {att['from']} → {att['to']} "
+                        f"(geometric, {att['n_days']} trading days) — factor {h['factor']:+.1%}, "
+                        f"specific {h['specific']:+.1%}{share}")
+            ser = att.get("series", [])
+            if ser:
+                long_rows = [{"date": r["date"], "source": lab, "value": r[k]}
+                             for r in ser for k, lab in
+                             (("market", "Market"), ("style", "Style"), ("specific", "Specific"))]
+                spec = {
+                    "height": 250, "background": "transparent",
+                    "layer": [
+                        {"data": {"values": long_rows},
+                         "mark": {"type": "area", "opacity": 0.88},
+                         "encoding": {
+                             "x": {"field": "date", "type": "temporal",
+                                   "axis": {"grid": False, "title": None}},
+                             "y": {"field": "value", "type": "quantitative", "stack": True,
+                                   "axis": {"grid": False, "title": None, "format": "+.0%"}},
+                             "color": {"field": "source", "type": "nominal",
+                                       "scale": {"domain": ["Market", "Style", "Specific"],
+                                                 "range": ["#c9c5bb", "#3b5e8c", "#8a867c"]},
+                                       "legend": {"orient": "top-left", "title": None}}}},
+                        {"data": {"values": [{"date": r["date"], "value": r["realized"]} for r in ser]},
+                         "mark": {"type": "line", "color": "#111111", "strokeWidth": 1.4},
+                         "encoding": {"x": {"field": "date", "type": "temporal"},
+                                      "y": {"field": "value", "type": "quantitative"}}},
+                    ],
+                    "config": {"view": {"stroke": None}},
+                }
+                st.vega_lite_chart(spec, width="stretch")
+                st.caption("Cumulative arithmetic contributions — where the money came from. The black "
+                           "line is realized (= Market + Style + Specific, an identity). Price-only, "
+                           "drifting buy-and-hold weights between 13F filings.")
+            fac = att.get("factors", [])
+            if fac:
+                st.dataframe(pd.DataFrame([{
+                    "Factor": r["factor"], "Avg exposure": _fmt_num(r["avg_exposure"], 2),
+                    "Cum factor return": _fmt_pct(r["cum_factor_return"], 1),
+                    "Contribution": _fmt_pct(r["contribution"], 2),
+                    "% of total": _fmt_pct(r["pct_of_total"], 0) if r["pct_of_total"] is not None else "—",
+                    "t-stat": _fmt_num(r["t_stat"], 1),
+                } for r in fac]), hide_index=True, use_container_width=True)
+            cov = att.get("coverage", {})
+            unp = cov.get("unpriced") or []
+            cv = cov.get("mean_priced_share")
+            st.caption((f"Coverage: {cv:.0%} of book weight priced on average"
+                        if cv is not None else "Coverage unknown")
+                       + (f" · unpriced names ({len(unp)}): "
+                          + ", ".join(f"{u['name']} ({u['weight']:.1%})" for u in unp[:8])
+                          if unp else " · every held name priced")
+                       + ". Drill factor→name in the Pivot with the Factor contribution / "
+                         "Specific PnL / Realized PnL measures.")
+        with t_resid:
+            try:
+                rd = get("/pnl_attribution/residual", **params)
+            except Exception as e:
+                st.info(f"Residual diagnostics unavailable: {e}")
+                rd = None
+            if rd:
+                rows_html = "".join(
+                    f"<tr><td style='padding:2px 8px'><span style='color:{_RAG_HEX.get(c['status'], '#999')}'>&#9679;</span></td>"
+                    f"<td style='padding:2px 8px'>{c['name']}</td>"
+                    f"<td style='padding:2px 8px;text-align:right;font-variant-numeric:tabular-nums'>{c['value']:+.2f}</td>"
+                    f"<td style='padding:2px 8px;color:#6b6b63'>{c['verdict']}</td></tr>"
+                    for c in rd.get("checks", []))
+                st.markdown(f"<table style='border-collapse:collapse;font-size:.9rem'>{rows_html}</table>",
+                            unsafe_allow_html=True)
+                bits = []
+                if rd.get("specific_share") is not None:
+                    bits.append(f"specific share {rd['specific_share']:+.0%}")
+                if rd.get("explained_share") is not None:
+                    bits.append(f"factors explain {rd['explained_share']:.0%} of monthly variance")
+                conc = rd.get("concentration") or {}
+                if conc.get("hhi") is not None:
+                    bits.append(f"residual concentration HHI {conc['hhi']:.3f} "
+                                f"(top-5 {conc['top5_share']:.0%} of |specific PnL|)")
+                hr = rd.get("hit_rate") or {}
+                if hr.get("names") is not None:
+                    bits.append(f"hit rate {hr['names']:.0%} of names / {hr['months']:.0%} of months")
+                if bits:
+                    st.caption(" · ".join(bits))
+                reg = rd.get("factor_regression") or {}
+                if reg.get("loadings"):
+                    top = reg["loadings"][:3]
+                    st.caption("Residual-vs-factor loadings (largest |t|): "
+                               + ", ".join(f"{r['factor']} β={r['beta']:+.2f} (t={r['t_stat']:+.1f})"
+                                           for r in top))
+                st.caption(rd.get("note", ""))
+        with t_link:
+            hz = st.selectbox("Horizon (months)", [1, 3, 6, 12], index=1, key="pv_att_hz")
+            try:
+                lk = get("/pnl_attribution/linkage", horizon=hz)
+            except Exception as e:
+                st.info(f"Linkage unavailable: {e}")
+                lk = None
+            if lk:
+                st.markdown(f"Risk decomposition at **{lk['T']}** vs realized PnL over "
+                            f"**{lk['T']} → {lk['to']}** ({lk['n_days']} trading days)")
+                st.markdown(_reconcile_svg(lk), unsafe_allow_html=True)
+                sur = lk.get("surprises") or []
+                if sur:
+                    st.markdown("**Investigate:** " + ", ".join(
+                        f"{s['name']} ({s['realized']:+.1%} vs ±{2 * s['sd_stressed']:.1%} stressed)"
+                        for s in sur))
+                pos_ = lk.get("positions") or []
+                if pos_:
+                    st.caption("Position surprises — realized vs own ex-ante σ at T (top |z|)")
+                    st.dataframe(pd.DataFrame([{
+                        "Name": p["name"], "Weight": _fmt_pct(p["weight"], 1),
+                        "Realized": _fmt_pct(p["realized"], 2), "z": _fmt_num(p["z"], 1),
+                        "Verdict": p["verdict"]} for p in pos_]),
+                        hide_index=True, use_container_width=True)
+                st.caption(lk.get("note", ""))
+
 
 members = dims.get("members", {})
 
@@ -1251,7 +1463,8 @@ def render_overview():
     st.caption("Details on demand")
     t_risk, t_univ, t_chg, t_checks = st.tabs(["Risk", "Universe", "Changes & Q&A", "Checks"])
     with t_risk:           # quantitative book-risk lenses
-        render_drawdown(); render_trends(); render_liquidity(); render_stress(); render_whatif()
+        render_drawdown(); render_trends(); render_attribution()
+        render_liquidity(); render_stress(); render_whatif()
     with t_univ:           # estimation-universe diagnostics (Chris's review)
         render_universe(); render_drift()
     with t_chg:            # period-over-period change + the scoped-Q&A assistant

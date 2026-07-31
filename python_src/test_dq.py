@@ -55,6 +55,23 @@ def t_dq_run_accepts_injected_frames():
     assert any("Sector populated" in r["name"] for r in res), [r["name"] for r in res]
 
 
+@unit
+def t_dq_size_curve_proxy_disclosure():
+    """The size-curve imputation is disclosed, never silent: the proxy-loadings check exists,
+    reads a plausible share of held weight (>0 on the imputed frames, <=100%), and its level
+    follows the 25%-weight WARN threshold."""
+    import re, barra_dq_checks
+    res = barra_dq_checks.run()
+    prox = [r for r in res if "size-curve proxy" in r["name"]]
+    assert len(prox) == 1, [r["name"] for r in res]
+    r = prox[0]
+    m = re.search(r"([\d.]+)% of weight", r["detail"])
+    assert m, r["detail"]
+    w = float(m.group(1))
+    assert 0 <= w <= 100, w
+    assert r["level"] == ("WARN" if w > 25 else "PASS"), r
+
+
 # --------------------------------------------------------------------------- INTEG
 @integ
 def t_dq_endpoint_shape():

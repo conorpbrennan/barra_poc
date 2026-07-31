@@ -133,6 +133,23 @@ On the Soros book over full history this reads ≈ <b>−39%</b> — the Feb–M
 risk a single-day VaR can't show. Meaningful on long paths (HistFull, event sets); a one-shock Hypo
 set is too short.</p>
 
+<h3>💰 PnL attribution (realized, factor + residual)</h3>
+<p>Where the money actually came from. The book's <b>realized</b> return (price-only, drifting
+buy-and-hold weights between 13F filings) is split into a factor-explained part and a residual —
+they sum exactly, because the residual is the model's own regression residual. Three tabs:
+<b>Attribution</b> — the cumulative Market / Style / Specific chart with the realized line, the
+by-factor table (average exposure, factor return, Carino-linked contribution, t-stat) and the
+coverage disclosure, over a selectable period (trailing 12m default). <b>Residual diagnostics</b> —
+is the residual large (information ratio, realized vs predicted specific vol) and is it correlated
+(lag-1/2 autocorrelation, a regression on the factor returns, the Barra bias statistics), each with
+a plain green/amber/red verdict; uncorrelated and well-sized = genuine diversified stock-picking.
+<b>Risk ↔ PnL reconcile</b> — each factor's realized contribution read against the band its
+start-of-period risk implied, base and stressed (vols up, correlations toward 1); a dot outside even
+the stressed band is a risk the decomposition missed — investigate, gain or loss alike. The same
+attribution drills factor→name in the pivot via the <code>Factor contribution</code> /
+<code>Specific PnL</code> / <code>Realized PnL</code> measures (the value at a month reads as the
+PnL over the <em>following</em> month — the month those exposures explain).</p>
+
 <h3>💧 Liquidity (days-to-liquidate)</h3>
 <p>How long to unwind the book. Each name's <b>days-to-liquidate = market value ÷ (participation ×
 ADV)</b>, where ADV is its trailing-63-day dollar volume and participation is the share of ADV you'll

@@ -92,6 +92,18 @@ def t_span_detail_and_scatter():
 
 
 @integ
+def t_span_book_guard():
+    """Multi-manager Phase 3: the artifact + live scatter are single-book. Default book (Soros)
+    is UNCHANGED; any other book comes back as a clean book_mismatch status."""
+    import requests
+    base = requests.get(f"{API}/span", timeout=60).json()
+    assert "status" not in base and base["series"], base
+    mism = requests.get(f"{API}/span", params={"book": "Citadel"}, timeout=60).json()
+    assert mism["status"] == "book_mismatch", mism
+    assert mism["requested_book"] == "Citadel" and mism["artifact_book"] == "Soros", mism
+
+
+@integ
 def t_span_rejects_bad_factor():
     import requests
     r = requests.get(f"{API}/span", params={"fx": "NotAFactor"}, timeout=30)

@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Each factor's marginal contribution and % share of Scenario VaR 99 under the COVID-2020 replay \u2014 which factors drove the loss in that crash window."
   }
 }

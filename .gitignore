@@ -6,6 +6,7 @@ tmp/
 
 # secrets
 .env
+.env.bak*
 *.lic
 
 # python bytecode
@@ -22,3 +23,9 @@ ActivePivot.lic*
 
 # generated parquet frames
 data/
+
+# transient app screenshots (debug artifacts)
+screenshots/
+
+# editor/tool transient files
+*.tmp.*

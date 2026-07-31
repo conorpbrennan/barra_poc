@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "L2 — Factor ES contributions",
+  "name": "L2 \u2014 Factor ES contributions",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-20T19:30:00Z",
   "updated": "2026-06-20T19:30:00Z",
@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Each factor's additive contribution to book Expected Shortfall (ES 97.5) and its % share. Like the VaR contribution but on the coherent tail-mean (Basel FRTB's VaR replacement) \u2014 the deep-tail view."
   }
 }

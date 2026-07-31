@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factor Risk Model — Response to Risk Review</title>
+<style>
+  :root{ --ink:#111; --bg:#fffff8; --faint:#6b6b63; --rule:#d8d5cd; --accent:#3b5e8c;
+         --done:#2e7d52; --designed:#b07d2b; --proposed:#8a8a82; --inplace:#3b5e8c; }
+  *{ box-sizing:border-box; }
+  html{ font-size:16px; }
+  body{ margin:0 auto; max-width:1180px; padding:5rem 2rem 8rem;
+        background:var(--bg); color:var(--ink);
+        font-family:"et-book",Palatino,"Palatino Linotype","Book Antiqua",Georgia,serif;
+        line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .col{ max-width:46rem; }                 /* the reading measure */
+  h1{ font-weight:400; font-size:2.1rem; line-height:1.15; margin:0 0 .3rem; letter-spacing:-.01em; }
+  .sub{ color:var(--faint); font-style:italic; font-size:1.15rem; margin:0 0 2.2rem; }
+  h2{ font-weight:400; font-size:1.5rem; margin:3rem 0 .2rem; padding-bottom:.25rem;
+      border-bottom:1px solid var(--rule); letter-spacing:-.01em; }
+  h2 .n{ color:var(--faint); font-size:1.1rem; margin-right:.5rem; }
+  h3{ font-weight:600; font-size:1.02rem; margin:1.6rem 0 .2rem; }
+  p,li{ font-size:1.05rem; }
+  a{ color:var(--accent); }
+  .lede{ font-size:1.12rem; }
+  code,.mono{ font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace; font-size:.9em;
+        background:#f3f1e9; padding:.05em .35em; border-radius:3px; }
+  .eq{ display:block; background:#f6f4ec; border-left:2px solid var(--rule);
+       padding:.55rem .9rem; margin:.8rem 0; font-family:"SF Mono",ui-monospace,Menlo,monospace;
+       font-size:.92rem; line-height:1.5; white-space:pre-wrap; }
+  /* margin notes — Chris's words + asides, floated into the right margin on wide screens */
+  .mn{ float:right; clear:right; width:15rem; margin:.2rem -17rem .8rem 0; font-size:.86rem;
+       line-height:1.4; color:var(--faint); }
+  .mn b{ color:var(--ink); font-weight:600; }
+  .quote{ border-left:2px solid var(--accent); }
+  @media(max-width:1100px){ .mn{ float:none; width:auto; margin:.6rem 0; padding-left:.8rem;
+       border-left:2px solid var(--rule); } .col{ max-width:none; } }
+  /* status dots */
+  .dot{ display:inline-block; width:.62rem; height:.62rem; border-radius:50%; margin-right:.45rem;
+        vertical-align:baseline; }
+  .d-done{ background:var(--done);} .d-designed{ background:var(--designed);}
+  .d-proposed{ background:var(--proposed);} .d-inplace{ background:var(--inplace);}
+  .status{ font-size:.8rem; letter-spacing:.06em; text-transform:uppercase; color:var(--faint);
+        font-family:"SF Mono",ui-monospace,monospace; }
+  .legend{ display:flex; flex-wrap:wrap; gap:1.4rem; margin:1.4rem 0 0; font-size:.9rem; color:var(--faint); }
+  .legend span{ white-space:nowrap; }
+  table{ border-collapse:collapse; width:100%; margin:1rem 0 .4rem; font-size:.98rem; }
+  th,td{ text-align:left; padding:.38rem .7rem .38rem 0; border-bottom:1px solid var(--rule);
+        vertical-align:top; }
+  th{ font-weight:600; font-size:.82rem; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); }
+  td.num,th.num{ text-align:right; font-variant-numeric:tabular-nums; padding-right:1.2rem; }
+  .small{ font-size:.9rem; color:var(--faint); }
+  hr{ border:0; border-top:1px solid var(--rule); margin:3.5rem 0; }
+  .tag{ font-size:.72rem; letter-spacing:.05em; text-transform:uppercase; padding:.08rem .45rem;
+        border:1px solid var(--rule); border-radius:3px; color:var(--faint); white-space:nowrap; }
+  ul.tight{ margin:.4rem 0; } ul.tight li{ margin:.15rem 0; }
+  .ask{ background:#f3f6fb; border:1px solid var(--rule); border-left:3px solid var(--accent);
+        border-radius:3px; padding:.9rem 1.2rem; margin:1.4rem 0; }
+  .ask .h{ font-size:.78rem; letter-spacing:.07em; text-transform:uppercase; color:var(--accent);
+        font-family:"SF Mono",ui-monospace,monospace; margin:0 0 .4rem; }
+  .ask p{ margin:.45rem 0; } .ask .q{ font-weight:600; }
+  .foot{ margin-top:5rem; color:var(--faint); font-size:.85rem; font-style:italic; }
+</style>
+</head>
+<body>
+<div class="col">
+
+<h1>Factor Risk Model — Response to the Risk Review</h1>
+<p class="sub">Mapping Chris's notes to what's in place, what we've built, what's designed, and what we propose — with methodology where it matters.</p>
+
+<h2>Summary</h2>
+<p class="lede">This is a proof-of-concept Barra-style equity factor-risk model. It runs on free, public
+data and is demoed against the Soros 13F book. I've built it from scratch, ahead of joining — building
+each piece myself is how I'm learning the model, and how I'll be useful sooner once I start.</p>
+<p>Chris's input has been pivotal. He's course-corrected the parts where I don't yet have the depth, and
+much of what's here came from his steers. The quality is in the details: how loadings are built, how the
+estimation universe is chosen, how descriptors are standardised, and how missing data is handled. That's
+where the work has gone.</p>
+
+<h3>How it's put together</h3>
+<p>Two halves that talk only through a small set of data files:</p>
+<ul class="tight">
+  <li><b>Builders</b> pull the raw inputs (SEC 13F, EDGAR fundamentals, public prices) and write the
+    data frames — loadings, factor returns, specific risk, positions.</li>
+  <li>An <b>Atoti cube</b> reads those and exposes the exposures plus one scenario / stress engine —
+    historical simulation, event replay, hypothetical shocks.</li>
+  <li>On top sits a <b>risk-tooling layer</b> (limits, data-quality checks, VaR backtest, trends,
+    stress, pre-trade what-if, liquidity, universe diagnostics) and a small layer that reads a view's
+    numbers back in plain English.</li>
+</ul>
+<p class="small">A good part of that risk-tooling layer is already live — VaR, ES, stress, backtesting,
+liquidity. One caveat: these are the standard measures. They're where I learned the mechanics, but I'd
+guess they're not central to how you manage risk at Soros. The review with Chris has been about moving
+past them — getting the factor model itself right, and validating it against realised PnL.</p>
+
+<h3>The factors, and where the loadings come from</h3>
+<p>Eleven factors: <b>Market</b> — a loading of 1.0 on every name, so the book carries ~unit market
+exposure — plus ten style factors: Size, Value, Momentum, Beta, Residual Vol, Earnings Yield, Growth,
+Leverage, Liquidity and Non-Linear Size. Each name's style loading is a <b>cross-sectional z-score of a
+characteristic</b>, all from free public data:</p>
+<ul class="tight">
+  <li><b>From SEC fundamentals</b> (EDGAR XBRL): Size = log market cap, Value = book / price, Earnings
+    Yield = net income / price, Leverage = assets / equity, Growth = asset growth.</li>
+  <li><b>From daily prices</b>: Beta and Residual Vol (regression against the market), Momentum (trailing
+    return), Liquidity (log dollar volume).</li>
+</ul>
+<p>Each descriptor is standardised across the cross-section by median and MAD — robust to outliers — on
+the estimation universe (the S&amp;P 500 seed). Estimation loadings are winsorised at ±3; coverage names
+are left uncapped, so a genuinely small off-index name reads its true large-negative Size loading instead
+of being clipped to −3. Factor returns then come from a monthly cross-sectional regression of next-period
+returns on these loadings, market-cap weighted — the loadings, factor returns and specific risk are duals
+of one regression.</p>
+<p>The cadence matters and is easy to misread. Three different clocks: <b>quarterly</b> 13F holdings set
+the book; each <b>month-end</b> the exposure loadings are rebuilt from as-of fundamentals and prices; the
+daily stock returns then regress on those month-old loadings to give <b>daily</b> factor returns, which
+drive every risk number. Quarterly → monthly → daily.</p>
+<p class="small">One sizing note: the estimation universe is capped at 250 names so the demo runs
+quickly — widening it improves the factor fit. A demo constraint, not a limit of the approach.</p>
+
+<h3>Where it stands — the review items</h3>
+<table>
+  <thead><tr><th>#</th><th>Item</th><th>Status</th><th>Note</th></tr></thead>
+  <tbody>
+    <tr><td>1</td><td>Point-in-time data</td><td><span class="dot d-inplace"></span><span class="status">In place</span></td><td>survivorship-free; bias-free estimation</td></tr>
+    <tr><td>2·3</td><td>Estimation vs. coverage universe; cap estimation, not coverage</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>the keystone — off-index names now read their true loadings; clean factor fit</td></tr>
+    <tr><td>4</td><td>Drawdown lens</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>the path risk VaR/ES miss</td></tr>
+    <tr><td>5</td><td>Active risk &amp; return vs. a benchmark</td><td><span class="dot d-designed"></span><span class="status">Agreed — next</span></td><td>benchmark agreed: MSCI Large Cap; unblocks tracking error &amp; active return</td></tr>
+    <tr><td>6</td><td>Intentional vs. unwanted loadings (hedging)</td><td><span class="dot d-designed"></span><span class="status">Evidence shipped</span></td><td>style-drift attribution — rotation vs. re-pricing; final call needs desk intent</td></tr>
+    <tr><td>7</td><td>Orthogonalisation &amp; multicollinearity</td><td><span class="dot d-designed"></span><span class="status">Partial</span></td><td>builder change</td></tr>
+    <tr><td>8</td><td>Linked securities (share classes / ADRs)</td><td><span class="dot d-proposed"></span><span class="status">Proposed</span></td><td>block-diagonal specific risk</td></tr>
+    <tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-done"></span><span class="status">Done — shipped</span></td><td>realised PnL by factor + residual; residual-correlation tests with RAG verdicts; the risk↔PnL reconcile band chart (base + correlation-stressed band); cube-native drill</td></tr>
+  </tbody>
+</table>
+
+<h3>What's next</h3>
+<p>The foundations are mostly in. The open points:</p>
+<ul class="tight">
+  <li><b>PnL attribution &amp; factor-model validation (§9)</b> — <b>now shipped</b>. Realised PnL
+    split into factor + residual (Carino-linked, drilling factor→name in the pivot), the residual
+    diagnostics with plain RAG verdicts, and the risk↔PnL reconcile chart — each factor's realised
+    contribution read against its start-of-period band, base and correlation-stressed. The residual
+    is persisted as a seventh frame and the attribution measures live in the cube.</li>
+  <li><b>Active risk vs. a benchmark (§5)</b> — benchmark agreed (MSCI Large Cap), so this is ready to
+    build: tracking error and active return.</li>
+  <li><b>What's most useful to the desk</b> — I'd value your view on which of these answers a real
+    question, so I build for that.</li>
+</ul>
+
+<div class="ask">
+  <p class="h">In one line</p>
+  <p>Building this from scratch is how I'm learning the model ahead of joining, and Chris's steers have
+  been pivotal. The standard risk measures are live but probably not central to how Soros runs risk — the
+  real work is getting the factor model right and validating it against realised PnL. The benchmark for
+  active risk is agreed: MSCI Large Cap.</p>
+</div>
+
+<hr>
+<h2>Full response — point by point</h2>
+<p class="lede">This is a proof-of-concept Barra-style equity factor-risk model, built on free/public
+data and demoed against the Soros 13F book. Chris's notes from the walkthrough are the agenda below.
+Each point is classified by status and answered with the methodology, not just an intention. The
+honest framing he gave us — <em>the devil is in the details</em> — is the one we're holding ourselves to:
+quality lives in exactly how loadings are built, how the universe is picked, how data is standardised,
+and how missing data is handled.</p>
+
+<div class="legend">
+  <span><span class="dot d-inplace"></span><b>In place</b> — already true today</span>
+  <span><span class="dot d-done"></span><b>Done</b> — built in response to this review</span>
+  <span><span class="dot d-designed"></span><b>Designed</b> — specced, awaiting sign-off</span>
+  <span><span class="dot d-proposed"></span><b>Proposed</b> — on the roadmap</span>
+</div>
+
+<h2><span class="n">1</span>Point-in-time data <span class="status">&nbsp; <span class="dot d-inplace"></span>In place</span></h2>
+<p class="mn quote"><b>Chris:</b> “All the data needs to be point in time to avoid biases in the estimation of the model.”</p>
+<p>This is already a core principle, not an add-on. Nothing enters a date's estimation that wasn't
+public by that date:</p>
+<ul class="tight">
+<li><b>Fundamentals</b> are as-of joined on the SEC <code>filed</code> date (a backward merge), so a
+  metric is only visible from the day it was reported — never back-dated to the period it describes.</li>
+<li><b>13F positions</b> are as-of joined by <em>filing</em> date, lagged the same way; exited names
+  expire on the next filing rather than persisting.</li>
+<li>The calendar is monthly month-ends, and the universe is rebuilt each month (see §2).</li>
+</ul>
+<p>No change required. We flag it because it directly answers the bias concern.</p>
+
+<h2><span class="n">2</span>Estimation vs. coverage universe <span class="status">&nbsp; <span class="dot d-designed"></span>Designed</span></h2>
+<p class="mn quote"><b>Chris:</b> “Estimation universe needs high-quality data … Coverage universe needs to contain all names on which you have (or may want) positions. The universes change monthly. Choosing the universe has an impact on the results — e.g. Russell 3000 vs. SPX; simplest example: 0-filled missing values.”</p>
+<p><b>Today:</b> there is one universe. It is the 13F-held names unioned with an index seed (SPX),
+used <em>both</em> to estimate factor returns <em>and</em> to carry positions. The 0-fill he mentions is
+already how thin names are handled — a name with at least 6 of 10 loadings is kept and the rest are
+zero-filled (the market-average tilt).</p>
+<p><b>Proposed:</b> split the one universe into two, both rebuilt monthly.</p>
+<table>
+<thead><tr><th>Universe</th><th>Membership</th><th>Role</th><th>Loadings capped?</th></tr></thead>
+<tbody>
+<tr><td><b>Estimation</b></td><td>high-quality liquid names (index seed + a data-quality gate)</td><td>regress factor returns here only</td><td>Yes — winsorised</td></tr>
+<tr><td><b>Coverage</b></td><td>estimation ∪ every held (and candidate) name</td><td>assign loadings to all of these</td><td><b>No</b></td></tr>
+</tbody>
+</table>
+<p class="small">Full spec, builder changes, and the four open questions for Chris are in the companion
+design note (<code>docs/estimation-coverage-design.md</code>). Nothing downstream changes — the six
+data frames, the cube, and every risk measure are untouched; this only changes <em>how</em> loadings and
+factor returns are produced.</p>
+
+<div class="ask">
+<p class="h">Open decision for Chris — estimation universe breadth</p>
+<p><b>Proposal:</b> estimate on the <b>S&amp;P 1500</b>; let <b>coverage</b> carry Russell-3000-level
+breadth as the book requires. Today we estimate on the S&amp;P 500 seed (plus held names), which is a
+touch narrow for a stable daily cross-sectional regression.</p>
+<p><b>Why SP1500, not raw Russell 3000, for estimation.</b> The two universes want opposite things.
+Estimation wants breadth <em>and</em> clean data — your “high-quality data” point. Russell 3000 reaches
+deep into micro-caps where our free sources degrade (sparse/late SEC fundamentals, illiquid prices,
+the corrupt-market-cap cases we already guard against), and that noise pulls <em>every</em> factor return.
+SP1500 roughly triples the cross-section while staying liquid and well-covered. The genuine case for
+R3000 breadth is <b>coverage</b>, which must contain every held name anyway — and §3's uncapped
+coverage loadings already let a small off-index name read its true large-negative Size loading.</p>
+<p><b>Two caveats to weigh.</b> (1) <em>Point-in-time index membership</em> — we currently apply today's
+index list across all history (a survivorship/look-ahead bias, the very thing §1 avoids elsewhere);
+broadening makes a clean historical-membership source harder, especially for R3000. (2) <em>Pull
+scale</em> — roughly 3× the per-name data pull for SP1500, ~6× for R3000.</p>
+<p><b>How we'd settle it:</b> an empirical sweep — SP500 vs SP1500 vs a liquidity-screened R3000 —
+compared on factor-return stability (vol, regression condition number), cross-section breadth per day
+and the <code>&lt;30 valid names</code> skip rate, and the Kupiec/Basel backtest. Pick the universe where
+factor returns are most stable and the backtest stays green — the same evidence-led approach we used to
+choose the FHS backtest estimator.</p>
+<p class="q">For Chris: is SP1500 the right estimation set, or do you want a screened Russell 3000? Any
+required liquidity / market-cap screen, and is a point-in-time membership source available to us?</p>
+</div>
+
+<h2><span class="n">3</span>Cap the estimation universe, not the coverage universe <span class="status">&nbsp; <span class="dot d-done"></span>Done — shipped</span></h2>
+<p class="mn quote"><b>Chris:</b> “If your estimation universe is SPX and your coverage universe is Russell 3000, the small names will have very negative size loadings, and that is correct.”</p>
+<p><b>This is now exactly his last point.</b> Previously the standardiser <code>_winsor_z</code> clipped
+every loading at ±3σ for every name — estimation and coverage alike — so a genuinely tiny holding's Size
+loading was clipped to −3 instead of reading its true, larger-magnitude value. The standardiser is now
+<code>_split_z</code>, which keys off the §2 estimation flag and clips only estimation names.</p>
+<h3>Methodology — the standardisation</h3>
+<p>A descriptor <code>x</code> is turned into a loading by a robust z-score against the cross-section's
+median and MAD (median absolute deviation, scaled to a normal σ):</p>
+<span class="eq">med   = median(x)
+MAD   = 1.4826 · median(|x − med|)
+z     = (x − med) / MAD
+load  = (z − mean(z)) / std(z)        ← re-standardised to mean 0, std 1</span>
+<p><code>_split_z</code> splits this in two, keyed off §2:</p>
+<ul class="tight">
+<li><b>Estimation names:</b> compute med/MAD here, and <em>winsorise</em> — clip <code>z</code> to ±3 —
+  before regressing. This protects the regression from a corrupt or extreme descriptor blowing up
+  every factor return (the historical condition-number failures).</li>
+<li><b>Coverage names:</b> standardise against the <em>estimation</em> universe's med/MAD, and leave the
+  loading <b>uncapped</b> — only a loose ±10 backstop (<code>COVERAGE_CAP</code>) clamps a corrupt XBRL
+  value. A held name far smaller than anything in SPX correctly reads, say, −6 — six estimation-MADs
+  below the median. That is a real exposure; capping it would understate the book's size tilt.</li>
+</ul>
+<p>Capping belongs in estimation (clean fit), not in coverage (faithful exposure). Exactly his point.</p>
+
+<h2><span class="n">4</span>Drawdown <span class="status">&nbsp; <span class="dot d-done"></span>Done — shipped</span></h2>
+<p class="mn quote"><b>Chris:</b> “Drawdown is an important lens that's currently missing.”</p>
+<p>Built and live. VaR and Expected Shortfall are single-horizon distribution statistics — they say
+nothing about the <em>path</em>. Drawdown is the path lens: the worst peak-to-trough an investor would have
+sat through.</p>
+<h3>Methodology — constant-portfolio drawdown</h3>
+<p>We already simulate the current book's daily P&amp;L across the full factor-return history (the
+scenario engine's P&amp;L vector, date-ordered). Drawdown compounds that into an equity curve and reads
+the deepest trough below a running peak:</p>
+<span class="eq">equity_t   = ∏ (1 + pnl_s),  s ≤ t      ← held book, compounded over the path
+peak_t     = max(equity_s,   s ≤ t)
+drawdown_t = equity_t / peak_t − 1       ← ≤ 0
+max DD     = min_t drawdown_t</span>
+<p>It also reports the peak and trough dates, whether and when it recovered, and the longest run spent
+underwater. Like the VaR backtest, this is a <em>constant-portfolio what-if</em> — today's book applied to
+history — not a live P&amp;L track record (the 13F book has none).</p>
+<h3>What it shows on the Soros book (HistFull, as of 2024-12-31)</h3>
+<table>
+<thead><tr><th>Measure</th><th class="num">Value</th></tr></thead>
+<tbody>
+<tr><td>Max drawdown</td><td class="num">−38.96%</td></tr>
+<tr><td>Peak → trough</td><td class="num">2020-02-19 → 2020-03-23</td></tr>
+<tr><td>Recovered by</td><td class="num">2020-06-08</td></tr>
+<tr><td>Longest underwater</td><td class="num">524 trading days</td></tr>
+<tr><td><span class="small">vs. worst single day (1-day)</span></td><td class="num">−13.2%</td></tr>
+</tbody>
+</table>
+<p>The lens earns its place immediately: the static 99% daily VaR reads a comfortable number, but the
+COVID path takes this book down ~39% and keeps it underwater for two years. That drawdown comes through
+Market beta the one-day VaR cell underprices. It surfaces three ways — a <code>/drawdown</code> API
+endpoint, an equity-curve + underwater panel in the dashboard, and folded into the written risk
+commentary so it leads with a deep drawdown when present.</p>
+
+<h2><span class="n">5</span>Active risk &amp; active return vs. a benchmark <span class="status">&nbsp; <span class="dot d-designed"></span>Agreed — next</span></h2>
+<p class="mn quote"><b>Chris:</b> “‘Active risk’ and ‘active return’, where you measure your performance against a benchmark portfolio, can be more important than stand-alone risk/return.”</p>
+<p><b>Today the model is entirely absolute</b> — stand-alone risk of the Soros book, with no active view
+yet. <b>The benchmark is now agreed: MSCI Large Cap</b>, so this moves from an open question to the next
+build.</p>
+<h3>Methodology — what we'd add</h3>
+<p>Once the coverage universe (§2) is explicit, a benchmark is just another coverage portfolio. Active
+risk falls straight out of the same factor machinery on the <em>active weights</em>:</p>
+<span class="eq">w_active = w_portfolio − w_benchmark
+x_active,k = Σ_i w_active,i · loading_i,k     ← active factor exposures
+tracking error² = x_activeᵀ · F · x_active  +  Σ_i w_active,i² · σ²_spec,i</span>
+<p>That gives tracking error, active VaR/ES, and a by-factor decomposition of active risk — the same
+marginal/incremental contribution views we already compute for absolute risk, but relative to the
+benchmark. <b>Depends on §2</b> — the MSCI Large Cap constituents must sit in the coverage universe.
+Pairs naturally with §6.</p>
+
+<h2><span class="n">6</span>Intentional vs. unwanted loadings — hedging <span class="status">&nbsp; <span class="dot d-proposed"></span>Proposed</span></h2>
+<p class="mn quote"><b>Chris:</b> “Some factor loadings are wanted/intentional positioning, some are unwanted/accidental and can/should be hedged out.” &nbsp;Also: “Market/factor risk can be hedged at the portfolio level or at the firm level.”</p>
+<p>We report exposures and per-factor marginal/incremental risk, but nothing yet distinguishes a
+deliberate tilt from an incidental one, and there's no hedge view.</p>
+<h3>Methodology — what we'd add</h3>
+<ul class="tight">
+<li>Tag each factor (or active exposure) as <b>intended</b> or <b>incidental</b> in config.</li>
+<li>Split active risk (§5) into the part explained by intended bets vs. the residual incidental factor
+  risk — the hedgeable slice.</li>
+<li>Report the hedge that neutralises the incidental exposures (the offsetting factor positions), at
+  the portfolio level, with a note on where firm-level netting would change it.</li>
+</ul>
+<p>This is mostly a reporting/decomposition layer on top of §5, not new estimation.</p>
+
+<h2><span class="n">7</span>Orthogonalisation &amp; multicollinearity <span class="status">&nbsp; <span class="dot d-designed"></span>Partial → proposed</span></h2>
+<p class="mn quote"><b>Chris:</b> “You can orthogonalize factors to avoid any issues with multicollinearity.”</p>
+<p><b>Today, partially:</b> we orthogonalise NonLinSize against Size (regress out the linear part, then
+re-standardise), and a degeneracy screen drops any factor whose cross-sectional spread collapses on a
+given day, which keeps the regression conditioned. We do not yet orthogonalise the full factor set.</p>
+<h3>Methodology — what we'd add</h3>
+<ul class="tight">
+<li>Full factor orthogonalisation (a defined order, or a symmetric scheme) so correlated descriptors
+  don't split a single bet across two coefficients.</li>
+<li>Surface the diagnostics that justify it: pairwise factor correlations, VIF per factor, and the
+  design-matrix condition number per date — so the choice is evidenced, not asserted.</li>
+</ul>
+
+<h2><span class="n">8</span>Linked securities <span class="status">&nbsp; <span class="dot d-proposed"></span>Proposed</span></h2>
+<p class="mn quote"><b>Chris:</b> “Linked securities break the assumption that the idiosyncratic returns are uncorrelated (different share classes, dual listings, ADRs and underlying, etc.). There are ways to handle that.”</p>
+<p><b>Today this assumption is explicit and unhandled:</b> the specific-risk block is strictly diagonal —
+idiosyncratic returns assumed uncorrelated. Linked names (GOOGL/GOOG, an ADR and its local line, dual
+listings) violate it: their residuals move together, so the diagonal understates their joint specific
+risk and a concentration measure treats them as two independent bets when they are one.</p>
+<h3>Methodology — what we'd add</h3>
+<ul class="tight">
+<li>Identify linked groups (share-class / ADR / dual-listing maps).</li>
+<li>Either <b>net</b> linked names into a single economic position before the specific block, or add
+  <b>off-diagonal specific covariance</b> within each linked group — a block-diagonal specific matrix
+  rather than fully diagonal.</li>
+</ul>
+<p class="small">This touches the model's core “diagonal specific block, no full specific covariance”
+assumption, so it needs a short design pass before code — flagged, not hidden.</p>
+
+<h2><span class="n">9</span>PnL attribution — realised PnL by factor and residual <span class="status">&nbsp; <span class="dot d-done"></span>Done — shipped</span></h2>
+<p class="mn quote"><b>Chris:</b> “Show how the factor model explains the realised PnL over a period — broken down by factor and by residual — and check whether the residuals are large, and if they are, whether they're correlated; ideally uncorrelated, which shows the PM is doing a good job.”</p>
+<p class="mn quote"><b>Chris, 29 Jun (endorsed):</b> “It's really the connection between the PnL attribution and the risk decomposition at the start of the period that tells you how good the risk management of the portfolio is.”</p>
+<p class="lede">A performance-attribution report: split the book's realised PnL into what the factor
+model explains and what it doesn't, then test the residual.</p>
+
+<h3>What Chris asked for — the full picture</h3>
+<p>The request is not a PnL attribution on its own. It's a <b>loop between two reports</b>, and the value
+is in connecting them.</p>
+<ul class="tight">
+<li><b>Ex-ante, at the start of the period (date T) — a risk decomposition.</b> Which factors and which
+positions contribute how much to the book's <b>total risk</b>. You don't forecast returns, but from each
+factor's volatility and the pairwise correlations you get the <em>shape and width</em> of the forward PnL
+distribution (its VaR / ES); shocking those vols and correlations — or replaying a past episode — gives
+stress scenarios. What you forecast is the <em>range of outcomes</em>, never a number.</li>
+<li><b>Ex-post, over the period (T→T+1) — a PnL attribution.</b> Realised PnL split into the same factor
+and residual buckets.</li>
+<li><b>The connection.</b> Was the realised PnL in the range the risk decomposition implied, and did the
+contributions line up with the risk actually taken? In his words: <em>“it's really the connection between
+the PnL attribution and the risk decomposition at the start of the period that tells you how good the
+risk management of the portfolio is.”</em></li>
+</ul>
+<p>His day-to-day loop:</p>
+<ol class="tight">
+<li>Run the risk decomposition at the start of the period.</li>
+<li>Check the exposures are within limits, are the intended bets, and are in line with the mandate.</li>
+<li>If not — exit the offending positions, or add hedges.</li>
+<li>Run the PnL attribution at the end, and check the explanation matches what the risk decomposition led
+you to expect.</li>
+</ol>
+<p>Two checks close the loop. <b>Within band</b> — does each factor's realised contribution sit inside the
+band its start-of-period risk implied? This is <em>not</em> “big-risk factors should drive the PnL”: if
+the big-risk factor doesn't move and a small-risk one falls off a cliff, the small one rightly dominates
+— what matters is each contribution against its <em>own</em> risk-implied range, which already folds in
+the move. <b>The surprise</b> — a realised contribution outside that band, an outcome the risk
+decomposition didn't see coming.</p>
+<table>
+<thead><tr><th></th><th>PnL: made money</th><th>PnL: lost money</th></tr></thead>
+<tbody>
+<tr><td><b>Risk you knew you had</b></td><td>bet paid — fine, you chose it; some bets win</td><td>bet lost — fine, you chose it; some bets lose</td></tr>
+<tr><td><b>Risk the decomposition missed</b></td><td><b style="color:#a8322a">investigate</b> — a win you can't explain</td><td><b style="color:#a8322a">investigate</b> — a loss you can't explain</td></tr>
+</tbody>
+</table>
+<p class="small">Chris's correction: an <em>unexpected gain is as much of a risk-process failure as an
+unexpected loss</em> — “in one case the investors are happy, in the other angry, but both show the same
+failure.” The axis that matters is <b>known vs. unknown risk</b>, not made vs. lost.</p>
+<p>The principle behind it, in his words: <b>the primary function of the risk team is not to avoid losses
+but to understand all the risks the fund is taking.</b> Some bets pay, some don't — that's the business,
+and not on the risk manager. But making <em>or</em> losing money on a bet you didn't know you took is
+fully on the risk manager: the direction was luck, the failure was not seeing the risk. So good risk
+management is measured by <b>how well the PnL is explained by the risk you knew you had</b>, not by the
+sign of the PnL. (A secondary function is to keep those bets from threatening the fund — limits and
+mandates, capital and liquidity reserves, hedging.)</p>
+<p>He frames it as a universal pattern, with two other examples. In the <b>sensitivities</b> world: the
+Greeks report at the start vs. the PnL-explain over the period — if they don't line up, there are
+second-order or non-linear effects the sensitivities missed. In the <b>VaR</b> world: the realised PnL
+distribution vs. the VaR — too many exceptions means the VaR model is missing something (our
+<code>/backtest</code> is exactly this). Same loop every time: form an ex-ante expectation, measure
+ex-post reality, and treat the unexplained part as the signal.</p>
+
+<p><b>Get one thing straight first.</b> A factor risk model explains return after the fact — it does not
+forecast it. The “factor PnL” below is not a prediction of anything; it is the part of the
+<em>realised</em> return the factors explain. (We avoid the word “projected” deliberately, per Chris —
+there is no forward PnL forecast.)</p>
+<span class="eq">R_p(t) = Σ_k x_k(t)·f_k(t)  +  u_p(t)
+x_k = Σ_i w_i·loading_i,k     ← book net exposure to factor k
+u_p = Σ_i w_i·ε_i             ← residual (specific) return
+ε_i = R_i − Σ_k loading_i,k·f_k   ← the WLS residual the fit already computes</span>
+<p>The factor PnL is <code>Σ_k x_k·f_k</code>; the residual is <code>u_p</code>. They sum to realised by
+construction, because <code>ε_i</code> is the same residual <code>regress_factors</code> already produces
+and currently discards (only its square is kept, as <code>SpecificVar</code>). We keep that residual as a
+new <code>specific_returns</code> frame so the cube can carry it as a measure — it is the model's own
+number, not an approximation.</p>
+<h3>Methodology — the realised engine</h3>
+<p>Realised PnL is built bottom-up from the ~1,000 name price series, <em>not</em> from the cube (which
+has no realised-PnL measure, only hypothetical scenarios):</p>
+<ul class="tight">
+<li><b>Unit NAV per name</b> — daily close → daily return → cumulative product, an index base 1.0.</li>
+<li><b>Drifting (buy-and-hold) weights</b> — anchor at each 13F filing, then let each name's NAV compound
+  so the book weights drift with the market until the next filing. That is what actually happened to the
+  book between filings; it is more honest than the constant-portfolio assumption the drawdown and
+  backtest lenses use.</li>
+<li><b>Price-only</b>, both sides — the factor model is price-only, so the realised return fed in is the
+  same return the regression saw. Mixing in a dividend-adjusted series would make the residual absorb
+  every dividend as fake alpha. Dividends are excluded both sides, disclosed.</li>
+</ul>
+<p>The decomposition then ties out three ways — realised (bottom-up) = Σ factor contribution + specific,
+to machine precision daily — and is Carino-linked over the period so the by-factor contributions sum
+exactly to the compounded book return with no plug.</p>
+<h3>Methodology — the residual diagnostics</h3>
+<p>The residual is the part the model can't explain. For a name, <code>R_i = Σ_k loading·f_k + ε_i</code>;
+<code>ε_i</code> is the <b>specific (idiosyncratic) return</b>, the stock-specific move the factors miss,
+and at the book level <code>u_p = Σ_i w_i·ε_i</code>. The premise: if the residual is genuine, diversified
+stock-picking, the specific returns behave like independent coin-flips — no pattern over time, no link to
+the factors, no common thread across names, sized about as the model predicted. Each test checks one of
+those.</p>
+
+<p><b>Is it large?</b></p>
+<ul class="tight">
+<li><b>Specific share</b> — cumulative specific PnL as a fraction of total: how much of the return came
+  from stock-picking vs. factor bets.</li>
+<li><b>Information ratio</b> — <code>mean(u_p)/std(u_p)</code>, annualised: a Sharpe ratio for the
+  idiosyncratic slice, the stock-picking skill number. Positive and high = reliable alpha; near zero =
+  noise; negative = stock-picking is destroying value.</li>
+<li><b>Realised vs. predicted specific vol</b> — realised <code>std(u_p)</code> against the model's
+  predicted specific vol. Ratio ≈ 1 = sized right; above 1 = the model under-states idiosyncratic risk,
+  which makes total VaR too low.</li>
+<li><b>Explained share</b> — <code>1 − var(u_p)/var(R_p)</code>, the fraction of the book's return the
+  factors explain. Low isn't automatically bad — diversified stock-picking <em>or</em> a missing factor;
+  the next three tests tell them apart.</li>
+</ul>
+
+<p><b>Is it correlated? — three places a hidden pattern can hide.</b> Chris's steer: keep these cheap —
+the simple correlation and regression versions are enough, and the formal tests are noted but optional,
+since the desk quants already know them.</p>
+<ul class="tight">
+<li><b>Across time.</b> Does this month's specific return predict next month's? Correlate <code>u_p</code>
+  with itself lagged 1 and 2 periods. A non-zero correlation (a persistent trend) means the “alpha” is a
+  slow, unhedged systematic bet, not nimble stock-picking. <span class="small">(The formal version is the
+  Ljung-Box white-noise test across many lags — optional; the lag-1/2 correlation is the cheap read.)</span></li>
+<li><b>Against the factors.</b> Regress the specific return on the factor returns. It is orthogonal within
+  one month by construction, but over time — and because the 13F exposures are lagged up to 45 days — it
+  can still co-move with a factor. A loading means part of the “alpha” is that factor's beta
+  mis-measured: paid for systematic risk and calling it skill. Near zero = clean, orthogonal alpha.
+  <span class="small">(Chris flagged this regression as one of the worthwhile tests to build.)</span></li>
+<li><b>Across names.</b> The model <em>assumes</em> the names' specific returns are uncorrelated (the
+  diagonal specific block). If many names' residuals move together, that is <b>most likely a missing
+  factor</b> — a common driver the model has no factor for; a small linked group (share classes, ADRs) is
+  the narrow special case. A shared residual means the diagonal block <b>under-states risk</b> — what
+  looks like many independent bets is one bet repeated. <span class="small">(The formal version is a PCA
+  on the residual panel — optional / deferred per Chris, unless quick.)</span></li>
+</ul>
+
+<p><b>Bias statistics — did the model size the risk right?</b> The canonical Barra / MSCI check.
+Standardise each realised return by its <em>predicted</em> vol, <code>z = realised / predicted-vol</code>;
+if the forecast is right, <code>z</code> has standard deviation ≈ 1. The bias statistic <code>B =
+std(z)</code> over a rolling window reads: <code>B ≈ 1</code> calibrated, <code>B &gt; 1</code> risk
+under-forecast (the dangerous direction), <code>B &lt; 1</code> over-forecast. Run it for the whole book,
+each factor, and the specific block.</p>
+
+<p><b>The read for Chris:</b> positive IR, no lag-1/2 autocorrelation, ~zero factor correlation, no
+common residual component across names, and bias ≈ 1 → genuine, diversified, well-measured
+stock-picking, the PM is doing well. Autocorrelation (a persistent unhedged bet), factor correlation
+(hidden beta), or a dominant residual component (a missing / crowded factor) each name a specific problem
+→ tell the PM, add the factor, or hedge it. Also surfaced: by-sector / by-name attribution, residual
+concentration (HHI), hit rate, and factor-timing vs. static tilt.</p>
+<h3>Reconcile view — realised vs. the expected band</h3>
+<p>The headline of the linkage is one figure. Each factor's <b>realised contribution</b> over the period
+(the dot) is read against the <b>band the risk decomposition implied at the start</b> — centred at zero
+(the model forecasts the <em>width</em> of the distribution, not its direction), with half-width equal to
+that factor's σ. Two bands per row: the <b>base</b> forecast, and a <b>stressed</b> one with vols shocked
+up and correlations pushed toward 1. The band is just the covariance applied to the exposures
+(<code>σ² = xᵀ·F·x</code>), so the stressed band <em>is</em> Chris's “shock the vols and correlations”,
+drawn.</p>
+<figure style="clear:both; margin:1.8rem 0;">
+<svg viewBox="0 0 800 404" role="img" aria-label="Reconcile view — realised contribution versus the expected start-of-period band, by factor, with a stressed band" style="width:100%; height:auto; font-family:inherit;">
+  <line x1="420" y1="34" x2="420" y2="310" stroke="#c9c5bb" stroke-width="1" stroke-dasharray="2 3"/>
+  <!-- Market -->
+  <rect x="240" y="40" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="40" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="52" text-anchor="end" font-size="13" fill="#2a2a26">Market</text>
+  <circle cx="516" cy="48" r="4.5" fill="#33332f"/>
+  <text x="700" y="52" font-size="12" font-family="monospace" fill="#33332f">+1.6σ</text>
+  <!-- Beta -->
+  <rect x="240" y="74" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="74" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="86" text-anchor="end" font-size="13" fill="#2a2a26">Beta</text>
+  <circle cx="486" cy="82" r="4.5" fill="#33332f"/>
+  <text x="700" y="86" font-size="12" font-family="monospace" fill="#33332f">+1.1σ</text>
+  <!-- ResidVol -->
+  <rect x="240" y="108" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="108" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="120" text-anchor="end" font-size="13" fill="#2a2a26">ResidVol</text>
+  <circle cx="576" cy="116" r="4.5" fill="#b07d2b"/>
+  <text x="700" y="120" font-size="12" font-family="monospace" fill="#b07d2b">+2.6σ</text>
+  <!-- Value -->
+  <rect x="240" y="142" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="142" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="154" text-anchor="end" font-size="13" fill="#2a2a26">Value</text>
+  <circle cx="390" cy="150" r="4.5" fill="#33332f"/>
+  <text x="700" y="154" font-size="12" font-family="monospace" fill="#33332f">−0.5σ</text>
+  <!-- Momentum -->
+  <rect x="240" y="176" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="176" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="188" text-anchor="end" font-size="13" fill="#2a2a26">Momentum</text>
+  <circle cx="468" cy="184" r="4.5" fill="#33332f"/>
+  <text x="700" y="188" font-size="12" font-family="monospace" fill="#33332f">+0.8σ</text>
+  <!-- Size -->
+  <rect x="240" y="210" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="210" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="222" text-anchor="end" font-size="13" fill="#2a2a26">Size</text>
+  <circle cx="342" cy="218" r="4.5" fill="#33332f"/>
+  <text x="700" y="222" font-size="12" font-family="monospace" fill="#33332f">−1.3σ</text>
+  <!-- Specific -->
+  <rect x="240" y="244" width="360" height="16" fill="#ece9e0"/>
+  <rect x="300" y="244" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="256" text-anchor="end" font-size="13" fill="#2a2a26">Specific</text>
+  <circle cx="216" cy="252" r="4.5" fill="#a8322a"/>
+  <text x="700" y="256" font-size="12" font-family="monospace" fill="#a8322a">−3.4σ</text>
+  <!-- separator -->
+  <line x1="60" y1="278" x2="700" y2="278" stroke="#d8d5cd" stroke-width="1"/>
+  <!-- Book total -->
+  <rect x="204" y="292" width="432" height="16" fill="#ece9e0"/>
+  <rect x="300" y="292" width="240" height="16" fill="#d9d5ca"/>
+  <text x="132" y="304" text-anchor="end" font-size="13" font-weight="600" fill="#2a2a26">Book total</text>
+  <circle cx="282" cy="300" r="4.5" fill="#b07d2b"/>
+  <text x="700" y="304" font-size="12" font-family="monospace" fill="#b07d2b">−2.3σ</text>
+  <!-- axis -->
+  <g stroke="#c9c5bb" stroke-width="1">
+    <line x1="240" y1="314" x2="240" y2="319"/><line x1="300" y1="314" x2="300" y2="319"/>
+    <line x1="360" y1="314" x2="360" y2="319"/><line x1="420" y1="314" x2="420" y2="319"/>
+    <line x1="480" y1="314" x2="480" y2="319"/><line x1="540" y1="314" x2="540" y2="319"/>
+    <line x1="600" y1="314" x2="600" y2="319"/>
+  </g>
+  <g font-size="10" fill="#6b6b63" text-anchor="middle" font-family="monospace">
+    <text x="240" y="330">−3σ</text><text x="300" y="330">−2σ</text><text x="360" y="330">−1σ</text>
+    <text x="420" y="330">0</text><text x="480" y="330">+1σ</text><text x="540" y="330">+2σ</text>
+    <text x="600" y="330">+3σ</text>
+  </g>
+  <!-- legend -->
+  <rect x="150" y="356" width="22" height="11" fill="#d9d5ca"/>
+  <text x="178" y="365" font-size="11" fill="#2a2a26">base band ±2σ (today's vols &amp; correlations)</text>
+  <rect x="470" y="356" width="22" height="11" fill="#ece9e0"/>
+  <text x="498" y="365" font-size="11" fill="#2a2a26">stressed band (vols ↑, correlations → 1)</text>
+  <circle cx="161" cy="385" r="4.5" fill="#33332f"/>
+  <text x="172" y="389" font-size="11" fill="#2a2a26">within — as expected</text>
+  <circle cx="330" cy="385" r="4.5" fill="#b07d2b"/>
+  <text x="341" y="389" font-size="11" fill="#2a2a26">beyond base — stress regime</text>
+  <circle cx="560" cy="385" r="4.5" fill="#a8322a"/>
+  <text x="571" y="389" font-size="11" fill="#2a2a26">beyond stressed — investigate</text>
+</svg>
+<figcaption class="small" style="margin-top:.6rem;">Illustrative — a stressed quarter on the Soros book. Each row is read against its own start-of-period band; the dot is the realised contribution. <b>Market</b> and the style factors land inside their bands — risk understood, PnL in proportion to it. <b>ResidVol</b> and the <b>book total</b> breach the base band but sit inside the stressed one: a stress regime, where the calm-market estimate was too benign but the shocked one covers it. The book's band widens more than any single factor's because <b>correlations → 1 removes the diversification</b> that narrowed it — the aggregate is where correlation risk surfaces. <b>Specific</b> is the flag: it lost more than even the stressed band predicted — the “lost money where the risk decomposition said little” case, a risk not captured at the start (here a crowded / linked bet the diagonal specific block under-states), the thing to dig into.</figcaption>
+</figure>
+
+<h3>Drill-through — parent to child</h3>
+<p>The factor breakdown is the parent; clicking a factor expands to the names beneath it — <em>which
+positions made that factor bet</em> — and the column still sums to the factor row above. It foots
+because the parent value is itself a sum over names (<code>x_k·f_k = Σ_i w_i·loading_i,k·f_k</code>), and
+the same data drills both ways: factor → name, or name → factor (why a position made money, its factor
+mix plus specific). This is built <b>cube-native</b>: three additive measures (<code>Factor
+contribution</code>, <code>Specific PnL</code>, <code>Realised PnL</code>) in the existing pivot grid, so
+the drill, the slicing and the re-pivot are native — and the written commentary and Q&amp;A inherit them.</p>
+<p>This is the general principle, not just for attribution: <b>additional measures live in the cube</b> —
+including the more complex ones the quants define — whenever it makes sense to apply them to data we
+<b>slice, drill, or modify</b>. A measure defined once in the cube composes with everything: any slice
+(factor, sector, name, date, scenario), the parent→child drill, and — crucially — recomputation under
+<b>what-if</b> (modified weights, added or dropped names) and <b>stress</b> (shocked vols / correlations).
+So a quant's measure is immediately available across every view and every hypothetical, rather than being
+re-coded for each context. Only the genuinely non-cube statistics (period linking, the residual
+correlation tests, bias) stay in the thin Python layer.</p>
+
+<h3>What we already have, and what we'd build</h3>
+<p>Most of the ex-ante half already exists in the model — it's the connection and the attribution
+measures that are new.</p>
+<table>
+<thead><tr><th>Part of the request</th><th>Already in place</th><th>To build</th></tr></thead>
+<tbody>
+<tr><td><b>PnL attribution</b> by factor + residual (ex-post, T→T+1)</td><td>factor returns, exposures, positions, prices; the decomposition identity <code>R_p = Σ x_k·f_k + u_p</code></td><td>the realised engine (unit NAVs, drifting weights); cube measures <code>Factor contribution</code> / <code>Specific PnL</code> / <code>Realised PnL</code>; the <code>specific_returns</code> frame; <code>/pnl_attribution</code> + panel</td></tr>
+<tr><td><b>“Are the residuals large / correlated?”</b></td><td>predicted specific vol (<code>SpecificVar</code>); the residual itself (the model's own number)</td><td>information ratio + the var-ratio measures; the residual-vs-factor regression; lag-1/2 autocorrelation; bias statistics. Ljung-Box / PCA optional (the quants know them); <code>/pnl_attribution/residual</code></td></tr>
+<tr><td><b>Risk decomposition at T</b> — factor &amp; position contribution to total risk</td><td><b>the cube already computes this</b> — marginal / incremental contribution to Total VaR; the Risk-HHI concentration measure is built from these shares</td><td>surface it as a tidy “contribution to risk at T” table aligned to the same factor / position buckets as the attribution</td></tr>
+<tr><td><b>Expected forward distribution</b> — vols + correlations, stress / replay</td><td>scenario VaR / ES over full history (empirical), event-replay sets, hypothetical shocks, <code>/stress</code> (per-factor vol shocks)</td><td>the ±σ <b>base band</b> per row; a <b>correlation-stress mode</b> for the stressed band — today <code>/stress</code> shocks vols only, not correlations</td></tr>
+<tr><td><b>The linkage / reconcile</b> — risk at T vs. PnL T→T+1, within-range, surprise</td><td><code>/backtest</code> (realised-vs-VaR exceptions, Kupiec / Basel — his VaR analogy); the what-if risk math (book risk recomputed from weights)</td><td>the temporal pairing; the per-factor / position surprise z-score; the surprise ranking; the reconcile band chart above; <code>/pnl_attribution/linkage</code></td></tr>
+<tr><td><b>The daily loop</b> — decompose → check limits / intended → hedge → attribute</td><td><code>/limits</code> (the limits check); style-drift &amp; what-changed (intended vs. unintended); what-if &amp; stress (the hedge step)</td><td>no new engine — the linkage report is what closes the loop end to end</td></tr>
+</tbody>
+</table>
+
+<p class="small">The cube measures are additive (the same class as net exposure — no heavy scenario
+vectors, so no performance penalty). Persisting the residual adds a seventh data frame
+(<code>specific_returns</code>), a deliberate, contained change that needs a rebuild — the price of a
+live reconciling drill rather than a static table. The statistics the cube can't express (period
+linking, the residual correlation tests, bias stats) sit in a thin Python layer:
+<code>barra_pnl_attribution.py</code>, the <code>/pnl_attribution</code> + <code>/pnl_attribution/residual</code>
+endpoints, and a dashboard panel. A by-product is a true realised track record, which upgrades the
+constant-portfolio inputs the drawdown and backtest lenses use today. Full spec in the companion note
+<code>docs/pnl-attribution-plan.md</code>.</p>
+
+<hr>
+
+<h2>Roadmap at a glance</h2>
+<table>
+<thead><tr><th>#</th><th>Item</th><th>Status</th><th>Effort</th><th>Unlocks / note</th></tr></thead>
+<tbody>
+<tr><td>1</td><td>Point-in-time data</td><td><span class="dot d-inplace"></span>In place</td><td class="small">—</td><td class="small">bias-free estimation</td></tr>
+<tr><td>4</td><td>Drawdown lens</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">path risk VaR/ES miss</td></tr>
+<tr><td>2&nbsp;·&nbsp;3</td><td>Estimation/coverage split + uncapped coverage</td><td><span class="dot d-done"></span>Done</td><td class="small">shipped</td><td class="small">correct off-index loadings; clean fit; foundation for §5–6</td></tr>
+<tr><td>5</td><td>Active risk vs. benchmark</td><td><span class="dot d-designed"></span>Agreed — next</td><td class="small">project</td><td class="small">benchmark agreed: MSCI Large Cap</td></tr>
+<tr><td>6</td><td>Intentional vs. unwanted (hedging)</td><td><span class="dot d-designed"></span>Partial</td><td class="small">evidence shipped</td><td class="small">style-drift attribution panel: rotation vs loading drift; final call needs desk intent</td></tr>
+<tr><td>7</td><td>Full orthogonalisation + diagnostics</td><td><span class="dot d-designed"></span>Partial</td><td class="small">moderate</td><td class="small">builder change</td></tr>
+<tr><td>8</td><td>Linked securities</td><td><span class="dot d-proposed"></span>Proposed</td><td class="small">design first</td><td class="small">block-diagonal specific risk</td></tr>
+<tr><td>9</td><td>PnL attribution &amp; factor-model validation</td><td><span class="dot d-done"></span>Done — shipped</td><td class="small">shipped</td><td class="small">realised PnL by factor + residual; residual correlation tests; risk↔PnL reconcile vs the decomposition at T</td></tr>
+</tbody>
+</table>
+<p>Recommended order: <b>drawdown</b> (done) → <b>estimation/coverage split</b> (done — the keystone, now
+live and the basis for the span and style-drift panels; it unblocked the uncapped coverage loadings) →
+the <b>intentional/unwanted</b> evidence is shipped as the style-drift attribution panel. <b>PnL
+attribution</b> (§9) is now shipped too — realised attribution, residual diagnostics and the reconcile
+chart, in both dashboards → next is <b>active risk</b>, whose benchmark is agreed (MSCI Large Cap),
+with orthogonalisation diagnostics and linked securities as they fit.</p>
+
+<p class="foot">Generated for the factor-model risk review. Methodology cross-refers to
+<code>barra_build_frames.py</code> (estimation), <code>barra_factor_risk_cube.py</code> (risk engine),
+<code>risk_api.py</code> (measures &amp; drawdown), and the design note
+<code>docs/estimation-coverage-design.md</code>.</p>
+
+</div>
+</body>
+</html>

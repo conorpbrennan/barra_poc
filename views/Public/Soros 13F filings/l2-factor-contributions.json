@@ -41,6 +41,7 @@
         "sort": "desc",
         "sortIndex": 0
       }
-    ]
+    ],
+    "description": "Each factor's ADDITIVE contribution to book Scenario VaR 99 (marginal VaR, which sums to the book total) and its % share. Where the systematic tail comes from \u2014 Market dominates under HistFull because every name carries a unit market loading."
   }
 }

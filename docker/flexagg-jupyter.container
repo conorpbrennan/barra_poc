@@ -3,8 +3,9 @@
 # Reload with:  sudo -u flexnb XDG_RUNTIME_DIR=/run/user/$(id -u flexnb) systemctl --user daemon-reload
 #
 # Surface = the notebook ONLY, published to host loopback so nginx proxies it exactly as the old
-# host-python service did. Everything the user can touch is read-only or throwaway tmpfs; no host
-# home, no secrets, no tunnel creds are reachable from inside.
+# host-python service did. No host home, no secrets, no tunnel creds are reachable from inside,
+# and there is no egress. ONE exception to "read-only or throwaway": notebooks/ is mounted
+# read-write at /work so saved work survives a restart — see the Volume block below.
 [Unit]
 Description=Barra flexagg JupyterLab (hardened rootless container, /jupyter)
 After=network-online.target
@@ -25,10 +26,21 @@ PublishPort=127.0.0.1:8888:8888
 Network=flexnb-noegress
 
 # Code + data, READ-ONLY. The cube resolves data as <python_src>/../data, so these two land
-# side-by-side under /app. notebooks/ is read-only too; the entrypoint copies it into tmpfs /work.
+# side-by-side under /app.
 Volume=/home/abrennan/dev/barra_poc/python_src:/app/python_src:ro
 Volume=/home/abrennan/dev/barra_poc/data:/app/data:ro
-Volume=/home/abrennan/dev/barra_poc/notebooks:/app/notebooks:ro
+# notebooks/ is mounted READ-WRITE straight onto /work (the server's root_dir), so saves in Lab
+# land in the repo instead of dying with the container — /work used to be tmpfs (RAM) and every
+# edit was lost on restart. Deliberately NOT also mounted at /app/notebooks: the entrypoint does
+# `cp -f /app/notebooks/*.ipynb /work/`, which would overwrite saved work on every start; with no
+# such mount the glob matches nothing and the `|| true` swallows it. The image ships no
+# /app/notebooks of its own (checked), so nothing shadows this.
+# NB the container's appuser (uid 10001) maps to host uid 210000 via flexnb's subuid range, which
+# has no write bit on an abrennan-owned dir. Write access comes from an ACL, needed on the host:
+#   setfacl -m u:210000:rwx -m d:u:210000:rwx /home/abrennan/dev/barra_poc/notebooks
+# This is the one place the "everything read-only or throwaway" rule above is relaxed. python_src/
+# and data/ stay read-only, so code and frames are still untouchable from inside.
+Volume=/home/abrennan/dev/barra_poc/notebooks:/work:rw
 # our ActivePivot/Atoti licence (read-only secret). Setting ATOTI_LICENSE to it ALSO disables
 # all telemetry (Python + JVM) -> the container needs zero egress, enabling a full air-gap.
 Volume=/home/abrennan/dev/barra_poc/ActivePivot.lic.43457:/app/atoti.lic:ro
@@ -42,11 +54,16 @@ Environment=HOME=/tmp
 Environment=ATOTI_HIDE_EULA_MESSAGE=True
 # our licence: activates Atoti AND disables telemetry (no outbound call) -> safe to air-gap
 Environment=ATOTI_LICENSE=/app/atoti.lic
+# The image is air-gapped and its rootfs read-only, so pip cannot install anything at runtime.
+# Pure-python libs the notebook needs but the image lacks (altair, narwhals) are staged on the
+# host in data/_pylibs and appended here, so `import altair` just works in every kernel.
+# Restage after changing them:  cp -r barra/lib/python3.12/site-packages/{altair,narwhals} data/_pylibs/
+Environment=PYTHONPATH=/app/python_src:/app/data/_pylibs
 
 # ── hardening ───────────────────────────────────────────────────────────────────────────
 ReadOnly=true
 WorkingDir=/work
-Tmpfs=/work
+# no Tmpfs=/work any more — /work is the read-write notebooks/ bind mount above
 Tmpfs=/tmp
 DropCapability=all
 NoNewPrivileges=true

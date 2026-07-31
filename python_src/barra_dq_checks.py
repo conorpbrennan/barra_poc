@@ -57,10 +57,16 @@ def run(frames: dict | None = None) -> list[dict]:
 
     # --- 3. value ranges -----------------------------------------------------
     pos = f["positions"]
-    wsum = pos.groupby("Date")["Weight"].sum()
+    # Per (Book, Date), not per Date: weights are normalised WITHIN a book, so once the
+    # multi-manager build put 11 books in the frame a per-Date sum totals 11.0 and this check
+    # FAILed on every date -- a false alarm on correct data.
+    _wkeys = ["Book", "Date"] if "Book" in pos.columns else ["Date"]
+    wsum = pos.groupby(_wkeys)["Weight"].sum()
     bad = wsum[(wsum - 1.0).abs() > 1e-6]
-    check("FAIL" if len(bad) else "PASS", "positions: weights sum to 1.0 per date",
-          f"{len(bad)} bad dates" if len(bad) else f"{len(wsum)} dates, max |err| {(wsum-1).abs().max():.1e}")
+    _label = "per (book, date)" if len(_wkeys) == 2 else "per date"
+    check("FAIL" if len(bad) else "PASS", f"positions: weights sum to 1.0 {_label}",
+          f"{len(bad)} bad groups" if len(bad) else
+          f"{len(wsum)} groups, max |err| {(wsum-1).abs().max():.1e}")
     neg = (pos["Weight"] < 0).sum()
     check("WARN" if neg else "PASS", "positions: no negative weights (13F is long-only)",
           f"{neg} rows" if neg else "")
@@ -119,14 +125,99 @@ def run(frames: dict | None = None) -> list[dict]:
     check("WARN" if misv > 0.05 else "PASS", "held positions have specific_var on the same date",
           f"{misv:.1%} of (date, position) uncovered")
 
-    facs_per_date = exp.groupby(["Date", "Position"]).Factor.nunique()
-    check("WARN" if (facs_per_date < 9).any() else "PASS",
-          "exposures: >=9 of 10 style loadings per (date, position)",
-          f"min {facs_per_date.min()}, {(facs_per_date < 9).mean():.1%} below 9")
+    # Style loadings only (Market/industries are memberships, not descriptors), against the
+    # regression's own pricing gate: a MAJORITY of the style set (the old ">=9 of 10" was a
+    # fixed count written for a 10-style model — same fault as the regression's hard-coded 6).
+    styles = set(f["factor_meta"].loc[f["factor_meta"]["FactorGroup"] == "Style", "Factor"])
+    n_sty = len(styles)
+    gate = n_sty // 2 + 1
+    facs_per_date = exp[exp["Factor"].isin(styles)].groupby(["Date", "Position"]).Factor.nunique()
+    check("WARN" if (facs_per_date < gate).any() else "PASS",
+          f"exposures: >={gate} of {n_sty} style loadings per (date, position)",
+          f"min {facs_per_date.min()}, {(facs_per_date < gate).mean():.1%} below {gate}")
 
     sec = f["securities"]
     stub = (sec["Sector"] == "Unknown").mean()
     check("WARN" if stub > 0 else "PASS", "securities: Sector populated", f"{stub:.0%} 'Unknown' (known stub)")
+
+    # --- 6. model gates (theory-derived, the ch-16 pipeline checks) -----------
+    # Each gate validates a property the construction guarantees — a failure indicts the inputs,
+    # not the math. (a) standardization: every style factor's median ≈ 0 on the latest date, on
+    # the ESTIMATION cross-section (z-scores are centred there; the uncapped coverage tail is
+    # smaller/less liquid BY DESIGN, so full-cross-section medians legitimately sit off 0 —
+    # Size ≈ −1, NonLinSize ≈ +1.5). Estimation proxy = funnel survivors when the artifact
+    # exists; otherwise the gate is skipped rather than false-warned.
+    dlast = exp["Date"].max()
+    funnel_p = OUT / "universe_funnel.parquet"
+    est_pos: set = set()
+    if funnel_p.exists():
+        fn = pd.read_parquet(funnel_p, columns=["month", "position", "survived"])
+        est_pos = set(fn[(pd.to_datetime(fn["month"]) == dlast) & (fn["survived"] == True)]  # noqa: E712
+                      ["position"].dropna())
+    if len(est_pos) >= 30:
+        # STYLE loadings only — Market (1.0) and Ind:* (0/1 memberships, median 1 among their
+        # own members by definition) are not standardized descriptors and would always "fail".
+        med = (exp[(exp["Date"] == dlast) & (exp["Position"].isin(est_pos))
+                   & (exp["Factor"].isin(styles))]
+               .groupby("Factor")["Loading"].median())
+        worst = med.abs().idxmax()
+        check("WARN" if med.abs().max() > 0.5 else "PASS",
+              "exposures: estimation-universe style medians ≈ 0 (standardization gate)",
+              f"{len(est_pos)} funnel survivors; worst {worst} {med[worst]:+.2f}")
+    else:
+        check("WARN", "exposures: estimation-universe style medians ≈ 0 (standardization gate)",
+              "skipped — universe_funnel.parquet absent (run barra_universe_funnel.py)")
+    # (b) the factor covariance must be PSD — the optimizer/risk-math gate.
+    widefr = fr.pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
+    if len(widefr) > 30:
+        eig = float(np.linalg.eigvalsh(widefr.cov().to_numpy()).min())
+        check("FAIL" if eig < -1e-12 else "PASS", "factor covariance PSD",
+              f"min eigenvalue {eig:.2e}")
+    # (c) the regression fit-health artifact (v2 builder): breadth floor + sane R².
+    reg_p = OUT / "regression_stats.parquet"
+    if reg_p.exists():
+        rs = pd.read_parquet(reg_p)
+        day = rs.groupby("Date")[["R2", "N"]].first()
+        bad_r2 = int(((day["R2"] < 0) | (day["R2"] > 1)).sum())
+        nmin = int(day["N"].min())
+        check("WARN" if nmin < 30 or bad_r2 else "PASS",
+              "regression_stats: N >= 30 every day, R² in [0,1]",
+              f"min N {nmin}, {bad_r2} bad-R² days, mean R² {day['R2'].mean():.2f}")
+    else:
+        check("WARN", "regression_stats artifact present",
+              "missing — rebuild with the v2 builder to enable /regression")
+
+    # (d) size-curve imputation disclosure: a held name with a Size loading but no Value loading
+    # has no share count (foreign filer / ETF) — its Size/NonLinSize/MegaCap are the builder's
+    # log-ADV proxy, not close × shares. Disclosed, never silent; Liquidity/Value/EarnYield are
+    # deliberately NaN for these names.
+    exp_l, pos_l = f["exposures"], f["positions"]
+    d_last = pos_l["Date"].max()
+    last = pos_l[pos_l["Date"] == d_last]
+    ed = exp_l[exp_l["Date"] == exp_l["Date"].max()]
+    have = ed.pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first")
+    if {"Size", "Value"}.issubset(have.columns):
+        prox = set(have.index[have["Size"].notna() & have["Value"].isna()])
+        # Weight share is only meaningful WITHIN a book (weights normalise per book), so score
+        # each book and report the worst. Summing across books gave 178.7% — a share above 100%,
+        # which is how this surfaced.
+        if "Book" in last.columns and last["Book"].nunique() > 1:
+            per = (last.assign(_p=last["Position"].isin(prox))
+                       .groupby("Book").apply(lambda g: g.loc[g["_p"], "Weight"].sum(),
+                                              include_groups=False))
+            w = float(per.max()); worst = str(per.idxmax())
+            n = int(last.loc[last["Book"] == worst, "Position"].isin(prox).sum())
+            # Phrasing note: keep the literal "% of weight" — test_dq.py parses the share out of
+            # this string with r"([\d.]+)% of weight".
+            detail = (f"worst book {worst}: {n} held names, {w:.1%} of weight priced via the "
+                      f"estimation log-ADV fit (median across {len(per)} books {per.median():.1%})")
+        else:
+            held = last.groupby("Position")["Weight"].sum()
+            w = float(held[held.index.isin(prox)].sum())
+            n = int(held.index.isin(prox).sum())
+            detail = f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit"
+        check("WARN" if w > 0.25 else "PASS",
+              "size-curve proxy loadings (imputed log-mcap, held book)", detail)
 
     return _results
 
