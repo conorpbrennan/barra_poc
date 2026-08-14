@@ -189,6 +189,24 @@ Positions. No query in the suite regressed.
 
 **Step 5 — memory hygiene.** Add `-Xms2g -XX:G1PeriodicGCInterval=300000` to the
 `java_options` so idle heap returns to the OS between bursts (today: manual service bounces).
+
+**Results (2026-08-14): DONE, kept** (`docs/cube_bench_step5_20260814.json`). The harness cannot
+see this step — it never idles, so the periodic cycle never fires: `jvm_rss_after_suite` 10.62 →
+10.59 G, suite peak 41 G either way, every query inside the run-to-run noise band. The gate is
+the **live service**, sampled once a minute after the accuracy suite drove it hard:
+
+| t after suite | JVM RSS |
+|---|---|
+| 0 | 18.36 G |
+| 1–5 min | 9.89 G (flat) |
+| 6 min | 9.68 G |
+| 7–9 min | **8.07 G** (flat) |
+
+The step change at 6–7 min is the periodic concurrent cycle firing on the 5-minute interval and
+uncommitting to the OS — 1.8 G that G1 would otherwise have sat on until the next allocation
+pressure. Flags confirmed live on the process (`-Xmx32g -Xms2g -XX:G1PeriodicGCInterval=300000`).
+`cube.aggregate_cache` is left unbounded: Step 3 showed the warm/cold gap is not where the cost
+is, so there is no measured basis for a bound yet.
 Bound `cube.aggregate_cache` explicitly once Step 3's data shows how much the cache is worth.
 
 **Step 6 — policy, not engine: Date-context enforcement in `/pivot`.** (Hotspot 3.) When a

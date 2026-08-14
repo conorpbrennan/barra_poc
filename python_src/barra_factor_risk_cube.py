@@ -260,7 +260,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # defaults to 25% of RAM (~15.6g here), which the multi-book positions/exposures volume can
     # exhaust — the /trends OOM note dates from the 22k-name build. BARRA_CUBE_XMX overrides.
     xmx = os.environ.get("BARRA_CUBE_XMX", "32g")
-    session = tt.Session.start(tt.SessionConfig(port=port, java_options=[f"-Xmx{xmx}"]))
+    # Memory hygiene (optimization Step 5): a heavy query burst drives this heap to ~41 G and G1
+    # gives it back slowly -- the production cube has twice needed a manual bounce after a demo.
+    # -Xms2g starts small instead of committing a big heap up front, and G1PeriodicGCInterval
+    # (5 min) makes G1 run a concurrent cycle while IDLE, so the burst is released between
+    # sessions rather than held until the next allocation pressure.
+    session = tt.Session.start(tt.SessionConfig(port=port, java_options=[
+        f"-Xmx{xmx}", "-Xms2g", "-XX:G1PeriodicGCInterval=300000"]))
     # ^ port pinned so the UI URL survives restarts
     t_exp = session.read_pandas(exposures,  keys={"Date", "Position", "Factor"}, table_name="Exposures")
     # SLIM (optimization Step 4): only the columns a measure reads go into the JVM. MV and ADV are
