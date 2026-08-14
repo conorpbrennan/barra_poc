@@ -342,3 +342,62 @@ API (two guard mechanisms reused across 12 endpoints total, one additive limits 
 under "what was NOT done" and "known open items" above — this phase makes the multi-manager plumbing
 correct and safe to expose, it does not yet make every existing single-book analytical lens genuinely
 correct *for* every one of the 11 books.
+
+## Buyside-list expansion — 124 books (2026-08-14)
+
+ActiveViam's prospect list ("Buy Side NAM target names July 2026", from Kathy Perrotte's email of
+2026-08-14, 145 firm names) was resolved against SEC EDGAR and folded into `MANAGERS`: **113 new
+books**, taking the table from 11 to **124**. This section records the method and the exclusions;
+the entry-level provenance comment sits above the block in `barra_build_frames.py`.
+
+**Resolution method.** Each name was searched on EDGAR's company search filtered to form 13F-HR
+(classic `browse-edgar`, plus the `efts.sec.gov` `entityName` JSON API as fallback — classic now
+serves a JS "smart search" landing page for some single-match queries and returns nothing
+parseable). Candidates were token-scored against the target name; the top candidates' submissions
+JSON was checked for a 13F-HR filed within the last 12 months ("active"). Seventeen well-known
+names were pinned to hand-verified CIKs (group filers, below); ~50 needed alias queries (acronym
+expansions like CPPIB → Canada Pension Plan Investment Board, successor entities, typo fixes —
+the source list contains "Golbman Sachs", "Onterio Teachers", "Quabec").
+
+**Group-level filers stand in for asset-management arms** (their 13F is the parent's consolidated
+one): Goldman Sachs Group ← GSAM, Morgan Stanley ← MSIM (also absorbs Eaton Vance), JPMorgan
+Chase & Co ← JPMAM, Ameriprise ← Columbia Threadneedle, Prudential Financial ← PGIM, Bank of
+Montreal ← "BMO Asset Mgt." (the US arm was sold to Columbia in 2021), State Street Corp ← SSGA,
+Franklin Resources ← Franklin Templeton (also absorbs Putnam). "Fidelity Investments (US)" is FMR
+LLC; "Fidelity Canada" is FIL Ltd (Fidelity International).
+
+**Stitched books (Elliott pattern, current CIK first):** BlackRock (BlackRock, Inc. 2012383 —
+the 2024 holdco reorg — + BlackRock Finance, Inc. 1364742), Caxton (Caxton Associates LLP
+2051323 + LP 872573), Jump (Jump Financial 1831577 + Jump Trading 1127998), Appaloosa (Appaloosa
+LP 1656456 + Appaloosa Management LP 1006438). Other managers' possible predecessor CIKs were
+NOT chased — a book whose current entity registered mid-sample simply starts later (e.g.
+PineBridge's current CIK registered ~2025; its 2016–2025 filings, if any exist under an older
+entity, are not stitched).
+
+**22 names excluded, with reasons** (verified empirically — "no active filer" means no 13F-HR
+within 12 months under any matching entity):
+
+| Group | Names | Why |
+|---|---|---|
+| No active 13F filer | PIMCO (last group 13F 2012), KKR (KKR Asset Mgmt last 2013), Citadel Securities (entity exists, zero 13F-HRs), Hudson River Trading, Haidar, Hildene, Affiliated Managers Group (holdco; affiliates file individually) | nothing to pull |
+| Absorbed into an added parent | Eaton Vance (→ Morgan Stanley), Putnam (→ Franklin), Columbia Threadneedle (→ Ameriprise), PGIM (→ Prudential Financial) | double-counting |
+| Wound down / dormant | BlueMountain, Napier Park (last 2022), Crescent Capital (last 2016), Global Atlantic (last 2016), OPSEU (last 2024-05, stale), Cargill (last 2000) | stale filer |
+| Not asset managers | Navient, Gain Capital, Pershing X | not 13F-relevant |
+| Unidentifiable | DKP Effects | no matching SEC entity; ask Brian |
+
+**Config changes.** `UNIVERSE_CAP` 35,000 → 200,000: the held-CUSIP union now includes
+whole-market filers (BlackRock, Vanguard, State Street, FMR, the bank filers) and is UNMEASURED
+for the new list — `sec.head(UNIVERSE_CAP)` truncates order-dependently and silently, so the cap
+must sit far above any plausible union; if a build reports a universe near the cap, re-measure.
+`ACTIVE_MANAGERS` remains `None` (all books). The full audit trail (per-name candidates, scores,
+filing recency) is in the session scratchpad's `resolution.json` / `final_books.json`.
+
+**Known consequences, deliberately accepted.** (1) A full 124-book pull is an order of magnitude
+larger than the 11-book build: thousands of 13F info tables (BlackRock/Vanguard's run to tens of
+MB each), a CUSIP crosswalk approaching the whole 13F-eligible universe, and price/fundamental
+pulls for every new name — expect hours, not minutes, on a cold cache, and OpenFIGI resolution
+drift (open item 3 above) applies to every newly-resolved name. (2) The book-independent
+attribution guard, per-book artifact guards, and Soros-calibrated limits all carry over
+unchanged — everything documented above about "correct for every book" applies 11× harder at
+124. (3) FirmType now has ~36 values, assigned editorially from public knowledge of each firm —
+it is a browsing dimension, not a data-sourced fact.

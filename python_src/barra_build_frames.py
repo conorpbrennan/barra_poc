@@ -63,12 +63,17 @@ DATA_DIR        = pathlib.Path(__file__).resolve().parent.parent / "data"  # pro
 START, END      = "2016-01-01", "2026-06-30"   # END = last complete month-end (extended 2026-07-04)
 EWMA_HALFLIFE_D = 63              # trading days, for the specific-variance EWMA (matches v1)
 MCAP_FLOOR      = 1e7             # $10M; below this, shares data is assumed corrupt (see build_exposures)
-UNIVERSE_CAP    = 35000           # safety bound only; the universe is now index-seeded (see SEED_INDEX).
+UNIVERSE_CAP    = 200000          # safety bound only; the universe is now index-seeded (see SEED_INDEX).
                                   # Raised 2026-07-30 (multi-manager Phase 1): sec.head(UNIVERSE_CAP) is
                                   # ORDER-DEPENDENT and silently truncates -- the measured union of held
                                   # CUSIPs across the 11-manager MANAGERS table is ~22,113 (phase0b recon),
                                   # so the old 3500 cap would have silently dropped the majority of names.
-                                  # 35000 leaves headroom above the measured union.
+                                  # Raised again 35000 -> 200000 (2026-08-14, the 124-book Buyside list
+                                  # expansion): the union now includes whole-market filers (BlackRock,
+                                  # Vanguard, State Street, Fidelity/FMR, Morgan Stanley, JPMorgan...),
+                                  # whose combined held-CUSIP union approaches the full 13F-eligible
+                                  # universe. UNMEASURED for the new list -- if a build prints a universe
+                                  # near this cap, re-measure before trusting it (silent truncation).
 UNIVERSE_EXTRA  = []             # add tickers (e.g. an index list) to broaden the estimation universe
 SEED_INDEX      = "sp500"         # seed the estimation cross-section with a market index (None to disable)
 UNCAP_COVERAGE  = True            # estimation/coverage split (Chris's DQ point): standardize on the
@@ -134,6 +139,253 @@ MANAGERS = [
     {"book": "Elliott",     "cik": (1791786, 1048445),    # current, predecessor -- see stitch_multi_cik
      "name": "Elliott Investment Management L.P. (current) / Elliott Management Corp (predecessor)",
      "type": "Event-driven / activist"},
+    # ------------------------------------------------------------------------------------------
+    # ActiveViam buy-side target list (Kathy Perrotte's "Buy Side NAM target names July 2026",
+    # received 2026-08-14): 113 further books resolved to active SEC 13F-HR filers. Resolution:
+    # EDGAR company search (classic browse-edgar + the efts entityName fallback -- classic now
+    # serves a JS landing page for some single-match queries) scored against the target name,
+    # then the CIK's submissions JSON checked for a 13F-HR filed within the last 12 months.
+    # Group-level filers stand in for asset-management arms (Goldman Sachs Group for GSAM,
+    # Morgan Stanley for MSIM, JPMorgan Chase & Co for JPMAM, Ameriprise for Columbia
+    # Threadneedle, Prudential Financial for PGIM). Four books stitch two CIKs, Elliott-style
+    # (current entity first): BlackRock (2024 holdco reorg), Caxton (LP->LLP), Jump
+    # (Trading->Financial), Appaloosa (Management LP->LP). Other managers' pre-rename history
+    # was NOT chased -- a book whose current CIK registered mid-sample simply starts later.
+    # 22 target names had NO active 13F filer and are deliberately absent: PIMCO (last group
+    # 13F 2012), KKR (PE; KKR Asset Management last 2013), Citadel Securities (entity exists,
+    # zero 13F-HRs), Hudson River Trading / Haidar / Hildene / HOOPP-adjacent OPSEU (no or
+    # stale filings), AMG (holdco; affiliates file individually), Eaton Vance (absorbed into
+    # Morgan Stanley 2021), Putnam (absorbed into Franklin 2024), BlueMountain / Napier Park /
+    # Crescent / Global Atlantic / Cargill / Gain Capital / Navient / Pershing X / DKP Effects
+    # (wound down, dormant, or not asset managers). Full audit: scratchpad final_books.json
+    # (session 2026-08-14) + docs/multi-manager-plan.md.
+    # ------------------------------------------------------------------------------------------
+    {"book": "Acadian", "cik": 916542,
+     "name": "Acadian Asset Management LLC", "type": "Systematic quant"},
+    {"book": "AIMCo", "cik": 1463559,
+     "name": "Alberta Investment Management Corp", "type": "Pension / sovereign"},
+    {"book": "AllianceBernstein", "cik": 1109448,
+     "name": "AllianceBernstein L.P.", "type": "Traditional asset manager"},
+    {"book": "Allspring", "cik": 1890906,
+     "name": "Allspring Global Investments Holdings, LLC", "type": "Traditional asset manager"},
+    {"book": "Alphadyne", "cik": 1535943,
+     "name": "Alphadyne Asset Management LP", "type": "Fixed-income macro"},
+    {"book": "Alyeska", "cik": 1453072,
+     "name": "Alyeska Investment Group, L.P.", "type": "Long/short equity"},
+    {"book": "AmericanCentury", "cik": 748054,
+     "name": "American Century Companies Inc.", "type": "Traditional asset manager"},
+    {"book": "Ameriprise", "cik": 820027,
+     "name": "Ameriprise Financial Inc.", "type": "Traditional asset manager"},
+    {"book": "Anchorage", "cik": 1300714,
+     "name": "Anchorage Capital Group, L.L.C.", "type": "Credit / distressed"},
+    {"book": "Appaloosa", "cik": (1656456, 1006438),
+     "name": "Appaloosa LP (current) / Appaloosa Management LP (predecessor)", "type": "Long/short equity (family office)"},
+    {"book": "Ares", "cik": 1259313,
+     "name": "Ares Management LLC", "type": "Alternatives / credit"},
+    {"book": "Aristotle", "cik": 860644,
+     "name": "Aristotle Capital Management, LLC", "type": "Traditional asset manager"},
+    {"book": "Arrowstreet", "cik": 1164508,
+     "name": "Arrowstreet Capital, Limited Partnership", "type": "Systematic quant"},
+    {"book": "Artisan", "cik": 1466153,
+     "name": "Artisan Partners Limited Partnership", "type": "Traditional asset manager"},
+    {"book": "Balyasny", "cik": 1218710,
+     "name": "Balyasny Asset Management L.P.", "type": "Multi-strategy"},
+    {"book": "Barings", "cik": 9015,
+     "name": "Barings LLC", "type": "Traditional asset manager"},
+    {"book": "Baupost", "cik": 1061768,
+     "name": "Baupost Group LLC", "type": "Value / event-driven"},
+    {"book": "BCI", "cik": 1228242,
+     "name": "BRITISH COLUMBIA INVESTMENT MANAGEMENT Corp", "type": "Pension / sovereign"},
+    {"book": "BeachPoint", "cik": 1453885,
+     "name": "Beach Point Capital Management LP", "type": "Credit / distressed"},
+    {"book": "BlackRock", "cik": (2012383, 1364742),
+     "name": "BlackRock, Inc. (current, 2024 holdco) / BlackRock Finance, Inc. (predecessor)", "type": "Index / traditional asset manager"},
+    {"book": "Blackstone", "cik": 1393818,
+     "name": "Blackstone Inc.", "type": "Alternatives / private markets"},
+    {"book": "BMO", "cik": 927971,
+     "name": "Bank Of Montreal", "type": "Bank asset management"},
+    {"book": "BostonPartners", "cik": 1386060,
+     "name": "Boston Partners", "type": "Traditional asset manager"},
+    {"book": "Bracebridge", "cik": 1426486,
+     "name": "Bracebridge Capital, LLC", "type": "Fixed-income relative value"},
+    {"book": "Brandywine", "cik": 829108,
+     "name": "Brandywine Global Investment Management, LLC", "type": "Traditional asset manager"},
+    {"book": "BrevanHoward", "cik": 1512857,
+     "name": "Brevan Howard Capital Management LP", "type": "Global macro"},
+    {"book": "Brigade", "cik": 1421306,
+     "name": "Brigade Capital Management, LP", "type": "Credit / distressed"},
+    {"book": "Brookfield", "cik": 1001085,
+     "name": "BROOKFIELD Corp", "type": "Alternatives / private markets"},
+    {"book": "BTGPactual", "cik": 1569579,
+     "name": "BTG Pactual Asset Management US LLC", "type": "Bank asset management"},
+    {"book": "CambridgeAssociates", "cik": 733986,
+     "name": "Cambridge Associates LLC /ma/", "type": "OCIO / consultant"},
+    {"book": "Canyon", "cik": 1074034,
+     "name": "Canyon Capital Advisors LLC", "type": "Credit / distressed"},
+    {"book": "Capstone", "cik": 1426196,
+     "name": "Capstone Investment Advisors, LLC", "type": "Volatility arbitrage"},
+    {"book": "Caxton", "cik": (2051323, 872573),
+     "name": "Caxton Associates LLP (current) / Caxton Associates LP (predecessor)", "type": "Global macro"},
+    {"book": "CDPQ", "cik": 898286,
+     "name": "Caisse de Depot et Placement du Quebec", "type": "Pension / sovereign"},
+    {"book": "Centiva", "cik": 1692507,
+     "name": "Centiva Capital, LP", "type": "Multi-strategy"},
+    {"book": "Citizens", "cik": 759944,
+     "name": "Citizens Financial Group Inc.", "type": "Bank asset management"},
+    {"book": "ClearBridge", "cik": 1348883,
+     "name": "Clearbridge Investments, LLC", "type": "Traditional asset manager"},
+    {"book": "CPPIB", "cik": 1283718,
+     "name": "Canada Pension Plan Investment Board", "type": "Pension / sovereign"},
+    {"book": "DavidsonKempner", "cik": 1595082,
+     "name": "Davidson Kempner Capital Management LP", "type": "Event-driven / distressed"},
+    {"book": "Diameter", "cik": 1727012,
+     "name": "Diameter Capital Partners LP", "type": "Credit / distressed"},
+    {"book": "Discovery", "cik": 1389507,
+     "name": "Discovery Capital Management, LLC", "type": "Global macro"},
+    {"book": "Element", "cik": 1535630,
+     "name": "Element Capital Management LLC", "type": "Global macro"},
+    {"book": "ExodusPoint", "cik": 1736225,
+     "name": "ExodusPoint Capital Management, LP", "type": "Multi-strategy"},
+    {"book": "Farallon", "cik": 909661,
+     "name": "Farallon Capital Management, L.l.c.", "type": "Event-driven / multi-strategy"},
+    {"book": "FederatedHermes", "cik": 1056288,
+     "name": "Federated Hermes, Inc..", "type": "Traditional asset manager"},
+    {"book": "Fidelity", "cik": 315066,
+     "name": "FMR LLC", "type": "Traditional asset manager"},
+    {"book": "FidelityCanada", "cik": 318989,
+     "name": "FIL Ltd", "type": "Traditional asset manager"},
+    {"book": "Fortress", "cik": 1380393,
+     "name": "Fortress Investment Group LLC", "type": "Alternatives / credit"},
+    {"book": "FranklinTempleton", "cik": 38777,
+     "name": "Franklin Resources Inc.", "type": "Traditional asset manager"},
+    {"book": "Garda", "cik": 1666905,
+     "name": "Garda Capital Partners LP", "type": "Fixed-income relative value"},
+    {"book": "GoldenTree", "cik": 1278951,
+     "name": "Goldentree Asset Management LP", "type": "Credit / distressed"},
+    {"book": "GoldmanSachs", "cik": 886982,
+     "name": "Goldman Sachs Group Inc.", "type": "Bank asset management"},
+    {"book": "Graham", "cik": 1315421,
+     "name": "Graham Capital Management, L.P.", "type": "Global macro / CTA"},
+    {"book": "Guggenheim", "cik": 1283072,
+     "name": "Guggenheim Capital LLC", "type": "Diversified asset manager"},
+    {"book": "HBK", "cik": 1011443,
+     "name": "HBK Investments L P", "type": "Multi-strategy"},
+    {"book": "HOOPP", "cik": 1535845,
+     "name": "Healthcare of Ontario Pension Plan Trust Fund", "type": "Pension / sovereign"},
+    {"book": "HSBC", "cik": 873630,
+     "name": "HSBC Holdings plc", "type": "Bank asset management"},
+    {"book": "HudsonBay", "cik": 1393825,
+     "name": "Hudson Bay Capital Management LP", "type": "Multi-strategy"},
+    {"book": "IMCO", "cik": 1811568,
+     "name": "Investment Management Corp of Ontario", "type": "Pension / sovereign"},
+    {"book": "Invesco", "cik": 914208,
+     "name": "Invesco Ltd.", "type": "Traditional asset manager"},
+    {"book": "JanusHenderson", "cik": 1274173,
+     "name": "Janus Henderson Group Ltd.", "type": "Traditional asset manager"},
+    {"book": "JPMorgan", "cik": 19617,
+     "name": "JPMorgan Chase & Co.", "type": "Bank asset management"},
+    {"book": "Jump", "cik": (1831577, 1127998),
+     "name": "Jump Financial, LLC (current) / Jump Trading, LLC (predecessor)", "type": "Proprietary trading / quant"},
+    {"book": "KingStreet", "cik": 1218199,
+     "name": "King Street Capital Management, L.P.", "type": "Credit / distressed"},
+    {"book": "Knighthead", "cik": 1512397,
+     "name": "Knighthead Capital Management, LLC", "type": "Credit / distressed"},
+    {"book": "Koch", "cik": 923338,
+     "name": "Koch Industries LLC", "type": "Corporate treasury / trading"},
+    {"book": "Lighthouse", "cik": 1600344,
+     "name": "Lighthouse Investment Partners, LLC", "type": "Fund of funds"},
+    {"book": "Lincoln", "cik": 59558,
+     "name": "Lincoln National Corp", "type": "Insurer asset management"},
+    {"book": "LoomisSayles", "cik": 312348,
+     "name": "Loomis, Sayles & Co., L.P.", "type": "Traditional asset manager"},
+    {"book": "LordAbbett", "cik": 728100,
+     "name": "Lord, Abbett & Co. LLC", "type": "Traditional asset manager"},
+    {"book": "Macquarie", "cik": 1418333,
+     "name": "Macquarie Group Ltd", "type": "Bank asset management"},
+    {"book": "Magnetar", "cik": 1352851,
+     "name": "Magnetar Financial LLC", "type": "Multi-strategy"},
+    {"book": "ManGroup", "cik": 1637460,
+     "name": "Man Group plc", "type": "Multi-strategy / quant"},
+    {"book": "Mariner", "cik": 1096978,
+     "name": "Mariner Investment Group LLC", "type": "Fixed-income hedge fund"},
+    {"book": "MetLife", "cik": 1099219,
+     "name": "MetLife Inc.", "type": "Insurer asset management"},
+    {"book": "MFS", "cik": 912938,
+     "name": "Massachusetts Financial Services Co. (MFS)", "type": "Traditional asset manager"},
+    {"book": "MIOPartners", "cik": 1535457,
+     "name": "MIO Partners, Inc.", "type": "OCIO / fund of funds"},
+    {"book": "Moore", "cik": 1448574,
+     "name": "Moore Capital Management, LP", "type": "Global macro"},
+    {"book": "MorganStanley", "cik": 895421,
+     "name": "Morgan Stanley", "type": "Bank asset management"},
+    {"book": "NeubergerBerman", "cik": 1465109,
+     "name": "Neuberger Berman Group LLC", "type": "Traditional asset manager"},
+    {"book": "NorthernTrust", "cik": 73124,
+     "name": "Northern Trust Corp", "type": "Bank / custodian asset management"},
+    {"book": "Nuveen", "cik": 1871926,
+     "name": "Nuveen, LLC", "type": "Traditional asset manager"},
+    {"book": "OakHill", "cik": 1164688,
+     "name": "Oak Hill Advisors LP", "type": "Credit / distressed"},
+    {"book": "Oaktree", "cik": 949509,
+     "name": "Oaktree Capital Management LP", "type": "Alternatives / credit"},
+    {"book": "OMERS", "cik": 1053321,
+     "name": "OMERS ADMINISTRATION Corp", "type": "Pension / sovereign"},
+    {"book": "OTPP", "cik": 937567,
+     "name": "Ontario Teachers Pension Plan Board", "type": "Pension / sovereign"},
+    {"book": "Parallax", "cik": 1521001,
+     "name": "Parallax Volatility Advisers, L.P.", "type": "Volatility arbitrage"},
+    {"book": "Pictet", "cik": 1993888,
+     "name": "Pictet Asset Management Holding SA", "type": "Private bank asset management"},
+    {"book": "PineBridge", "cik": 2088548,
+     "name": "Pinebridge Investments LLC", "type": "Traditional asset manager"},
+    {"book": "PNC", "cik": 713676,
+     "name": "PNC Financial Services Group, Inc..", "type": "Bank asset management"},
+    {"book": "Prudential", "cik": 1137774,
+     "name": "Prudential Financial Inc.", "type": "Insurer asset management"},
+    {"book": "PSP", "cik": 1396318,
+     "name": "Public Sector Pension Investment Board", "type": "Pension / sovereign"},
+    {"book": "Pzena", "cik": 1027796,
+     "name": "Pzena Investment Management LLC", "type": "Traditional asset manager"},
+    {"book": "RaymondJames", "cik": 720005,
+     "name": "Raymond James Financial Inc.", "type": "Bank asset management"},
+    {"book": "Schonfeld", "cik": 1665241,
+     "name": "Schonfeld Strategic Advisors LLC", "type": "Multi-strategy"},
+    {"book": "Schwab", "cik": 884546,
+     "name": "Charles Schwab Investment Management Inc.", "type": "Index / traditional asset manager"},
+    {"book": "Sculptor", "cik": 1054587,
+     "name": "Sculptor Capital LP", "type": "Multi-strategy"},
+    {"book": "SEI", "cik": 350894,
+     "name": "SEI Investments CO", "type": "Asset management platform"},
+    {"book": "SilverPoint", "cik": 1332784,
+     "name": "Silver Point Capital L.P.", "type": "Credit / distressed"},
+    {"book": "StateStreet", "cik": 93751,
+     "name": "State Street Corp", "type": "Bank / custodian asset management"},
+    {"book": "SVP", "cik": 1301912,
+     "name": "Strategic Value Partners, LLC", "type": "Distressed / special situations"},
+    {"book": "TCW", "cik": 850401,
+     "name": "TCW Group Inc.", "type": "Traditional asset manager"},
+    {"book": "ThirdPoint", "cik": 1040273,
+     "name": "Third Point LLC", "type": "Event-driven / activist"},
+    {"book": "TRowePrice", "cik": 80255,
+     "name": "T. Rowe Price Associates Inc.", "type": "Traditional asset manager"},
+    {"book": "Tudor", "cik": 923093,
+     "name": "Tudor Investment Corp", "type": "Global macro"},
+    {"book": "Vanguard", "cik": 102909,
+     "name": "Vanguard Group Inc.", "type": "Index / traditional asset manager"},
+    {"book": "Verition", "cik": 1454027,
+     "name": "Verition Fund Management LLC", "type": "Multi-strategy"},
+    {"book": "VictoryCapital", "cik": 1040188,
+     "name": "Victory Capital Management Inc.", "type": "Traditional asset manager"},
+    {"book": "Virtus", "cik": 19481,
+     "name": "Virtus Investment Advisers, LLC", "type": "Traditional asset manager"},
+    {"book": "Voloridge", "cik": 1556921,
+     "name": "Voloridge Investment Management, LLC", "type": "Systematic quant"},
+    {"book": "Voya", "cik": 1068837,
+     "name": "Voya Investment Management LLC", "type": "Traditional asset manager"},
+    {"book": "Walleye", "cik": 1758720,
+     "name": "Walleye Capital LLC", "type": "Multi-strategy"},
+    {"book": "Wellington", "cik": 902219,
+     "name": "Wellington Management Group LLP", "type": "Traditional asset manager"},
 ]
 ACTIVE_MANAGERS: list[str] | None = None
 # ^ None = run every book in MANAGERS (the eventual default). Set to a list of "book" names (e.g.
@@ -214,13 +466,29 @@ def _get(url: str, headers=None, sleep=0.12) -> bytes:
         with _HTTP_LOCK:
             _HTTP["hit"] += 1
         return p.read_bytes()
-    _throttle(sleep)
-    r = requests.get(url, headers=headers or SEC_HEADERS, timeout=30)
-    r.raise_for_status()
-    p.write_bytes(r.content)
-    with _HTTP_LOCK:
-        _HTTP["miss"] += 1
-    return r.content
+    # Bounded retry on transient transport errors (2026-08-14): a multi-hour 124-book pull makes
+    # thousands of requests, and a single 30s read timeout used to kill the whole build (observed
+    # live on an SEC Archives index.json). HTTP 4xx still raises immediately -- only timeouts,
+    # connection drops and 5xx/429 are retried, with exponential backoff.
+    last = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep(2 ** attempt)          # 2s, 4s, 8s
+        _throttle(sleep)
+        try:
+            r = requests.get(url, headers=headers or SEC_HEADERS, timeout=60)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last = e
+            continue
+        if r.status_code in (429, 500, 502, 503, 504):
+            last = requests.exceptions.HTTPError(f"{r.status_code} for {url}")
+            continue
+        r.raise_for_status()
+        p.write_bytes(r.content)
+        with _HTTP_LOCK:
+            _HTTP["miss"] += 1
+        return r.content
+    raise last
 
 def _get_json(url, headers=None):
     return json.loads(_get(url, headers))
@@ -233,13 +501,26 @@ def _post_json(url: str, payload, headers=None, sleep=0.0) -> bytes:
         with _HTTP_LOCK:
             _HTTP["hit"] += 1
         return p.read_bytes()
-    _throttle(sleep)
-    r = requests.post(url, headers=headers, json=payload, timeout=30)
-    r.raise_for_status()
-    p.write_bytes(r.content)
-    with _HTTP_LOCK:
-        _HTTP["miss"] += 1
-    return r.content
+    # Same bounded transient-error retry as _get (OpenFIGI 429s are the realistic case here).
+    last = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep(2 ** attempt)
+        _throttle(sleep)
+        try:
+            r = requests.post(url, headers=headers, json=payload, timeout=60)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last = e
+            continue
+        if r.status_code in (429, 500, 502, 503, 504):
+            last = requests.exceptions.HTTPError(f"{r.status_code} for {url}")
+            continue
+        r.raise_for_status()
+        p.write_bytes(r.content)
+        with _HTTP_LOCK:
+            _HTTP["miss"] += 1
+        return r.content
+    raise last
 
 
 # --------------------------------------------------------------------------- parallel pulls + progress
