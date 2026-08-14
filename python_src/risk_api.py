@@ -101,8 +101,26 @@ def _clean(v):
 # pivotable dimensions (level names, all unique across hierarchies) and SCALAR measures only.
 # ScenarioDay is the synthetic per-array-element dimension: levels=[ScenarioDay] UNPACKS the
 # scenario P&L vector into a tabular per-day series (so the scenario path is a normal /pivot query).
-DIM_NAMES = ["Date", "Book", "Country", "Sector", "Issuer", "Position",
+DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
              "FactorGroup", "Factor", "ScenarioSet", "ScenarioDay"]
+# "Manager" is the USER-FACING name of the cube's Book level (renamed at the API surface
+# 2026-08-14 for the multi-manager demo — "Book" is desk jargon; prospects pick a manager).
+# The cube hierarchy/level itself is still named "Book": renaming it in atoti would break the
+# eight `"Book" in cube.hierarchies` guards and every l["Book"] lookup below for zero user-visible
+# gain (the standalone atoti web app isn't part of the demo). DIM_ALIASES keeps "Book" accepted
+# on INPUT forever — saved views, old URLs, and tests carry it; DIM_LEVELS maps the canonical
+# name back to the cube level when building queries; responses always emit "Manager".
+DIM_ALIASES = {"Book": "Manager"}
+DIM_LEVELS = {"Manager": "Book"}
+
+
+def _lvl(l, name: str):
+    """Cube level for a canonical dimension name (Manager -> the Book level)."""
+    return l[DIM_LEVELS.get(name, name)]
+
+
+def _canon_dim(name):
+    return DIM_ALIASES.get(name, name)
 MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL",
                  "Specific vol", "Specific variance", "Total VaR 99",
                  "Marginal Scenario VaR 99", "Marginal Total VaR 99", "VaR sensitivity",
@@ -334,6 +352,7 @@ async def trends(set: str = "HistFull",
         raise HTTPException(400, f"unknown measure(s): {bad_m}")
     if not mlist:
         raise HTTPException(400, "select at least one measure")
+    by = _canon_dim(by) if by else by
     if by and by not in DIM_NAMES:
         raise HTTPException(400, f"unknown dimension: {by}")
     def run():
@@ -343,8 +362,9 @@ async def trends(set: str = "HistFull",
             # additive breakdown (e.g. Net exposure by Factor) — one query is safe (no P&L vectors).
             # Book sliced for the same reason as /risk: these are weight-dependent measures and
             # the multi-book grand total collapses rather than aggregating into a portfolio.
-            df = (cube.query(*meas, levels=[l["Date"], l[by]],
+            df = (cube.query(*meas, levels=[l["Date"], _lvl(l, by)],
                              filter=(l["ScenarioSet"] == set) & (l["Book"] == book))
+                  .rename_axis(index={"Book": "Manager"})
                   .reset_index().sort_values("Date"))
             recs = [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
         else:
@@ -450,7 +470,7 @@ async def dims():
         # selection on any of them (not just Date / ScenarioSet).
         members = {}
         for d in DIM_NAMES:
-            idx = cube.query(m["contributors.COUNT"], levels=[l[d]]).index
+            idx = cube.query(m["contributors.COUNT"], levels=[_lvl(l, d)]).index
             # deep levels (Factor under FactorGroup, Sector under Country) come back as a
             # MultiIndex hierarchy path — the level's own member is the last component.
             vals = idx.get_level_values(-1) if isinstance(idx, pd.MultiIndex) else idx
@@ -494,11 +514,12 @@ def _parse_filters(filters: str | None, date: str | None, set: str | None) -> di
 
 
 def _build_filter(l, fd: dict):
-    """AND across dimensions, OR (isin) within a dimension. Date members -> timestamps."""
+    """AND across dimensions, OR (isin) within a dimension. Date members -> timestamps.
+    Dimension keys are canonical API names (Manager, ...), mapped to cube levels via _lvl."""
     cond = None
     for d, vals in fd.items():
         members = [_date(v) for v in vals] if d == "Date" else list(vals)
-        c = l[d].isin(*members)
+        c = _lvl(l, _canon_dim(d)).isin(*members)
         cond = c if cond is None else (cond & c)
     return cond
 
@@ -529,7 +550,15 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
     dims/measures, a non-empty rows+measures selection, and (once >1 book is loaded) a refusal of
     the three book-independent attribution measures — they cannot be trusted per-book (see
     BOOK_INDEPENDENT_MEASURES above). Raises HTTPException(400) exactly as /pivot always has, so
-    every caller of this guard inherits all three checks identically."""
+    every caller of this guard inherits all three checks identically.
+
+    Also canonicalizes dimension ALIASES in place ("Book" -> "Manager", 2026-08-14) so every
+    guarded path — /pivot, /analysis, /ask — accepts legacy names (saved views, old URLs) while
+    the query layer and the response only ever see canonical names."""
+    rlist[:] = [_canon_dim(d) for d in rlist]
+    clist[:] = [_canon_dim(d) for d in clist]
+    for k in [k for k in fdict if _canon_dim(k) != k]:
+        fdict[_canon_dim(k)] = fdict.pop(k)
     bad_d = [d for d in rlist + clist + list(fdict) if d not in DIM_NAMES]
     bad_m = [x for x in mlist if x not in MEASURE_NAMES]
     if bad_d:
@@ -577,14 +606,21 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
                    "axis or pick a single scenario; otherwise those cells are blank.")
     meas_objs = [m[x] for x in mlist]
     _kw = {"scenario": scenario} if scenario is not None else {}
-    df = cube.query(*meas_objs, levels=[l[a] for a in axis], filter=filt, **_kw)
+
+    def _canon_ax(df):
+        # the cube's level is named "Book"; the API's canonical dimension is "Manager"
+        return df.rename_axis(index={"Book": "Manager"}) if "Book" in (df.index.names or []) else df
+
+    df = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in axis], filter=filt, **_kw))
     out = {"rows": rlist, "cols": clist, "measures": mlist, "totals": bool(totals),
            "warning": warning, "records": _records(df)}
     if totals:
-        per_row = cube.query(*meas_objs, levels=[l[a] for a in rlist], filter=filt, **_kw)
+        per_row = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in rlist],
+                                       filter=filt, **_kw))
         out["per_row"] = _records(per_row)                              # Total column
         if clist:
-            per_col = cube.query(*meas_objs, levels=[l[a] for a in clist], filter=filt, **_kw)
+            per_col = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in clist],
+                                           filter=filt, **_kw))
             out["per_col"] = _records(per_col)                          # Total row
         grand = cube.query(*meas_objs, filter=filt, **_kw)              # corner
         def _scalar(v):                                                 # null array-measures -> None
@@ -658,7 +694,7 @@ def _hypothetical_pivot(rlist: list, clist: list, mlist: list, fdict: dict, tota
     try:
         if wtrades:
             branch = f"pivot-wf-{uuid.uuid4().hex[:12]}"
-            book = (fdict.get("Book") or ["Soros"])[0]
+            book = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
             session.tables["Positions"].scenarios[branch].load(
                 _whatif_branch_rows(fdict["Date"][0], book, wtrades))
         if shk:
@@ -747,12 +783,13 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
         if sector:
             filt = filt & (l["Sector"] == sector)
         fd = _parse_filters(filters, None, None)           # drill dims only (no date/set refold)
+        fd = {_canon_dim(k): v for k, v in fd.items()}     # "Book" (legacy) -> "Manager"
         fd.pop("Date", None); fd.pop("ScenarioSet", None)  # those are the fixed path axis
-        # Default the Book slice when the caller didn't scope one. The P&L vector is weight-driven,
-        # so an unscoped query over several books returns the collapsed grand total rather than any
-        # portfolio's path (see /risk). An explicit Book in `filters` still wins — that is how the
-        # chart scopes to a manager.
-        fd.setdefault("Book", [book])
+        # Default the Manager slice when the caller didn't scope one. The P&L vector is
+        # weight-driven, so an unscoped query over several books returns the collapsed grand total
+        # rather than any portfolio's path (see /risk). An explicit Manager in `filters` still
+        # wins — that is how the chart scopes to a manager.
+        fd.setdefault("Manager", [book])
         extra = _build_filter(l, fd)
         if extra is not None:
             filt = filt & extra
@@ -794,8 +831,9 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
         # aggregates each member's per-day P&L (levels=[breakout]); we pair each day with its date
         # and a `rank` = its position ordered by the BOOK total (worst→best, argsort — ordering,
         # not aggregation), so the chart shows the SORTED loss curve but with DATE labels on x.
-        if breakout and breakout in DIM_NAMES:
-            bv = cube.query(m["Scenario PnL vector"], levels=[l[breakout]], filter=filt)
+        if breakout and _canon_dim(breakout) in DIM_NAMES:
+            bv = cube.query(m["Scenario PnL vector"], levels=[_lvl(l, _canon_dim(breakout))],
+                            filter=filt)
             members = []
             for idx, brow in bv.iterrows():
                 member = idx[-1] if isinstance(idx, tuple) else idx
@@ -1040,6 +1078,22 @@ def _book_guard(kind: str, requested_book: str) -> dict | None:
             "artifact_book": covered, "basis": basis, "reason": reason}
 
 
+def _resolve_artifact(mod, kind: str, book: str):
+    """(path, mismatch) — which artifact file to serve for `book` (manager-aware precomputes,
+    2026-08-14). Each precompute module exposes artifact_path(book): the DEFAULT book maps to the
+    legacy unsuffixed file, any other book to <stem>.<Book>.parquet. A book's own suffixed file
+    wins outright when present — it was built FOR that book, no inference needed. Otherwise fall
+    back to the legacy file gated by the Phase-3 `_book_guard` (unchanged single-book behaviour,
+    including all its can't-verify cases). Exactly one of (path, mismatch) is non-None."""
+    p = mod.artifact_path(book)
+    if p != mod.ARTIFACT and p.exists():
+        return p, None
+    mism = _book_guard(kind, book)
+    if mism is not None:
+        return None, mism
+    return mod.ARTIFACT, None
+
+
 # ============================================================================ universe membership
 # Bitemporal index-membership diagnostic (Phase 1; docs/universe-diagnostics-plan.md). Serves the
 # precomputed artifact written by barra_universe_membership.py — for each 13F filing, the book's
@@ -1054,13 +1108,13 @@ async def universe(date: str | None = Query(None, description="filing report_dat
     `date`) filing's split + the 'outside S&P 1500' headline, and the names in the Outside/Unclassified
     buckets. Reads data/universe_membership.parquet (run barra_universe_membership.py to (re)build)."""
     def run():
-        mism = _book_guard("membership", book)
+        art, mism = _resolve_artifact(_um, "membership", book)
         if mism is not None:
             return mism
-        if not _um.ARTIFACT.exists():
+        if not art.exists():
             raise HTTPException(503, "universe_membership.parquet not built — "
                                      "run barra_universe_membership.py")
-        df = pd.read_parquet(_um.ARTIFACT)
+        df = pd.read_parquet(art)
         df["report_date"] = pd.to_datetime(df["report_date"])
         # weight-by-bucket time series, one record per filing (missing buckets -> 0.0)
         series = _um.aggregate(df)
@@ -1106,12 +1160,12 @@ async def funnel(date: str | None = Query(None, description="funnel month; defau
     + the stage that dropped it + its metrics), and the documented thresholds. The funnel is near-flat
     by design — the S&P 500 is pre-curated, so the filters confirm a clean input rather than carve."""
     def run():
-        mism = _book_guard("funnel", book)
+        art, mism = _resolve_artifact(_uf, "funnel", book)
         if mism is not None:
             return mism
-        if not _uf.ARTIFACT.exists():
+        if not art.exists():
             raise HTTPException(503, "universe_funnel.parquet not built — run barra_universe_funnel.py")
-        df = pd.read_parquet(_uf.ARTIFACT)
+        df = pd.read_parquet(art)
         df["month"] = pd.to_datetime(df["month"])
         cfg = _uf.load_cfg()
         recs = []
@@ -1166,12 +1220,12 @@ async def span(date: str | None = Query(None, description="month; default latest
         raise HTTPException(400, f"fx/fy must be style factors: {_us.STYLE}")
 
     def run():
-        mism = _book_guard("span", book)
+        art, mism = _resolve_artifact(_us, "span", book)
         if mism is not None:
             return mism
-        if not _us.ARTIFACT.exists():
+        if not art.exists():
             raise HTTPException(503, "universe_span.parquet not built — run barra_universe_span.py")
-        df = pd.read_parquet(_us.ARTIFACT)
+        df = pd.read_parquet(art)
         df["month"] = pd.to_datetime(df["month"])
         series = []
         for mth, g in df.groupby("month"):
@@ -1238,16 +1292,25 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
     loading_drift — with a per-factor 'lean' (rotation → intentional → benchmark; re-pricing →
     unintentional → hedge). The final verdict needs desk knowledge; this lays out the evidence."""
     def run():
-        mism = _book_guard("drift", book)
+        art, mism = _resolve_artifact(_ud, "drift", book)
         if mism is not None:
             return mism
-        if not _ud.ARTIFACT.exists():
+        if not art.exists():
             raise HTTPException(503, "universe_drift.parquet not built — run barra_universe_drift.py")
-        df = pd.read_parquet(_ud.ARTIFACT); df["month"] = pd.to_datetime(df["month"])
+        df = pd.read_parquet(art); df["month"] = pd.to_datetime(df["month"])
         series = df.pivot_table(index="month", columns="factor", values="net_exposure").sort_index()
         sp = pd.Timestamp(split)
 
         exp, pos = S["frames"]["exposures"], S["frames"]["positions"]
+        # The live attribution below (book_at → decompose) has no Book concept of its own; with
+        # the multi-book frames the requested book must be filtered HERE or x_k sums across every
+        # manager at once (the same bug barra_universe_drift.run fixed for the artifact side).
+        if "Book" in pos.columns:
+            pos = pos[pos["Book"] == book]
+            if pos.empty:
+                return {"status": "book_mismatch", "kind": "drift", "requested_book": book,
+                        "artifact_book": None, "basis": "no positions rows for this book",
+                        "reason": f"no positions for book {book!r} in the live frames"}
         months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))
         pre = months[months < sp]
         t0 = pre[-1] if len(pre) else months[0]
@@ -2076,18 +2139,23 @@ async def liquidity(date: str | None = Query(None, description="as-of date; defa
 # The additive drill (Factor contribution / Specific PnL / Realized PnL) lives in the CUBE and is
 # reached through /pivot — these endpoints are the period headline + diagnostics + reconcile.
 
-def _attr_artifact() -> pd.DataFrame:
-    """The precompute artifact, cached on S and reloaded when the file changes."""
-    p = _pnl.ARTIFACT
+def _attr_artifact(path=None) -> pd.DataFrame:
+    """The precompute artifact, cached on S (keyed per file since the manager-aware precomputes,
+    2026-08-14) and reloaded when the file changes. `path` defaults to the legacy Soros artifact;
+    guarded endpoints pass the path `_resolve_artifact` picked for the requested book."""
+    p = path if path is not None else _pnl.ARTIFACT
     if not p.exists():
-        raise HTTPException(404, "pnl_attribution.parquet missing — run barra_pnl_attribution.py "
+        raise HTTPException(404, f"{p.name} missing — run barra_pnl_attribution.py "
                                  "after a v2 build (needs the specific_returns frame)")
+    key = str(p)
     mt = p.stat().st_mtime
-    if S.get("pnl_attr_mtime") != mt:
+    cache = S.setdefault("pnl_attr_by_path", {})
+    hit = cache.get(key)
+    if hit is None or hit[0] != mt:
         a = pd.read_parquet(p)
         a["Date"] = pd.to_datetime(a["Date"])
-        S["pnl_attr"], S["pnl_attr_mtime"] = a, mt
-    return S["pnl_attr"]
+        cache[key] = (mt, a)
+    return cache[key][1]
 
 
 def _attr_window(art: pd.DataFrame, frm: str | None, to: str | None):
@@ -2176,10 +2244,10 @@ async def pnl_attribution(frm: str | None = Query(None, alias="from"), to: str |
     factor return, linked contribution, t-stat), coverage, and an optional sector/name breakdown.
     Default window: trailing 12 months of the artifact."""
     def run():
-        mism = _book_guard("pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
         if mism is not None:
             return mism
-        art = _attr_artifact()
+        art = _attr_artifact(art_path)
         c, lo, hi = _attr_window(art, frm, to)
         srcs = [s for s in c.columns if s != "Realized"]
         linked, rg = _pnl._carino_link(c[srcs].fillna(0.0), c["Realized"].fillna(0.0))
@@ -2326,10 +2394,10 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
     autocorrelation, residual-vs-factor regression) — plus the Barra bias statistics (book /
     specific / per-factor) and residual concentration + hit rate. Thresholds start loose."""
     def run():
-        mism = _book_guard("pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
         if mism is not None:
             return mism
-        art = _attr_artifact()
+        art = _attr_artifact(art_path)
         c, lo, hi = _attr_window(art, frm, to)
         u_d, r_d = c["Specific"].dropna(), c["Realized"].dropna()
         u_m, r_m = _monthly(u_d), _monthly(r_d)
@@ -2472,10 +2540,10 @@ async def pnl_attribution_linkage(T: str | None = None,
     the surprise z-score, and a within/stress/investigate verdict. Plus per-position surprises
     (weight ≥ min_weight; sub-floor breaches listed in `dust_excluded`)."""
     def run():
-        mism = _book_guard("pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
         if mism is not None:
             return mism
-        art = _attr_artifact()
+        art = _attr_artifact(art_path)
         c = (art[art["Kind"] == "contribution"]
              .pivot_table(index="Date", columns="Source", values="Value", aggfunc="first").sort_index())
         f = S["frames"]
@@ -3160,10 +3228,10 @@ async def pnl_attribution_names(frm: str | None = Query(None, alias="from"), to:
     with sign persistence (share of consecutive same-sign months — a real edge or a stale 13F
     reads persistent; noise mean-reverts) and the share of months positive."""
     def run():
-        mism = _book_guard("pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
         if mism is not None:
             return mism
-        art = _attr_artifact()
+        art = _attr_artifact(art_path)
         _c, lo, hi = _attr_window(art, frm, to)
         na, panel = _name_attr(lo, hi, book, monthly=True)
         if na.empty:

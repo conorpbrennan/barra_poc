@@ -38,10 +38,27 @@ import pathlib
 import pandas as pd
 
 from barra_build_frames import (_get, positions_from_13f, crosswalk_cusips, ticker_to_cik,
-                                SOROS_CIK)
+                                SOROS_CIK, MANAGERS, stitch_multi_cik)
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_membership.parquet"
+DEFAULT_BOOK = "Soros"
+
+
+def artifact_path(book: str = DEFAULT_BOOK) -> pathlib.Path:
+    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). The DEFAULT book keeps
+    the legacy unsuffixed filename so every existing deployment/test path is untouched; any other
+    book writes universe_membership.<Book>.parquet beside it. risk_api resolves the suffixed file
+    first and falls back to the legacy file + the Phase-3 book guard."""
+    return ARTIFACT if book == DEFAULT_BOOK else OUT / f"universe_membership.{book}.parquet"
+
+
+def _book_ciks(book: str) -> tuple[int, ...]:
+    """The book's CIK(s) from the one MANAGERS table (tuple = current entity first, stitched)."""
+    for m in MANAGERS:
+        if m["book"] == book:
+            return m["cik"] if isinstance(m["cik"], tuple) else (m["cik"],)
+    raise ValueError(f"unknown book {book!r} — not in barra_build_frames.MANAGERS")
 
 HANSHOF_URL = ("https://raw.githubusercontent.com/hanshof/sp500_constituents/"
                "main/sp_500_historical_components.csv")
@@ -259,9 +276,9 @@ def build(holdings: pd.DataFrame, tmap: dict[str, str], sp500_hist: list,
     return pd.DataFrame(rows).sort_values(["report_date", "weight"], ascending=[True, False])
 
 
-def run(write: bool = True) -> dict:
-    print("[universe] parsing 13F holdings ...", flush=True)
-    holdings = positions_from_13f(SOROS_CIK)
+def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
+    print(f"[universe] parsing 13F holdings ({book}) ...", flush=True)
+    holdings = stitch_multi_cik([positions_from_13f(c) for c in _book_ciks(book)])
     cusips = sorted({str(c).upper() for c in holdings["cusip"].dropna()})
     print(f"[universe] {len(holdings)} holding-rows, {len(cusips)} unique CUSIPs", flush=True)
 
@@ -280,8 +297,9 @@ def run(write: bool = True) -> dict:
 
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        detail.to_parquet(ARTIFACT, index=False)
-        print(f"[universe] wrote {ARTIFACT}  ({len(detail)} rows)", flush=True)
+        art = artifact_path(book)
+        detail.to_parquet(art, index=False)
+        print(f"[universe] wrote {art}  ({len(detail)} rows)", flush=True)
 
     # quick PASS/print summary on the latest filing
     last = detail["report_date"].max()
@@ -300,4 +318,5 @@ def run(write: bool = True) -> dict:
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)

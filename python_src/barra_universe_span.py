@@ -37,6 +37,15 @@ import barra_universe_membership as um
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_span.parquet"
 FUNNEL = OUT / "universe_funnel.parquet"
+DEFAULT_BOOK = "Soros"
+
+
+def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
+    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
+    legacy unsuffixed filename; others write universe_span.<Book>.parquet. The estimation cloud
+    (funnel survivors) is book-independent, so every book's span reads the ONE legacy funnel
+    artifact — only the held-book overlay differs."""
+    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_span.{book}.parquet"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
@@ -86,8 +95,9 @@ def _cloud_positions_by_month(months) -> dict:
             for m, g in surv.groupby("month")}
 
 
-def run(write: bool = True, book: str = "Soros") -> dict:
-    print("[span] loading frames ...", flush=True)
+def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
+    book_name = book        # `book` is rebound to a DataFrame inside the month loop below
+    print(f"[span] loading frames ({book_name}) ...", flush=True)
     exp = pd.read_parquet(OUT / "exposures.parquet")
     pos = pd.read_parquet(OUT / "positions.parquet")
     sec = pd.read_parquet(OUT / "securities.parquet")
@@ -143,8 +153,9 @@ def run(write: bool = True, book: str = "Soros") -> dict:
     detail = pd.DataFrame(rows).sort_values(["month", "d2"], ascending=[True, False])
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        detail.to_parquet(ARTIFACT, index=False)
-        print(f"[span] wrote {ARTIFACT}  ({len(detail)} name-month rows)", flush=True)
+        art = artifact_path(book_name)
+        detail.to_parquet(art, index=False)
+        print(f"[span] wrote {art}  ({len(detail)} name-month rows)", flush=True)
 
     # yearly inside-share summary
     detail["yr"] = detail["month"].dt.year
@@ -161,4 +172,5 @@ def run(write: bool = True, book: str = "Soros") -> dict:
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)

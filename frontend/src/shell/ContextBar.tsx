@@ -28,13 +28,13 @@ function BookField({ book, managers, setBook }: {
     const m = managers[0];
     const label = m && m.book === book ? managerLabel(m) : book;
     return (
-      <Field label="Book">
+      <Field label="Manager">
         <span className="num">{label}</span>
       </Field>
     );
   }
   return (
-    <Field label="Book">
+    <Field label="Manager">
       <select value={book} onChange={(e) => setBook(e.target.value)}>
         {managers.map((m) => (
           <option key={m.book} value={m.book}>{managerLabel(m)}</option>

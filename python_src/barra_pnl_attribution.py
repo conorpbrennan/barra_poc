@@ -39,6 +39,13 @@ import pandas as pd
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "pnl_attribution.parquet"
+DEFAULT_BOOK = "Soros"
+
+
+def artifact_path(book: str = DEFAULT_BOOK):
+    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
+    legacy unsuffixed filename; others write pnl_attribution.<Book>.parquet."""
+    return ARTIFACT if book == DEFAULT_BOOK else OUT / f"pnl_attribution.{book}.parquet"
 
 
 # --------------------------------------------------------------------------- pure statistics
@@ -360,13 +367,16 @@ def run(frames: dict[str, pd.DataFrame] | None = None, book: str = "Soros") -> p
 
 
 if __name__ == "__main__":
-    art = run()
-    art.to_parquet(ARTIFACT, index=False)
+    import sys
+    _book = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK
+    art = run(book=_book)
+    _art_path = artifact_path(_book)
+    art.to_parquet(_art_path, index=False)
     c = art[art["Kind"] == "contribution"].pivot(index="Date", columns="Source", values="Value")
     fac = c.drop(columns=["Specific", "Realized"]).sum(axis=1)
     gap = (c["Realized"] - fac - c["Specific"]).abs().max()
     linked, rg = _carino_link(c.drop(columns=["Realized"]), c["Realized"])
-    print(f"wrote {ARTIFACT}  ({len(art):,} rows, {c.index.min().date()} → {c.index.max().date()})")
+    print(f"wrote {_art_path}  ({len(art):,} rows, {c.index.min().date()} → {c.index.max().date()})")
     print(f"tie-out |realized - factor - specific| max = {gap:.2e} (identity, must be ~0)")
     print(f"since-inception geometric return {rg:+.1%}; linked: "
           f"Market {linked.get('Market', 0):+.1%}, Specific {linked.get('Specific', 0):+.1%}, "

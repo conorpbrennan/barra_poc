@@ -49,6 +49,14 @@ import barra_universe_membership as um
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_funnel.parquet"
+DEFAULT_BOOK = "Soros"
+
+
+def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
+    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). The default book (and
+    the book=None any-book escape hatch) keeps the legacy unsuffixed filename; any other book
+    writes universe_funnel.<Book>.parquet. risk_api resolves the suffixed file first."""
+    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_funnel.{book}.parquet"
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "universe_filters.json"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
@@ -270,8 +278,9 @@ def run(write: bool = True, book: str | None = "Soros") -> dict:
     detail = pd.DataFrame(rows)
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        detail.to_parquet(ARTIFACT, index=False)
-        print(f"[funnel] wrote {ARTIFACT}  ({len(detail)} name-month rows)", flush=True)
+        art = artifact_path(book)
+        detail.to_parquet(art, index=False)
+        print(f"[funnel] wrote {art}  ({len(detail)} name-month rows)", flush=True)
 
     # summary on the latest month
     last = months[-1]
@@ -290,4 +299,5 @@ def _f(x):
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)

@@ -39,6 +39,13 @@ import pandas as pd
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_drift.parquet"
+DEFAULT_BOOK = "Soros"
+
+
+def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
+    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
+    legacy unsuffixed filename; others write universe_drift.<Book>.parquet."""
+    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_drift.{book}.parquet"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
@@ -119,16 +126,20 @@ def run(write: bool = True, book: str = "Soros") -> dict:
     detail = pd.DataFrame(rows)
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        detail.to_parquet(ARTIFACT, index=False)
-        print(f"[drift] wrote {ARTIFACT}  ({len(detail)} rows)", flush=True)
+        art = artifact_path(book)
+        detail.to_parquet(art, index=False)
+        print(f"[drift] wrote {art}  ({len(detail)} rows)", flush=True)
 
     series = detail.pivot_table(index="month", columns="factor", values="net_exposure")
     summ = drift_summary(series, pd.Timestamp("2021-01-01"))
     print("\n[drift] book net-exposure drift, pre-2021 vs 2021+ (top movers):")
     for f, r in summ.head(5).iterrows():
         print(f"    {f:11s} {r['early']:+.3f} -> {r['late']:+.3f}   (Δ {r['delta']:+.3f})")
-    # attribution: 2020-12-31 vs latest
-    t0 = months[months < pd.Timestamp("2021-01-01")][-1]
+    # attribution: 2020-12-31 vs latest. Books whose filing history starts after the split (a
+    # handful of the 2026-08-14 Buyside additions) have no pre-2021 month; fall back to their
+    # FIRST month so the attribution still reads first-book -> latest instead of crashing.
+    pre = months[months < pd.Timestamp("2021-01-01")]
+    t0 = pre[-1] if len(pre) else months[0]
     t1 = months[-1]
     w0, l0 = book_at(exp, pos, t0); w1, l1 = book_at(exp, pos, t1)
     attr = decompose(w0, l0, w1, l1)
@@ -141,4 +152,5 @@ def run(write: bool = True, book: str = "Soros") -> dict:
 
 
 if __name__ == "__main__":
-    run()
+    import sys
+    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)
