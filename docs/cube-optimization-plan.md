@@ -233,6 +233,31 @@ baseline says routine queries don't need it — this is insurance for future sca
 daily calendar), gated like everything else on a harness diff and a what-if branch check
 (providers must respect source scenarios, or the branch-sensitivity design breaks).
 
+**Assessment (2026-08-14): NOT warranted, not implemented.** After Steps 2/4/5/6 every routine
+query in the suite is 0.03–0.5 s cold and 0.01–0.05 s warm, the all-sets family no longer fails,
+and the one query shape that could take a minute is now bounded by policy at 1.1 s. A provider
+would buy nothing there. The two things still slow are the two a `Net exposure` provider does not
+address:
+- **ScenarioDay unpacking** (10–50 s, and the × Sector variant still fails) is a *per-member*
+  evaluation over a 2,618-member parameter hierarchy, not an exposure-aggregation cost — which is
+  exactly why its warm time equals its cold time (nothing to reuse) and why pre-aggregating
+  `Net exposure` at (Date, Book, Factor) leaves the 2,618 vector index reads untouched. Note also
+  how narrow this hotspot is in practice: the UI's per-day path comes from `/scenario_pnl`, which
+  reads the whole P&L vector + its date dual in ONE query (`pnl_vector_book`: **0.04 s cold**).
+  The ScenarioDay dimension is used only by the notebook idiom and a hand-built pivot. Step 1
+  proved padding can't fix it on this SDK; the next idea worth testing is capping the parameter
+  hierarchy (e.g. the last 500 days) or serving the drill from the vector in the API.
+- **Build time** (~64 s) is dominated by `read_pandas` of the 6 M-row `exposures` table. A
+  provider adds build time, it doesn't remove any.
+
+Also unresolved by a provider and worth flagging as the real next candidate: `/dims` at ~15 s,
+whose cost is `contributors.COUNT` **by Book** over those 6 M rows (13.1 s of the 14.9 s total,
+measured). That is a member-enumeration problem — the cheap fix is to enumerate Book from the
+positions frame instead of the cube, not to build an aggregate store. Revisit the provider only
+if the calendar goes daily or the book count grows again, and gate it on the same harness diff
+plus a what-if branch check (a provider that ignores source scenarios silently breaks the
+branch-sensitivity design).
+
 **Explicitly not doing**: renaming/restructuring the vector tail read-off (`Marginal *` family)
 — measured fast (≤0.5 s for 3,635 names); the notebook-vs-API duplicate cube (a per-context
 choice, not an engine cost); `build_scenarios` pandas micro-optimizations (seconds, once).
@@ -246,3 +271,36 @@ choice, not an engine cost); `build_scenarios` pandas micro-optimizations (secon
   compare like with like because the suite order is fixed.
 - Accuracy gates run after every step; a performance win that moves a tie-out beyond its
   pinned tolerance is a bug, not a win.
+
+## What the programme actually delivered (2026-08-14)
+
+Kept: **Steps 2, 4, 5, 6**. Rejected on measurement: **Steps 1 and 3**. Not implemented: **Step 7**
+(assessed above). Final state = `docs/cube_bench_step6_20260814.json`, diffed against
+`docs/cube_bench_baseline_20260814.json`:
+
+| | baseline | final | |
+|---|---|---|---|
+| `hhi_by_set_all130` | **FAILS** at 10.98 s | 0.48 / 0.02 s | the failure is gone |
+| `model_vol_by_set_all130` | 1.05 / 0.98 s | 0.14 / 0.02 s | 7.5× / 49× |
+| `var99_by_set_all130` | 0.59 / 0.47 s | 0.15 / 0.03 s | 3.9× / 16× |
+| `hhi_small_book_all130` | 0.17 / 0.18 s | 0.04 / 0.03 s | 4× / 6× |
+| `Scenario VaR 99` by Manager, no Date (live API) | 60.2 s idle / 500 loaded | **1.08 s** | Step 6 |
+| positions load (micro-bench) | 6.59 s | 4.89 s | −26% |
+| `/dims` member enumeration | 19.9 s | 14.9 s | side-effect of Step 2 |
+| idle JVM RSS after a heavy burst | held at ~18 G | 8.1 G after ~7 min | Step 5 |
+| `build_cube` | 55.98 s | 64.38 s | **worse** — see below |
+| every routine sliced query | 0.03–0.5 s cold | 0.03–0.5 s cold | flat |
+
+Two honest caveats on those numbers.
+
+**Build time went up ~8 s.** The PIT table is a second 123-set × 23-factor vector load (~+4.5 s)
+and the slim Positions load gives ~1.3 s back. `build_cube` measured 56.0, 56.2, 60.5, 71.3,
+63.7, 64.4 s across the six runs, so the run-to-run spread is ±5 s and only the direction is
+reliable. This was a deliberate trade: a one-off 8 s at start-up bought a query that used to fail
+outright.
+
+**`scenario_day_path` is not a reliable harness number.** It printed 10.0, 33.9, 51.5, 44.6,
+13.6, 24.1, 25.6 s across the seven runs on three different builds. Isolated A/B (same process,
+same order, cube code the only variable) puts the PIT split at 42.0 → 44.3 s, i.e. ~5%. Whatever
+drives the 4× spread is JVM heap/GC state at the point in the suite where the query runs, not the
+code under test. Read that row only against a controlled probe, never off the diff.
