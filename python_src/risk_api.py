@@ -729,7 +729,14 @@ def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
             r = {"Date": d_ts, "Book": book, "Position": p, "Weight": nw,
                  "MV": np.nan, "ADV": np.nan}
         rows.append(r)
-    return pd.DataFrame(rows, columns=list(pos.columns))
+    # The branch load must match the CUBE table's width, which since 2026-08-14 is narrower than
+    # the frame (MV/ADV never cross into the JVM — optimization Step 4). Read the columns off the
+    # live table so this follows the cube rather than restating its schema.
+    try:
+        cols = [c for c in pos.columns if c in set(S["session"].tables["Positions"].columns)]
+    except Exception:
+        cols = list(pos.columns)
+    return pd.DataFrame(rows, columns=cols or list(pos.columns))
 
 
 def _parse_hypo(whatif: str | None, shocks: str | None, fdict: dict):

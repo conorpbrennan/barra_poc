@@ -35,7 +35,15 @@ FRAME_NAMES = ["exposures", "positions", "securities", "factor_meta", "factor_re
 # specific_returns: v2-only (PnL attribution); v1 data degrades gracefully.
 # managers: multi-manager entity metadata (Phase 2, keyed on Book); absent on any build before it
 # existed (incl. all v1 data) -- degrades gracefully, no entity dimension, nothing else affected.
-OPTIONAL_FRAMES = ["specific_returns", "managers"]
+OPTIONAL_FRAMES = ["specific_returns", "managers",
+                   # specific_pnl: the OPTIONAL precomputed (Date, Position) -> SpecPnL frame. Not
+                   # written today; when a builder persists it (with FactorPnL on `exposures`),
+                   # build_cube skips its pandas attribution prep entirely -- see Step 4 below.
+                   "specific_pnl"]
+
+# The Positions columns the CUBE needs: everything a measure reads, and nothing else. The frames
+# dict keeps the full width (MV/ADV) for the API -- this list only bounds what crosses into the JVM.
+POSITION_CUBE_COLS = ["Date", "Book", "Position", "Weight"]
 
 # Historical event windows to replay (must fall inside the loaded sample; pre-2016 events need a
 # longer factor-return history -- splice published style-factor returns for those windows).
@@ -191,12 +199,21 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # for that name regardless of which Book is sliced. Disclosed, not silently fixed. Follow-up:
     # either confirm an Atoti-supported way to alias a table's column onto an EXISTING hierarchy
     # from a different table, or build N book-keyed tables in a loop over the active books.
-    w = (positions[["Date", "Position", "Book", "Weight"]]
-         .sort_values(["Date", "Position", "Book"])
-         .drop_duplicates(subset=["Date", "Position"], keep="first")
-         [["Date", "Position", "Weight"]])
-    exposures = exposures.merge(w, on=["Date", "Position"], how="left")
-    exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
+    #
+    # The pandas prep below runs on every restart (~seconds on the 124-book build). It is
+    # SKIPPED when the frames already carry the derived columns -- `exposures.FactorPnL` and an
+    # optional `specific_pnl` frame (Date, Position, SpecPnL). Nothing writes them today; this
+    # is the forward-compatible half of optimization Step 4, so a builder that persists them
+    # takes the work out of cube start-up without another cube change.
+    prebuilt_factor_pnl = "FactorPnL" in exposures.columns
+    prebuilt_spec_pnl = frames.get("specific_pnl")
+    if not prebuilt_factor_pnl:
+        w = (positions[["Date", "Position", "Book", "Weight"]]
+             .sort_values(["Date", "Position", "Book"])
+             .drop_duplicates(subset=["Date", "Position"], keep="first")
+             [["Date", "Position", "Weight"]])
+        exposures = exposures.merge(w, on=["Date", "Position"], how="left")
+        exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
 
     # ---- PnL attribution (Step 15, v2-only): forward-month realized contributions -------------
     # Convention: the row at month-end d0 carries the PnL over the FOLLOWING month (d0, d1] — the
@@ -206,9 +223,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # foots at every level of Factor x Sector x Position, and `Specific PnL` is the as-of weight x
     # fwd-month residual per (Date, Position). Realized PnL = the two summed — an identity.
     spec_ret = frames.get("specific_returns")
-    has_attribution = spec_ret is not None and len(spec_ret) > 0
-    spec_pnl = None
-    if has_attribution:
+    can_derive = spec_ret is not None and len(spec_ret) > 0 and not prebuilt_factor_pnl
+    has_attribution = (prebuilt_factor_pnl and prebuilt_spec_pnl is not None) or can_derive
+    spec_pnl = prebuilt_spec_pnl
+    if can_derive:
         exp_dates = np.sort(pd.to_datetime(pd.Series(exposures["Date"].unique())).values)
 
         def _stamp_d0(s: pd.Series) -> pd.Series:
@@ -229,7 +247,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         spec_pnl = sr_m.merge(w, on=["Date", "Position"], how="inner")
         spec_pnl["SpecPnL"] = spec_pnl["Weight"] * spec_pnl["SpecificReturn"]
         spec_pnl = spec_pnl.loc[spec_pnl["SpecPnL"] != 0.0, ["Date", "Position", "SpecPnL"]]
-    exposures = exposures.drop(columns=["Weight", "WLoading"])
+    exposures = exposures.drop(columns=["Weight", "WLoading"], errors="ignore")   # prep-only
     # NB: the same trick must NOT be applied to specific_var — it is a *joined* table, and a
     # plain SUM over a joined column fans out by fact-row multiplicity (each (Date, Position)
     # specvar row is reached once per factor leaf -> ~10x inflated variance, observed √10
@@ -245,7 +263,11 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     session = tt.Session.start(tt.SessionConfig(port=port, java_options=[f"-Xmx{xmx}"]))
     # ^ port pinned so the UI URL survives restarts
     t_exp = session.read_pandas(exposures,  keys={"Date", "Position", "Factor"}, table_name="Exposures")
-    t_pos = session.read_pandas(positions,  keys={"Date", "Book", "Position"},   table_name="Positions")
+    # SLIM (optimization Step 4): only the columns a measure reads go into the JVM. MV and ADV are
+    # never read by any measure -- /liquidity and the what-if editor read them from the pandas
+    # frames on S["frames"], which keep their full width. Measured: 6.6s -> 5.0s on this table.
+    t_pos = session.read_pandas(positions[POSITION_CUBE_COLS],
+                                keys={"Date", "Book", "Position"},               table_name="Positions")
     t_sec = session.read_pandas(securities, keys={"Position"},                   table_name="Securities")
     t_fm  = session.read_pandas(factor_meta, keys={"Factor"},                    table_name="FactorMeta")
     t_sv  = session.read_pandas(specific,   keys={"Date", "Position"},           table_name="SpecificVar")

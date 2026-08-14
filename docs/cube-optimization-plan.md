@@ -163,6 +163,30 @@ columns so `build_cube` stops doing pandas work on every restart. Target: build 
 Optionally: `partitioning=` on the two big tables (0.9.15 supports it) — measure with the
 harness before keeping.
 
+**Results (2026-08-14): DONE, kept** (`docs/cube_bench_step4_20260814.json`). `read_pandas` now
+takes `positions[POSITION_CUBE_COLS]` = (Date, Book, Position, Weight); MV and ADV never cross
+into the JVM. The harness's own H3 micro-bench is the clean A/B for this (same process, same
+frame): **6.42 s full-width → 5.14 s slim, −20%**. `load_frames` is untouched, so
+`S["frames"]["positions"]` keeps MV/ADV for `/liquidity`, `/whatif`'s editor and the funnel.
+One coupled change: `_whatif_branch_rows` reads the live table's column list
+(`session.tables["Positions"].columns`) and emits exactly those, so a branch load matches the
+narrower table instead of restating the schema — `test_whatif` (9/9, incl. the branch-backed
+`t_whatif_served_from_cube`) is the gate on that.
+
+The attribution prep is **forward-compatible, not moved**: `build_cube` skips the `w` dedupe and
+the FactorPnL/SpecPnL derivation when the frames already carry them — `FactorPnL` as a column on
+`exposures` plus an optional `specific_pnl` frame (Date, Position, SpecPnL), now listed in
+`OPTIONAL_FRAMES`. Nothing writes them today (no rebuild was in scope), so today's path is
+byte-identical; a builder that persists them takes that pandas work out of every cube start-up
+with no further cube change.
+
+Build time did NOT visibly move: 60.5 s (Step 2) → 63.7 s. That is the harness's noise floor
+talking — `build_cube` has now been measured at 56.0, 56.2, 60.5, 71.3 and 63.7 s on identical
+data, so a genuine ~1.3 s saving is invisible in it; the micro-bench is where this step's win is
+legible. **The "build 56 s → ~40 s" target in the original plan is therefore not met and will not
+be met by this step**: `read_pandas` of the 6 M-row `exposures` table is the dominant term, not
+Positions. No query in the suite regressed.
+
 **Step 5 — memory hygiene.** Add `-Xms2g -XX:G1PeriodicGCInterval=300000` to the
 `java_options` so idle heap returns to the OS between bursts (today: manual service bounces).
 Bound `cube.aggregate_cache` explicitly once Step 3's data shows how much the cache is worth.
