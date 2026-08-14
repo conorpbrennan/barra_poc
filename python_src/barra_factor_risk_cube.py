@@ -24,6 +24,7 @@ ALL THREE SCENARIO MODES ARE ONE OPERATION:  dPnL = sum_k x_k * df_k
 The "one switch" is the ScenarioSet hierarchy: slice it, and the same measure gives that mode.
 """
 from __future__ import annotations
+import os
 import pathlib
 import numpy as np
 import pandas as pd
@@ -218,7 +219,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     managers = frames.get("managers")
     has_managers = managers is not None and len(managers) > 0
 
-    session = tt.Session.start(tt.SessionConfig(port=port))   # pinned so the UI URL survives restarts
+    # Explicit JVM heap (2026-08-14, the 124-book Buyside expansion): with no -Xmx the JVM
+    # defaults to 25% of RAM (~15.6g here), which the multi-book positions/exposures volume can
+    # exhaust — the /trends OOM note dates from the 22k-name build. BARRA_CUBE_XMX overrides.
+    xmx = os.environ.get("BARRA_CUBE_XMX", "32g")
+    session = tt.Session.start(tt.SessionConfig(port=port, java_options=[f"-Xmx{xmx}"]))
+    # ^ port pinned so the UI URL survives restarts
     t_exp = session.read_pandas(exposures,  keys={"Date", "Position", "Factor"}, table_name="Exposures")
     t_pos = session.read_pandas(positions,  keys={"Date", "Book", "Position"},   table_name="Positions")
     t_sec = session.read_pandas(securities, keys={"Position"},                   table_name="Securities")
@@ -261,6 +267,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # (cube RSS measured at 1.1 GB on this dataset, against 62 GB on the box).
     cube.shared_context["queriesResultLimit.intermediateLimit"] = 20_000_000
     cube.shared_context["queriesResultLimit.transientLimit"] = 200_000_000
+    # 124-book expansion (2026-08-14): an all-books query (Book on rows, scenario measures) is 123
+    # per-book P&L vectors in one plan and blows ActivePivot's 30s default; single-book slices run
+    # ~3s. Raised so cross-book comparison queries can complete rather than 500.
+    cube.shared_context["queriesTimeLimit"] = 120
 
     h["Security"]  = {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
                       "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]}
