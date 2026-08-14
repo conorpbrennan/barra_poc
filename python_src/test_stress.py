@@ -115,7 +115,9 @@ def t_meta_serves_managers():
     # a literal expectation just goes stale again on the next scope change. ("N/A" is atoti's
     # default member for exposure rows no book holds — not a manager.)
     dims = requests.get(f"{API}/dims", timeout=60).json()
-    assert books == {b for b in dims["members"]["Book"] if b != "N/A"}, (books, dims["members"]["Book"])
+    # the pivot layer exposes the Book level under its user-facing name "Manager" (2026-08-14)
+    assert books == {b for b in dims["members"]["Manager"] if b != "N/A"}, \
+        (books, dims["members"]["Manager"])
     for m in mgrs:
         for k in ("book", "entity_name", "firm_type", "cik", "n_positions_distinct"):
             assert k in m, (k, m)
