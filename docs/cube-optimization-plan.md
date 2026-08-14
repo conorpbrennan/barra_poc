@@ -215,6 +215,18 @@ already warns about missing ScenarioSet context; extend the same warning-or-defa
 (default = latest COB, disclosed in the response). Turns the 60-s/borderline-failure shape
 into the 0.76-s shape without touching the cube.
 
+**Results (2026-08-14): DONE, kept.** `_needs_date_default(mlist, axis, fdict)` — pure, so it is
+unit-tested with no cube (`test_analysis.py::t_date_default_only_for_the_pathological_shape`) —
+fires only on the measured shape: a `SCEN_DEP` measure **and** Manager on an axis **and** no Date
+in the filters or on an axis. `_pivot_result` then injects the latest COB and appends a sentence
+to the response `warning` (which became a joined list, so it can carry the ScenarioSet note too).
+Live gate, `GET /pivot?rows=Manager&measures=Scenario VaR 99&filters={"ScenarioSet":["HistFull"]}`:
+**1.08 s, 124 rows, HTTP 200**, against the 60.2 s (idle) / HTTP 500 (loaded) baseline for the
+same request. A Date filter, a Date on the axis, an additive-only measure list or a non-Manager
+axis all leave the query exactly as the caller wrote it — this defaults one shape, it does not
+rewrite requests. `docs/cube_bench_step6_20260814.json` is the final-state harness run (the cube
+is byte-identical to Step 5; it doubles as the post-program baseline).
+
 **Step 7 — evaluate an aggregate provider (only if Steps 1–4 leave a gap).** A partial bitmap
 provider at (Date, Book, Factor) pre-aggregates `Net exposure` for the scenario engine. The
 baseline says routine queries don't need it — this is insurance for future scale (more books,

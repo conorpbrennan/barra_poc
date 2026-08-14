@@ -656,6 +656,20 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
                 "for correct per-book attribution instead.")
 
 
+def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
+    """Is this the measured pathology — a scenario measure, MANAGERS on an axis, and NO Date
+    anywhere in context? Pure (no cube), so it is unit-testable.
+
+    Measured on the 124-book cube (docs/cube-optimization-plan.md, hotspot 3): `Scenario VaR 99`
+    by Manager with no Date filter is **60.2 s** on an idle cube and 500s on a loaded one — it
+    builds one P&L vector per book over the whole calendar. The SAME query with a single Date is
+    **0.76 s**. Nothing asks for the multi-date shape on purpose: it is what a field-list drag
+    produces before the user picks a date."""
+    return (any(x in SCEN_DEP for x in mlist)
+            and "Manager" in axis
+            and "Date" not in axis and "Date" not in fdict)
+
+
 def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
                   scenario: str | None = None, stress_scenario: str | None = None) -> dict:
     """The tidy pivot result (records [+ per_row/per_col/grand margins when totals]). Extracted
@@ -670,16 +684,27 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
         if name not in seen:
             seen.add(name); axis.append(name)
     fdict, axis, mnames, pit_mode = _pit_addressing(cube, fdict, axis, mlist)
+    warnings = []
+    # Date-context DEFAULT (optimization Step 6): scenario measures × Managers × no Date is the
+    # 60-second shape. Inject the latest COB rather than serve it, and say so — the same
+    # warn-in-the-payload idiom as the missing-ScenarioSet note below.
+    if _needs_date_default(mlist, axis, fdict):
+        _d = _latest_date()
+        fdict = {**fdict, "Date": [_d]}
+        warnings.append(f"No Date in context with scenario measures across managers — that query "
+                        f"builds a P&L vector per manager over the whole calendar (measured 60 s, "
+                        f"and it times out on a loaded cube). Defaulted to the latest COB {_d}; "
+                        f"pick a Date explicitly to override.")
     filt = _build_filter(l, fdict)
     if stress_scenario is not None:
         filt = (filt & (l["StressShock"] == stress_scenario)) if filt is not None \
             else (l["StressShock"] == stress_scenario)
 
     scen_ctx = ("ScenarioSet" in axis) or ("ScenarioSet" in fdict) or pit_mode
-    warning = None
     if any(x in SCEN_DEP for x in mlist) and not scen_ctx:
-        warning = ("Scenario measures need a ScenarioSet context — put ScenarioSet on an "
-                   "axis or pick a single scenario; otherwise those cells are blank.")
+        warnings.append("Scenario measures need a ScenarioSet context — put ScenarioSet on an "
+                        "axis or pick a single scenario; otherwise those cells are blank.")
+    warning = " ".join(warnings) or None
     meas_objs = [m[x] for x in mnames]
     _back = dict(zip(mnames, mlist))     # PIT mirror -> the name the caller asked for (identity off PIT)
     _kw = {"scenario": scenario} if scenario is not None else {}

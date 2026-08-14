@@ -101,6 +101,21 @@ def t_validate_accepts_good_spec():
 
 
 @unit
+def t_date_default_only_for_the_pathological_shape():
+    """_needs_date_default (cube-optimization Step 6) fires ONLY on the measured 60-second shape:
+    a scenario measure + Manager on an axis + no Date anywhere. A Date filter, a Date on the axis,
+    an additive-only measure list, or no Manager axis all leave the query untouched — the default
+    is a guard against one shape, not a general rewrite of the caller's request."""
+    import risk_api as r
+    assert r._needs_date_default(["Scenario VaR 99"], ["Manager"], {})
+    assert r._needs_date_default(["Net exposure", "Model vol"], ["Manager", "Sector"], {"Sector": ["Energy"]})
+    assert not r._needs_date_default(["Scenario VaR 99"], ["Manager"], {"Date": ["2026-06-30"]})
+    assert not r._needs_date_default(["Scenario VaR 99"], ["Manager", "Date"], {})
+    assert not r._needs_date_default(["Net exposure"], ["Manager"], {})       # additive: cheap
+    assert not r._needs_date_default(["Scenario VaR 99"], ["Sector"], {})     # no manager axis
+
+
+@unit
 def t_anthropic_key_present():
     """_anthropic_key() finds a key (env var or repo .env). Skips (does not fail) if neither has
     one, so a checkout without a key still passes the suite."""
