@@ -91,6 +91,48 @@ evaluations. Expected: `hhi_by_set` goes from *failure* to ~0.5 s; the Vanguard 
 cell un-patches. Touches: `build_scenarios`/`build_cube`, `/meta.pit_sets`, `/trends`' PIT
 addressing — the set NAMES don't change, only which hierarchy carries them.
 
+**Results (2026-08-14): DONE, kept** (`docs/cube_bench_step2_20260814.json`). `build_pit_scenarios`
+emits the PIT rows keyed (PITSet, Factor) into their own `PITScenarios` table, partial-joined on
+Factor exactly like `Scenarios`, with three mirrored measures — `PIT Scenario PnL vector` /
+`PIT Scenario PnL vol` / `PIT Model vol`, precisely what `_pred_book_vols` consumes. ScenarioSet
+is down to the 7 real sets. Measured, cold/warm:
+
+| query | baseline | step 2 |
+|---|---|---|
+| `hhi_by_set_all130` | **FAILS** at 10.98 s | **0.70 / 0.02 s** (7 rows) |
+| `model_vol_by_set_all130` | 1.05 / 0.98 | 0.24 / 0.02 |
+| `var99_by_set_all130` | 0.59 / 0.47 | 0.26 / 0.02 |
+| `hhi_small_book_all130` | 0.17 / 0.18 | 0.19 / 0.03 |
+| build_cube | 55.98 s | 60.45 s (+8%, the extra table load) |
+| JVM after build | 7.84 G | 7.34 G |
+
+The `*_real7` queries are unchanged warm (0.03 s) and a shade slower cold (0.11→0.21, 0.48→0.64)
+— first-touch noise, they now hit a colder cache. Everything else in the suite is flat.
+
+Two things the run flagged that are NOT regressions, both re-measured in a controlled A/B (same
+process, same query order, only the cube code differing):
+- `scenario_day_path` printed 10.0 s at baseline and 51.5 s here — but on an isolated probe the
+  same query is **42.0 s pre-split vs 44.3 s post-split**. The harness figure for this one query
+  is heap-state noise (it runs when the JVM sits at 13 G in one run and 30 G in the other); the
+  PIT split costs it ~5%.
+- `/dims` takes ~20 s on this build, which is why several integration test-modules silently SKIP
+  (their `_backend_up()` probes `/dims` with a 5 s timeout). Pre-existing and unrelated: the cost
+  is `contributors.COUNT` **by Book** over 6 M leaf rows. Step 2 in fact **improves** it —
+  measured 19.9 s → 14.9 s total (Book alone 17.5 → 13.1 s), because a fact now fans over 7
+  ScenarioSet members instead of 130.
+
+API side: `/meta.pit_sets` reads the new hierarchy; `_pred_book_vols` reads the mirrored measures
+(the whole point of the step is that this path's behaviour is unchanged); and the "addressable by
+name" contract is preserved — `_pit_addressing` rewrites a `PIT:*` ScenarioSet filter in
+`/pivot`/`/analysis` onto PITSet + the mirrored measures and renames the columns back, `/trends`
+does the same via `_set_context`, and the routes that need the full engine (`/risk`,
+`/attribution`, `/timeseries`, `/scenario_pnl`, `/limits`, `/backtest`, `/drawdown`) 400 on a PIT
+name via `_reject_pit` rather than returning a silently empty body. Accuracy gate: all of
+`test_model_vol` (15/15, incl. `t_pit_sets_identities`, which addresses a PIT set through
+`/pivot`), `test_contributions`, `test_whatif`, `test_analysis` pass; `test_stress` is 16/1 with
+the one failure `t_meta_serves_managers` pre-existing (it reads `dims["members"]["Book"]`, stale
+since the Book→Manager API rename).
+
 **Step 3 — name the shared decomposition sub-expressions.** (Analysis item, unmeasured — the
 harness diff IS the experiment.) `tt.total(m["Marginal Total VaR 99"], …)` is constructed four
 times (`_tot_r`, `book_total`, and inside two `%`-measures); `tt.array.std(book_pnl_vec)` is

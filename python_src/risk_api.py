@@ -213,6 +213,44 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 app.include_router(views_router)   # saved-view CRUD over views_repo (no cube dep) — see views_api.py
 
 
+def _has_pit(cube) -> bool:
+    """Does this cube carry the split-out PIT hierarchy (2026-08-14, optimization Step 2)?"""
+    return "PITSet" in {n for _, n in cube.hierarchies}
+
+
+def _pit_set_names(cube) -> list[str]:
+    """The PIT:* set names off their own hierarchy ([] on a pre-split cube)."""
+    if not _has_pit(cube):
+        return []
+    l, m = cube.levels, cube.measures
+    return sorted({str(s) for s in cube.query(m["contributors.COUNT"], levels=[l["PITSet"]]).index})
+
+
+def _set_context(cube, l, set_name: str, mlist: list) -> tuple:
+    """(filter condition, measure names to query) for a `set=` parameter. A PIT:* name selects the
+    truncated-history hierarchy and the mirrored measures (Step 2, 2026-08-14); every real set is
+    the ScenarioSet condition and the measures as asked. 400s on a PIT set + an unmirrored
+    measure rather than quietly serving the full-history number."""
+    if str(set_name).startswith("PIT:") and _has_pit(cube):
+        bad = [x for x in mlist if x in SCEN_DEP and x not in PIT_MIRROR]
+        if bad:
+            raise HTTPException(400, f"{bad} are not available on the PIT:* truncated-history "
+                                     f"sets — only {sorted(PIT_MIRROR)} are mirrored there.")
+        return l["PITSet"] == set_name, [PIT_MIRROR.get(x, x) for x in mlist]
+    return l["ScenarioSet"] == set_name, list(mlist)
+
+
+def _reject_pit(set_name: str) -> None:
+    """Guard for the routes that read the full scenario engine (P&L vectors, VaR/ES, the date
+    dual) — none of that is mirrored onto the PIT hierarchy, so a PIT:* name is a 400 here rather
+    than a silently empty response. The PIT sets are as-of-vol plumbing: use /pivot (or /trends)
+    with Model vol / Scenario PnL vol."""
+    if str(set_name).startswith("PIT:") and _has_pit(S["cube"]):
+        raise HTTPException(400, f"{set_name} is a PIT truncated-history set: only "
+                                 f"{sorted(PIT_MIRROR)} are served on those, via /pivot or "
+                                 "/trends. This route needs one of the real scenario sets.")
+
+
 def _managers_meta() -> list[dict]:
     """Available books/managers for the UI (multi-manager Phase 3, 2026-07-30) — the ONE source,
     like `hypo_shocks` below (see `t_meta_serves_managers`). Sourced from the live frames, never a
@@ -244,10 +282,11 @@ async def meta():
         dates = sorted({str(pd.Timestamp(d).date()) for d in
                         cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index})
         all_sets = sorted({str(s) for s in cube.query(m["contributors.COUNT"], levels=[l["ScenarioSet"]]).index})
-        # PIT:* truncated-history sets are plumbing for as-of risk (one per month-end) — kept
-        # out of the main dropdown list; still addressable by name in any filter.
+        # PIT:* truncated-history sets are plumbing for as-of risk (one per month-end). Since
+        # 2026-08-14 they live in their OWN hierarchy (PITSet), so ScenarioSet already holds just
+        # the 7 real sets; the prefix filter stays as belt-and-braces for a pre-split cube.
         sets = [s for s in all_sets if not s.startswith("PIT:")]
-        pit_sets = [s for s in all_sets if s.startswith("PIT:")]
+        pit_sets = _pit_set_names(cube) or [s for s in all_sets if s.startswith("PIT:")]
         factors = sorted(S["frames"]["factor_meta"]["Factor"].tolist())
         return {"dates": dates, "scenario_sets": sets, "pit_sets": pit_sets, "factors": factors,
                 "ts_measures": TS_MEASURES, "by_levels": list(BY_LEVELS),
@@ -262,6 +301,7 @@ async def meta():
 
 @app.get("/risk")
 async def risk(date: str, set: str, book: str = "Soros"):
+    _reject_pit(set)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         # Book MUST be sliced. Every measure here is weight-dependent, and with more than one book
@@ -307,6 +347,7 @@ async def exposures(date: str, book: str = "Soros"):
 
 @app.get("/attribution")
 async def attribution(date: str, set: str, by: str = "sector", book: str = "Soros"):
+    _reject_pit(set)
     by = by.lower()
     if by not in BY_LEVELS:
         raise HTTPException(400, f"by must be one of {list(BY_LEVELS)}")
@@ -328,6 +369,7 @@ async def attribution(date: str, set: str, by: str = "sector", book: str = "Soro
 
 @app.get("/timeseries")
 async def timeseries(set: str, measure: str = "Total VaR 99"):
+    _reject_pit(set)
     if measure not in TS_MEASURES:
         raise HTTPException(400, f"measure must be one of {TS_MEASURES}")
     def run():
@@ -357,13 +399,17 @@ async def trends(set: str = "HistFull",
         raise HTTPException(400, f"unknown dimension: {by}")
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
-        meas = [m[x] for x in mlist]
+        # a PIT:* set names the truncated-history hierarchy + its mirrored measures (Step 2)
+        set_cond, mnames = _set_context(cube, l, set, mlist)
+        meas = [m[x] for x in mnames]
+        back = dict(zip(mnames, mlist))
         if by:
             # additive breakdown (e.g. Net exposure by Factor) — one query is safe (no P&L vectors).
             # Book sliced for the same reason as /risk: these are weight-dependent measures and
             # the multi-book grand total collapses rather than aggregating into a portfolio.
             df = (cube.query(*meas, levels=[l["Date"], _lvl(l, by)],
-                             filter=(l["ScenarioSet"] == set) & (l["Book"] == book))
+                             filter=set_cond & (l["Book"] == book))
+                  .rename(columns=back)
                   .rename_axis(index={"Book": "Manager"})
                   .reset_index().sort_values("Date"))
             recs = [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
@@ -374,11 +420,12 @@ async def trends(set: str = "HistFull",
             dates = sorted({pd.Timestamp(d).date() for d in S["frames"]["specific_var"]["Date"]})
             recs = []
             for d in dates:
-                r = cube.query(*meas, filter=(l["Date"] == d) & (l["ScenarioSet"] == set)
+                r = cube.query(*meas, filter=(l["Date"] == d) & set_cond
                                             & (l["Book"] == book))
                 if len(r):
                     row = r.iloc[0]
-                    recs.append({"Date": d.isoformat(), **{x: _clean(row[x]) for x in mlist}})
+                    recs.append({"Date": d.isoformat(),
+                                 **{x: _clean(row[y]) for y, x in back.items()}})
         return {"set": set, "measures": mlist, "by": by, "records": recs}
     return await run_in_threadpool(run)
 
@@ -524,6 +571,34 @@ def _build_filter(l, fd: dict):
     return cond
 
 
+# The PIT:* truncated-history sets moved OFF the ScenarioSet hierarchy onto their own PITSet
+# hierarchy (2026-08-14 cube optimization Step 2 — they were 123 of ScenarioSet's 130 members and
+# every group-by-ScenarioSet paid for all of them). The API contract is unchanged: a PIT set is
+# still hidden from the dropdown and still addressable BY NAME in a ScenarioSet filter. Only the
+# honest-vol pair is mirrored onto the new hierarchy, so those are the only measures a PIT-filtered
+# query can serve; anything else 400s rather than silently reading the full-history number.
+PIT_MIRROR = {"Model vol": "PIT Model vol", "Scenario PnL vol": "PIT Scenario PnL vol"}
+
+
+def _pit_addressing(cube, fdict: dict, axis: list, mlist: list):
+    """Rewrite a ScenarioSet filter naming PIT:* sets onto the PITSet hierarchy + mirrored
+    measures. Returns (fdict, axis, measure_names_to_query, pit_mode)."""
+    vals = [str(v) for v in (fdict.get("ScenarioSet") or [])]
+    pit = [v for v in vals if v.startswith("PIT:")]
+    if not pit or not _has_pit(cube):
+        return fdict, axis, list(mlist), False
+    if len(pit) != len(vals):
+        raise HTTPException(400, "cannot mix PIT:* sets with the real scenario sets in one filter")
+    bad = [x for x in mlist if x in SCEN_DEP and x not in PIT_MIRROR]
+    if bad:
+        raise HTTPException(400, f"{bad} are not available on the PIT:* truncated-history sets — "
+                                 f"only {sorted(PIT_MIRROR)} are mirrored there (as-of risk "
+                                 "plumbing, not a browsable scenario family).")
+    fdict = {k: v for k, v in fdict.items() if k != "ScenarioSet"} | {"PITSet": pit}
+    axis = ["PITSet" if a == "ScenarioSet" else a for a in axis]
+    return fdict, axis, [PIT_MIRROR.get(x, x) for x in mlist], True
+
+
 # Factor contribution / Specific PnL / Realized PnL are baked PHYSICAL columns on tables keyed
 # WITHOUT Book (deliberately, so attribution stays immune to the what-if branch — see
 # barra_factor_risk_cube.py's long "KNOWN LIMITATION" comment near `w = (positions[...]`). With
@@ -594,35 +669,40 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
     for name in rlist + clist:          # dedupe, preserve order
         if name not in seen:
             seen.add(name); axis.append(name)
+    fdict, axis, mnames, pit_mode = _pit_addressing(cube, fdict, axis, mlist)
     filt = _build_filter(l, fdict)
     if stress_scenario is not None:
         filt = (filt & (l["StressShock"] == stress_scenario)) if filt is not None \
             else (l["StressShock"] == stress_scenario)
 
-    scen_ctx = ("ScenarioSet" in axis) or ("ScenarioSet" in fdict)
+    scen_ctx = ("ScenarioSet" in axis) or ("ScenarioSet" in fdict) or pit_mode
     warning = None
     if any(x in SCEN_DEP for x in mlist) and not scen_ctx:
         warning = ("Scenario measures need a ScenarioSet context — put ScenarioSet on an "
                    "axis or pick a single scenario; otherwise those cells are blank.")
-    meas_objs = [m[x] for x in mlist]
+    meas_objs = [m[x] for x in mnames]
+    _back = dict(zip(mnames, mlist))     # PIT mirror -> the name the caller asked for (identity off PIT)
     _kw = {"scenario": scenario} if scenario is not None else {}
 
     def _canon_ax(df):
         # the cube's level is named "Book"; the API's canonical dimension is "Manager"
+        df = df.rename(columns=_back) if pit_mode else df
         return df.rename_axis(index={"Book": "Manager"}) if "Book" in (df.index.names or []) else df
 
     df = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in axis], filter=filt, **_kw))
     out = {"rows": rlist, "cols": clist, "measures": mlist, "totals": bool(totals),
            "warning": warning, "records": _records(df)}
     if totals:
-        per_row = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in rlist],
+        def _ax(names):     # margins ride the same PIT rewrite as the main axis
+            return [("PITSet" if (pit_mode and x == "ScenarioSet") else x) for x in names]
+        per_row = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in _ax(rlist)],
                                        filter=filt, **_kw))
         out["per_row"] = _records(per_row)                              # Total column
         if clist:
-            per_col = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in clist],
+            per_col = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in _ax(clist)],
                                            filter=filt, **_kw))
             out["per_col"] = _records(per_col)                          # Total row
-        grand = cube.query(*meas_objs, filter=filt, **_kw)              # corner
+        grand = _canon_ax(cube.query(*meas_objs, filter=filt, **_kw))   # corner
         def _scalar(v):                                                 # null array-measures -> None
             try:
                 f = float(v); return None if math.isnan(f) else f
@@ -775,6 +855,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
     (date, member, pnl, rank). `rank` is the day's position once ordered by the BOOK total
     (worst→best), so the chart can keep DATE labels on x while drawing the sorted loss curve.
     Stacked, the members sum to the book P&L. The only API steps are ordering + reshape."""
+    _reject_pit(set)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         filt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == set)
@@ -960,6 +1041,7 @@ async def limits(date: str | None = None, set: str | None = None, book: str = "S
     """RAG status of the desk limits (limits.json) for one book. Defaults: latest date, the config's
     scenario_set. `set` overrides the scenario set the VaR/ES/HHI limits are read against."""
     scen = set or _load_limits().get("scenario_set", "HistFull")
+    _reject_pit(scen)
     def run():
         return _limits_result(date or _latest_date(), scen, book)
     return await run_in_threadpool(run)
@@ -1466,6 +1548,7 @@ async def backtest(set: str = "HistFull", date: str | None = None, book: str = "
     The fhs/lam=0.94 default was chosen by a sweep: at 99% it gives ~1.0% breaches (Kupiec-green),
     where equal HS under-covers (amber) and parametric ewma over-breaches on the fat tail (red).
     Defaults: HistFull (only set with a long daily history), latest date, 99% / 250-day."""
+    _reject_pit(set)
     if not (0.5 < alpha < 1):
         raise HTTPException(400, "alpha must be in (0.5, 1)")
     if window < 30:
@@ -1540,6 +1623,7 @@ async def drawdown(set: str = "HistFull", date: str | None = None, book: str = "
     what-if on the *held* book over history, not a live track record. Drawdown is a path lens that
     VaR/ES miss. Most meaningful on HistFull (long path); event sets give the drawdown over that
     window; hypo (length-1) sets are degenerate -> status insufficient."""
+    _reject_pit(set)
     def run():
         return _drawdown_result(date or _latest_date(), set, book)
     return await run_in_threadpool(run)
@@ -2361,18 +2445,25 @@ def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
     try:
         cube = S["cube"]; l, mm = cube.levels, cube.measures
         have_book = "Book" in {n for _, n in cube.hierarchies}
+        # The PIT sets moved to their own hierarchy + mirrored measures on 2026-08-14 (cube
+        # optimization Step 2 — they were 95% of ScenarioSet's members and every group-by paid
+        # for them). Same set NAMES, same numbers; a pre-split cube still answers via ScenarioSet.
+        pit_split = _has_pit(cube)
+        set_lvl = l["PITSet"] if pit_split else l["ScenarioSet"]
+        vol_n, mvol_n = (("PIT Scenario PnL vol", "PIT Model vol") if pit_split
+                         else ("Scenario PnL vol", "Model vol"))
         for d0 in list(ref_book):
             pit = f"PIT:{pd.Timestamp(d0).date()}"
-            flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (l["ScenarioSet"] == pit)
+            flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (set_lvl == pit)
             if have_book:
                 flt &= (l["Book"] == book)
-            q = cube.query(mm["Model vol"], mm["Specific vol"], filter=flt)
-            if not len(q) or pd.isna(q.iloc[0]["Model vol"]):
+            q = cube.query(mm[mvol_n], mm["Specific vol"], filter=flt)
+            if not len(q) or pd.isna(q.iloc[0][mvol_n]):
                 continue                                   # no PIT set for this month — numpy stands
-            qf = cube.query(mm["Scenario PnL vol"], levels=[l["Factor"]], filter=flt).reset_index()
-            bv, sv_ = float(q.iloc[0]["Model vol"]), float(q.iloc[0]["Specific vol"])
-            fv = {str(r["Factor"]): float(r["Scenario PnL vol"]) for _, r in qf.iterrows()
-                  if not pd.isna(r["Scenario PnL vol"])}
+            qf = cube.query(mm[vol_n], levels=[l["Factor"]], filter=flt).reset_index()
+            bv, sv_ = float(q.iloc[0][mvol_n]), float(q.iloc[0]["Specific vol"])
+            fv = {str(r["Factor"]): float(r[vol_n]) for _, r in qf.iterrows()
+                  if not pd.isna(r[vol_n])}
             diffs["book"] = max(diffs["book"], abs(bv - ref_book[d0]))
             diffs["specific"] = max(diffs["specific"], abs(sv_ - ref_spec[d0]))
             diffs["factor"] = max([diffs["factor"]] + [abs(fv[k] - v) for k, v in ref_fac[d0].items()

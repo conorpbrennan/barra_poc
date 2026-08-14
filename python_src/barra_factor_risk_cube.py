@@ -92,17 +92,35 @@ def build_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
         for f in wide.columns:
             rows.append({"ScenarioSet": name, "Factor": f,
                          "ShockVec": [float(shock.get(f, 0.0)) * float(vol[f])]})
-    # 4) POINT-IN-TIME sets: history truncated at each month-end ("PIT:YYYY-MM-DD"). These make
-    #    the cube's risk measures honest as-of a date: Model vol at (Date=t, ScenarioSet=PIT:t)
-    #    uses only information available at t — the full-history HistFull quietly uses later
-    #    data when charted back in time. ~10MB total; /meta hides them from the main dropdown
-    #    (served as `pit_sets`). The LAST PIT set is the full panel == HistFull by construction.
+    # NB the POINT-IN-TIME sets are NOT here — they live in their own table/hierarchy
+    # (build_pit_scenarios below). See the note there.
+    return pd.DataFrame(rows)
+
+
+def build_pit_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
+    """POINT-IN-TIME sets: the factor-return history truncated at each month-end
+    ("PIT:YYYY-MM-DD"), keyed (PITSet, Factor) -> ShockVec.
+
+    These make the cube's risk measures honest as-of a date: model vol at (Date=t, PITSet=PIT:t)
+    uses only information available at t — the full-history HistFull quietly uses later data when
+    charted back in time. The LAST PIT set is the full panel == HistFull by construction.
+
+    THEY ARE A SEPARATE TABLE AND HIERARCHY (2026-08-14, optimization Step 2). They used to be
+    ~123 extra members of ScenarioSet, i.e. 95% of that hierarchy's members — and every query that
+    groups BY ScenarioSet (the /dims member list, the notebook's set-comparison idiom, Risk HHI
+    across sets) paid for all of them, though nothing ever enumerates a PIT set: they are only
+    ever addressed BY NAME by the honest-vol path (`/pnl_attribution`'s `_pred_book_vols`).
+    Measured: `Risk HHI` by all 130 sets FAILED at ~11 s; by the 7 real sets, 0.48 s.
+    """
+    wide = (factor_ret[factor_ret["Factor"].isin(style)]
+            .pivot(index="Date", columns="Factor", values="Return").dropna(how="any").sort_index())
+    rows = []
     for t in _pit_month_ends(wide):
         w = wide.loc[:t]
         name = f"PIT:{t.date()}"
         for f in wide.columns:
-            rows.append({"ScenarioSet": name, "Factor": f, "ShockVec": w[f].to_numpy().tolist()})
-    return pd.DataFrame(rows)
+            rows.append({"PITSet": name, "Factor": f, "ShockVec": w[f].to_numpy().tolist()})
+    return pd.DataFrame(rows, columns=["PITSet", "Factor", "ShockVec"])
 
 
 def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
@@ -125,8 +143,8 @@ def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFr
     last = days(wide.index[-1:])                       # length-1 stamp for hypothetical sets
     for name in HYPO_SHOCKS:
         rows.append({"ScenarioSet": name, "DateVec": last})
-    for t in _pit_month_ends(wide):                    # PIT sets: axis mirrors the truncation
-        rows.append({"ScenarioSet": f"PIT:{t.date()}", "DateVec": days(wide.loc[:t].index)})
+    # No PIT rows: the PIT sets are their own hierarchy (build_pit_scenarios) and the honest-vol
+    # path reads scalars (vol) off them, never the per-day date dual.
     return pd.DataFrame(rows)
 
 
@@ -141,6 +159,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     scn_factors = [f for f in factor_ret["Factor"].unique() if f in set(exposures["Factor"]) or f == "Market"]
     scenarios = build_scenarios(factor_ret, scn_factors)
     scn_axis = build_scenario_axis(factor_ret, scn_factors)   # date axis dual of the shock/P&L vectors
+    pit_scn = build_pit_scenarios(factor_ret, scn_factors)    # truncated-history sets, own hierarchy
 
     # Leaf products: `Net exposure` is now MEASURE-LEVEL (Loading x the JOINED Positions
     # Weight under an OriginScope) — benchmarked 2026-07-03 on atoti 0.9.15 at parity with the
@@ -232,6 +251,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     t_sv  = session.read_pandas(specific,   keys={"Date", "Position"},           table_name="SpecificVar")
     t_scn = session.read_pandas(scenarios,  keys={"ScenarioSet", "Factor"},      table_name="Scenarios")
     t_axis = session.read_pandas(scn_axis,  keys={"ScenarioSet"},                table_name="ScenarioAxis")
+    t_pit = (session.read_pandas(pit_scn, keys={"PITSet", "Factor"}, table_name="PITScenarios")
+             if len(pit_scn) else None)
     t_sr = (session.read_pandas(spec_pnl, keys={"Date", "Position"}, table_name="SpecificPnL")
             if has_attribution else None)
     t_mgr = (session.read_pandas(managers, keys={"Book"}, table_name="Managers")
@@ -247,6 +268,11 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # is selected per (ScenarioSet, Factor); exposures fan across sets but Net exposure is unaffected.
     t_exp.join(t_scn, t_exp["Factor"] == t_scn["Factor"])
     t_scn.join(t_axis, t_scn["ScenarioSet"] == t_axis["ScenarioSet"])   # date axis, one row per set
+    if t_pit is not None:
+        # The SAME partial-join trick, second copy: PITSet is its own switch hierarchy, so the
+        # ~123 truncated-history sets are off ScenarioSet and every "group by ScenarioSet" costs
+        # 7 members instead of 130. Only the honest-vol measures are mirrored onto it (below).
+        t_exp.join(t_pit, t_exp["Factor"] == t_pit["Factor"])
     if t_mgr is not None:
         # Entity metadata for the Book dimension (Phase 2). PARTIAL join on Book only, off the
         # SAME Positions table whose un-mapped Book key already makes Book a hierarchy -- so this
@@ -288,6 +314,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # partial joins (Positions, Scenarios). In manual cube mode atoti auto-creates their
     # hierarchies once the mapped key columns (Date, Position, Factor) have hierarchies.
     assert {"Book", "ScenarioSet"} <= {n for _, n in h}, sorted(n for _, n in h)
+    if t_pit is not None:
+        assert "PITSet" in {n for _, n in h}, sorted(n for _, n in h)
     # Entity dimension (Phase 2): a SEPARATE hierarchy, not extra levels grafted onto "Book" --
     # deliberately conservative so the pre-existing, auto-created, single-level "Book" hierarchy
     # (and every filter/level lookup against it elsewhere, incl. risk_api.py) is untouched. Manager
@@ -448,6 +476,22 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # sector/name/factor like the VaR measures.
     m["Model vol"] = tt.math.sqrt(m["Scenario PnL vol"] ** 2 + m["Specific variance"])
     m["Model vol"].formatter = "DOUBLE[0.00%]"
+
+    # ---- the PIT mirror: the SAME engine driven by the PITSet switch --------------------------
+    # Exactly the three measures the honest-vol path consumes (`_pred_book_vols` in risk_api:
+    # per month d0 it reads book sigma, its specific half, and the per-factor P&L vol at
+    # PITSet=PIT:d0). Nothing else is mirrored -- the PIT sets are plumbing for as-of risk, not a
+    # browsable scenario family, and each mirrored measure is another vector expression to
+    # evaluate. `Specific vol`/`Specific variance` need no mirror: they are scenario-independent
+    # and read correctly under a PITSet slice like any other.
+    if t_pit is not None:
+        m["PIT Scenario PnL vector"] = tt.agg.sum(
+            m["Net exposure"] * tt.agg.single_value(t_pit["ShockVec"]),
+            scope=tt.OriginScope({l["Factor"]}))
+        m["PIT Scenario PnL vol"] = tt.array.std(m["PIT Scenario PnL vector"])
+        m["PIT Model vol"] = tt.math.sqrt(m["PIT Scenario PnL vol"] ** 2 + m["Specific variance"])
+        for _mn in ("PIT Scenario PnL vol", "PIT Model vol"):
+            m[_mn].formatter = "DOUBLE[0.00%]"
     # approximate total tail: factor scenario VaR with an independent idiosyncratic tail (z=2.326)
     m["Total VaR 99"] = tt.math.sqrt(m["Scenario VaR 99"] * m["Scenario VaR 99"]
                                      + (2.326 * m["Specific vol"]) ** 2)
@@ -670,7 +714,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         m[_mn].formatter = "DOUBLE[0.0%]"
 
     print(f"cube built: {len(exposures):,} leaf rows, {len(style)} style factors, "
-          f"{scenarios['ScenarioSet'].nunique()} scenario sets")
+          f"{scenarios['ScenarioSet'].nunique()} scenario sets, "
+          f"{pit_scn['PITSet'].nunique()} PIT sets")
     return session, cube
 
 
