@@ -51,6 +51,38 @@ on ScenarioAxis (else tail sizes `_k975`/`_k99` and the exceedance rate read pad
 `array.std/quantile/n_lowest` NaN semantics must be verified — if any helper doesn't skip NaN,
 padding needs a companion mask or this step is off. Verify first on a scratch session.
 
+**Results (2026-08-14): NOT DONE — the verification gate failed, and the safe fallback measured
+worse.** The scratch probe (atoti 0.9.15, one 5-element vector loaded twice, once padded to 8
+with NaN) says the array helpers **propagate NaN, they do not skip it**. NB the padded vector
+can't even be loaded through `read_pandas` — pandas→arrow maps NaN to arrow NULL and the loader
+rejects it (`IllegalStateException: Value at index is null`); it takes `read_arrow` with
+`from_pandas=False`. Measured, padded vs true:
+
+| helper | true (len 5) | padded (len 8, 3×NaN) | verdict |
+|---|---|---|---|
+| `array.len` | 5 | 8 | reads the padding |
+| `array.mean` / `std` / `sum` | 0.006 / 0.03647 / 0.03 | NaN / NaN / NaN | propagates |
+| `array.quantile(0.2)` | −0.024 | −0.008 | wrong (quantile over n=8) |
+| `array.quantile_index(0.2)` | 3 | 1 | wrong |
+| `array.min`, `n_lowest(2)` mean | −0.04, −0.03 | −0.04, −0.03 | right by luck (NaN never wins a min) |
+| `vector[6]` (past real length) | error | NaN | the one thing padding would buy |
+
+So VaR/ES/vol on every non-HistFull set would go NaN. A companion mask can't rescue it either —
+there is no elementwise NaN filter in the array API, only length-preserving `positive_values`/
+`negative_values`. Padding is off, permanently, on this SDK.
+
+The one numerically-safe half of the step was then tried alone and **also reverted**: making
+`Scenario n` a physical `VecLen` column on `ScenarioAxis` (instead of `tt.array.len` of the P&L
+vector), so the ScenarioDay in-range gate stops depending on the whole vector being evaluated.
+Harness (`docs/cube_bench_step1_20260814.json`) says it is **3.4× worse**: `scenario_day_path`
+10.00 s → 33.93 s cold (warm 10.91 → 33.52), `scenario_day_by_sector` still fails but now at
+42.9 s instead of 19.5 s, and the set-enumeration family regressed too (`var99_by_set_all130`
+0.59 → 1.44 s, `model_vol_by_set_all130` 1.05 → 2.75 s, `hhi_small_book_all130` 0.17 → 1.69 s).
+Reading a joined scalar column per parameter-hierarchy member is evidently dearer than reading
+the length off the vector the cell has already materialised. Build time and JVM RSS were
+unchanged (56.2 s, 7.8 G). **Hotspot 1 is therefore unaddressed** — it needs a different idea
+(see Step 7's note), not a variant of this one.
+
 **Step 2 — split the PIT sets out of the browsable ScenarioSet.** (Hotspot 2.)
 Move `PIT:*` rows to their own table/hierarchy (`PITSet`) with a mirrored vector measure used
 only by the honest-vol path, leaving `ScenarioSet` with the 7 real sets. Every `group by
