@@ -5,9 +5,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 A proof-of-concept Barra-style equity factor-risk model built entirely on free/public data,
-originally demoed against the Soros Fund Management 13F book and extended (2026-07-30) to
-eleven hedge-fund/asset-manager 13F books — see "Multi-manager 13F integration" below. It
-splits cleanly into two halves:
+originally demoed against the Soros Fund Management 13F book, extended (2026-07-30) to eleven
+hedge-fund/asset-manager 13F books, and again (2026-08-14) to **124 books** from ActiveViam's
+Buyside prospect list — see "Multi-manager 13F integration" and "Buyside-list expansion" below.
+It splits cleanly into two halves:
 
 1. **Frame builders** pull raw data and emit seven canonical parquet frames, plus an optional
    eighth (`managers`, multi-manager entity metadata).
@@ -806,7 +807,7 @@ editing its data-fetch functions or constants affects both builders.
 
 All sources are free/public, fetched over HTTP with a polite disk cache:
 
-- **positions** → SEC EDGAR 13F, one CIK per manager in `MANAGERS` (11 books by default; Soros
+- **positions** → SEC EDGAR 13F, one CIK per manager in `MANAGERS` (124 books by default since 2026-08-14; Soros
   1029160 is the original and still the reference book) — each book held as a *weight overlay*.
 - **crosswalk** → OpenFIGI v3 (CUSIP→FIGI/ticker) + SEC `company_tickers.json` (ticker→CIK).
 - **fundamentals** → SEC EDGAR XBRL company-facts API (point-in-time, CIK-keyed).
@@ -875,9 +876,37 @@ has unit market exposure (`x_Market = Σ weights`) and the directional market re
 (~3.5% daily 99% VaR) rather than style-tilt-only (~1.5%). Market loadings are added in
 `build_frames` *after* `regress_factors` so the style factor returns are unaffected.
 
+## Buyside-list expansion — 124 books (2026-08-14)
+
+`MANAGERS` grew 11 → **124 books**: ActiveViam's prospect list ("Buy Side NAM target names July
+2026", Kathy Perrotte's email of 2026-08-14) resolved against SEC EDGAR — 113 new active 13F-HR
+filers added, 22 names excluded with reasons, four books stitched across two CIKs Elliott-style
+(BlackRock 2024-holdco, Caxton, Jump, Appaloosa). Full method, exclusion table, and measured
+consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key operational facts:
+
+- **123 books have positions** — MetLife's 13F is 6 equity CUSIPs ever, an empty equity book;
+  it stays in `MANAGERS` but never reaches the cube/UI (`/meta.managers` reads the positions
+  frame). The measured resolved universe is ~5,197 securities (`UNIVERSE_CAP` now 200,000).
+- **A full 124-book build takes ~60 min on a warm HTTP cache**; `_get`/`_post_json` retry
+  transient timeouts/429/5xx (a single SEC timeout used to kill the whole pull).
+- **Cube memory**: the JVM runs with an explicit heap (`BARRA_CUBE_XMX`, default 32g in
+  `build_cube`); the 124-book cube idles ~8G RSS after a ~60-70s load and grows to ~37G under
+  heavy queries. All-123-books scenario measures in ONE query trip the 20M-row intermediate
+  limit — slice one book (~3s) or loop; the query time limit is 120s.
+- **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
+  `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
+  `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".
+- **Precomputes are manager-aware**: all five single-book precompute scripts take a book (CLI
+  arg / `run(book=)`) and write `<stem>.<Book>.parquet` (legacy unsuffixed = Soros);
+  `_resolve_artifact` serves a book's own artifact first, else the Phase-3 guard applies.
+  `/limits` thresholds remain Soros-calibrated (disclosed via `calibrated_for`).
+- **The largest manager is Vanguard** ($6.4tn latest-filing MV); `notebooks/
+  vanguard_13f_risk.ipynb` is the executed largest-manager notebook run (24g notebook-cube
+  heap, Risk HHI cell scoped to HistFull, altair row cap disabled — all disclosed in-cell).
+
 ## Multi-manager 13F integration (2026-07-30)
 
-The book was Soros-only through 2026-07-29. `barra_build_frames.py` now pulls **11 books** by
+The book was Soros-only through 2026-07-29. `barra_build_frames.py` first grew to **11 books** by
 default (`MANAGERS`, one row per book; CIKs verified against EDGAR's exact-name-match +
 rejected-alternates check, phase0-recon): Soros (1029160) · Bridgewater Associates (1350694) ·
 Citadel Advisors (1423053) · Millennium Management (1273087) · Renaissance Technologies
