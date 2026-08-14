@@ -141,6 +141,21 @@ Zero-risk numerically (same DAG); the diff shows whether ActivePivot was already
 anonymous subtrees or not. If warm decomposition times don't move, revert for readability's
 sake or keep for maintainability — either way the question is settled by data.
 
+**Results (2026-08-14): implemented, measured, REVERTED — the answer is "ActivePivot was already
+deduplicating"** (`docs/cube_bench_step3_20260814.json`, diffed against Step 2). Twelve book-level
+lifts were named as hidden measures via a `_book(name, measure)` helper — `Book Marginal Total
+VaR 99` (4 call sites), `Book Scenario VaR 99` (2), `Book Specific variance` (2), `Book PnL
+vector`, `Book PnL vol` (the `tt.array.std` rebuilt inside `_cov_book`), `Book Model vol`, `Book
+Total VaR 99`, and the three `Book Marginal *` denominators. The decomposition family did not
+move: `marginal_tvar_by_position` warm 0.39 → 0.41 s, `pct_model_vol_by_position` 0.42 → 0.41,
+`top5_share_scalar` 0.01 → 0.01, `hhi_scalar_histfull` 0.01 → 0.01, `marginal_var_by_factor`
+0.05 → 0.06. Nothing else in the suite moved beyond the ±30% cold-query noise band either
+(`model_vol_by_book_123` 0.60 → 1.01 s is the largest, and it sits inside the run-to-run spread
+seen across the four runs so far). **Build time went the wrong way: 60.5 s → 71.3 s** — twelve
+more registered measures is not free at cube-construction time. No query win, a build cost, and a
+dozen extra measures on the cube surface: reverted. The duplication in the source is a
+readability question, not a performance one.
+
 **Step 4 — slim the Positions load + build-time prep.** Feed `read_pandas` only
 (Date, Book, Position, Weight) [−25% on that stage, −~185 MB JVM]; move the attribution prep
 (the `w` dedupe, FactorPnL/SpecPnL derivation, lines 175–213) into the builder as persisted
