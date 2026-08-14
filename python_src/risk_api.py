@@ -3598,6 +3598,7 @@ today's book). Then short sections: risk trend, exposure drift, headroom. End wi
 
 class TrendsAnalysisBody(BaseModel):
     set: str = "HistFull"
+    book: str = "Soros"
     notes: str | None = None
 
 
@@ -3610,8 +3611,9 @@ async def trends_analysis(body: TrendsAnalysisBody):
     client = _anthropic()
     book_ts = await trends(set=body.set,
                            measures="Model vol,Scenario VaR 99,Scenario ES 97.5,"
-                                    "Specific vol,Total VaR 99")
-    fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor")
+                                    "Specific vol,Total VaR 99",
+                           book=body.book)
+    fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor", book=body.book)
 
     def rnd(v):
         return round(v, 4) if isinstance(v, (int, float)) else v
@@ -3627,6 +3629,7 @@ async def trends_analysis(body: TrendsAnalysisBody):
     }
     payload = json.dumps({
         "scenario_set": body.set,
+        "book": body.book,
         "risk_series": risk_series,
         "exposure_series": exposure_series,
         "limits": _load_limits().get("book", {}),

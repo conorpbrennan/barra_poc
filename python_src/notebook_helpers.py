@@ -28,10 +28,42 @@ def build(port: int = CUBE_PORT):
         session, cube = build()
         h, l, m = cube.hierarchies, cube.levels, cube.measures
     """
-    return build_cube(load_frames(), port=port)
+    session, cube = build_cube(load_frames(), port=port)
+    # The notebook container is jailed to 2 CPUs, and on the 11-book frames the scenario-vector
+    # queries (e.g. an Evt window's Scenario PnL) can exceed ActivePivot's 30s default query time
+    # limit there — the host API cube on all cores never hits it. Raised for this session only.
+    cube.shared_context["queriesTimeLimit"] = 180
+    return session, cube
 
 
-def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3, cmap: str = "Blues"):
+# Anchor colours of matplotlib's "Blues" (ColorBrewer), so the pure-python ramp below matches the
+# app's look without importing matplotlib — the notebook container is air-gapped and ships only
+# pure-python libs (altair/narwhals staged at data/_pylibs), so Styler.background_gradient's
+# matplotlib dependency is exactly the thing we can't have.
+_BLUES = [(247, 251, 255), (198, 219, 239), (107, 174, 214), (33, 113, 181), (8, 48, 107)]
+
+
+def _blues_css(s: pd.Series) -> list[str]:
+    """Per-column CSS for a Blues heatmap: min→lightest, max→darkest, NaN→unstyled. Text flips to
+    white on dark cells (same intent as pandas' text_color_threshold)."""
+    v = pd.to_numeric(s, errors="coerce")
+    lo, hi = v.min(), v.max()
+    if pd.isna(lo) or hi == lo:
+        return [""] * len(s)
+    out = []
+    for x in (v - lo) / (hi - lo):
+        if pd.isna(x):
+            out.append("")
+            continue
+        seg = min(int(x * (len(_BLUES) - 1)), len(_BLUES) - 2)
+        t = x * (len(_BLUES) - 1) - seg
+        r, g, b = (round(a + (b_ - a) * t) for a, b_ in zip(_BLUES[seg], _BLUES[seg + 1]))
+        lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+        out.append(f"background-color: rgb({r},{g},{b}); color: {'#f1f1f1' if lum < 0.45 else '#111'}")
+    return out
+
+
+def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3):
     """Return a pandas Styler reproducing the app's grid look functionally: a per-column blue
     heatmap over the numeric measure columns + percent/fixed formatting + an em-dash for nulls.
 
@@ -41,5 +73,5 @@ def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3, cmap: str =
     num = list(df.select_dtypes("number").columns)
     fmt = (f"{{:.{prec}%}}" if pct else f"{{:.{prec}f}}")
     return (df.style
-              .background_gradient(cmap=cmap, subset=num, axis=0)   # per-column, like the app
+              .apply(_blues_css, subset=num, axis=0)   # per-column heatmap, like the app
               .format({c: fmt for c in num}, na_rep="—"))

@@ -67,8 +67,13 @@ WorkingDir=/work
 Tmpfs=/tmp
 DropCapability=all
 NoNewPrivileges=true
-# resource caps (PodmanArgs: these keys aren't first-class in Podman 4.9 Quadlet)
-PodmanArgs=--memory=6g --memory-swap=6g --cpus=2 --pids-limit=400
+# resource caps (PodmanArgs: these keys aren't first-class in Podman 4.9 Quadlet).
+# 12g, raised from 6g 2026-08-05: the multi-manager build (11 books, ~22k names) needs ~6.5 GB
+# for the in-notebook atoti cube alone (measured on flexagg-api against the same frames), so the
+# old 6g cap OOM-killed the kernel mid-build — cells ran with no output.
+# cpus raised 2 -> 4 (2026-08-05, host has 20): on 2 cores the 11-book scenario queries ran past
+# ActivePivot's 30s query time limit (notebook_helpers also raises queriesTimeLimit to 180s).
+PodmanArgs=--memory=12g --memory-swap=12g --cpus=4 --pids-limit=400
 
 [Service]
 Restart=always

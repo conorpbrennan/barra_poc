@@ -20,16 +20,16 @@ function col(recs: Rec[], xKey: string, yKey: string) {
 }
 
 export function Trends() {
-  const { scenario } = useApp();
-  const book = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol");
-  const byFactor = useTrends(scenario, "Net exposure", "Factor");
+  const { scenario, book } = useApp();
+  const bookTrends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol", undefined, book);
+  const byFactor = useTrends(scenario, "Net exposure", "Factor", book);
 
   return (
     <main className="lens">
       <h1>Trends</h1>
-      <p className="sub">Book risk over the full calendar · scenario {scenario}</p>
+      <p className="sub">{book} · book risk over the full calendar · scenario {scenario}</p>
 
-      <QueryState q={book}>
+      <QueryState q={bookTrends}>
         {(data) => {
           const r = data.records;
           const dates = r.map((rec) => String(rec.Date ?? "").slice(0, 10));
@@ -85,8 +85,8 @@ export function Trends() {
       <div style={{ maxWidth: "46rem" }}>
         <h2>Risk-manager read</h2>
         <StreamPanel path="/trends/analysis"
-          body={{ set: scenario }}
-          cacheKey={`trends:${scenario}`}
+          body={{ set: scenario, book }}
+          cacheKey={`trends:${scenario}:${book}`}
           label="Generate trends read" />
       </div>
     </main>

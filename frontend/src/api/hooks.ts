@@ -37,10 +37,10 @@ export function usePivot(
   });
 }
 
-export function useTrends(set: string, measures: string, by?: string) {
+export function useTrends(set: string, measures: string, by?: string, book = "Soros") {
   return useQuery({
-    queryKey: ["trends", set, measures, by ?? ""],
-    queryFn: () => apiGet<TrendsResult>("/trends", { set, measures, by }),
+    queryKey: ["trends", set, measures, by ?? "", book],
+    queryFn: () => apiGet<TrendsResult>("/trends", { set, measures, by, book }),
     ...common,
   });
 }
@@ -245,10 +245,10 @@ export function usePnlNames(from?: string, to?: string, book = "Soros") {
   });
 }
 
-export function useExposures(date: string) {
+export function useExposures(date: string, book = "Soros") {
   return useQuery({
-    queryKey: ["exposures", date],
-    queryFn: () => apiGet<Rec[]>("/exposures", { date }),
+    queryKey: ["exposures", date, book],
+    queryFn: () => apiGet<Rec[]>("/exposures", { date, book }),
     enabled: !!date,
     ...common,
   });

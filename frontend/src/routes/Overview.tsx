@@ -26,12 +26,12 @@ function series(recs: Rec[] | undefined, key: string): (number | null)[] {
 export function Overview() {
   const { date, scenario, book, ready } = useApp();
 
-  const trends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5");
+  const trends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5", undefined, book);
   const wi = useWhatif(date, book, []);
   const limits = useLimits(date, scenario, book);
   const dq = useDq();
   const bt = useBacktest("HistFull", date, book);
-  const exposures = useExposures(date);
+  const exposures = useExposures(date, book);
   const contrib = useContributions(date, book);
   const lk = usePnlLinkage(3, undefined, book);
   const changed = useWhatChanged(date, undefined, book);
