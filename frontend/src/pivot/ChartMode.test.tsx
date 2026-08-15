@@ -15,11 +15,13 @@ vi.mock("react-vega", () => ({
 import { ChartMode, type VegaSpec } from "./ChartMode";
 import type { PivotQuery } from "../api/types";
 
+// The fast per-day path (Day/DayDate levels + PnL at day, sliced by DaySet) — the shape the saved
+// COVID chart views author since 2026-08-15; the legacy ScenarioDay path is not used here.
 const QUERIES: PivotQuery[] = [
-  { name: "Scenario P&L", rows: ["ScenarioDay"], cols: [], measures: ["Scenario PnL at day"],
-    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"] } },
-  { name: "Scenario P&L by Sector", rows: ["ScenarioDay", "Sector"], cols: [], measures: ["Scenario PnL at day"],
-    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"] } },
+  { name: "Scenario P&L", rows: ["Day", "DayDate"], cols: [], measures: ["PnL at day"],
+    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
+  { name: "Scenario P&L by Sector", rows: ["Day", "DayDate", "Sector"], cols: [], measures: ["PnL at day"],
+    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
 ];
 const CHART: VegaSpec[] = [
   { source: "Scenario P&L", mark: "line", data: { name: "x" } },
@@ -32,7 +34,7 @@ beforeEach(() => {
     const rows = u.searchParams.get("rows") || "";
     // path query -> 3 day rows; sector breakout -> 6 rows. Distinguishable by the rows param.
     const n = rows.includes("Sector") ? 6 : 3;
-    const records = Array.from({ length: n }, (_, i) => ({ ScenarioDay: i, "Scenario PnL at day": i * 0.01 }));
+    const records = Array.from({ length: n }, (_, i) => ({ Day: i, DayDate: `2020-03-0${i + 1}`, "PnL at day": i * 0.01 }));
     return { ok: true, status: 200, json: async () => ({ records }), text: async () => "" };
   }) as unknown as typeof fetch);
 });
