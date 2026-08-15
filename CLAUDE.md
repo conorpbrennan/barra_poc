@@ -890,9 +890,22 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
 - **A full 124-book build takes ~60 min on a warm HTTP cache**; `_get`/`_post_json` retry
   transient timeouts/429/5xx (a single SEC timeout used to kill the whole pull).
 - **Cube memory**: the JVM runs with an explicit heap (`BARRA_CUBE_XMX`, default 32g in
-  `build_cube`); the 124-book cube idles ~8G RSS after a ~60-70s load and grows to ~37G under
-  heavy queries. All-123-books scenario measures in ONE query trip the 20M-row intermediate
-  limit — slice one book (~3s) or loop; the query time limit is 120s.
+  `build_cube`; `-Xms` via `BARRA_CUBE_XMS`, default 2g — measured optimum, 12g is worse); the
+  124-book cube idles ~6-8G RSS after the load and grows to ~37G under heavy queries. All-123-books
+  scenario measures in ONE query trip the 20M-row intermediate limit — slice one book (~3s) or
+  loop; the query time limit is 120s.
+- **Cube start-up is ~23s** (was ~57-64s until 2026-08-15). Two structural facts, both measured —
+  set `BARRA_CUBE_TIMINGS=1` for the per-stage table (`BUILD_TIMINGS`, folded into `cube_bench`'s
+  `stages.build_stages_s`): (1) **`build_cube` defines the model on SEEDED tables** (`head(1000)`)
+  and calls `Table.load(full_frame)` at the very end, because joins/hierarchies/parameter
+  dimensions/measure publishes all re-index whatever the tables already hold; (2) **every measure
+  is published in one batch** (`_DeferredMeasures` + `tt.mapping_lookup(check=False)`) — `m[name]
+  = expr` republishes the whole measure DAG per call and every `m[name]` read is a server
+  round-trip. The measure DAG, its order, and every number are unchanged. Optional 3.8s more:
+  `python_src/barra_persist_attribution.py` persists the attribution prep (a `FactorPnL` column on
+  `exposures` + a `specific_pnl` frame) so the cube skips it — **regenerate or delete both after
+  any rebuild**; absent, the cube derives them as before. Full attribution, rejected levers, and
+  the remaining floor: `docs/cube-opt-round2-startup.md`.
 - **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
   `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
   `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".

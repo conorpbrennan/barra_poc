@@ -249,6 +249,10 @@ address:
   hierarchy (e.g. the last 500 days) or serving the drill from the vector in the API.
 - **Build time** (~64 s) is dominated by `read_pandas` of the 6 M-row `exposures` table. A
   provider adds build time, it doesn't remove any.
+  **[Superseded 2026-08-15 — that attribution was a guess and it was wrong.** Instrumented,
+  `read_pandas` of exposures is **6%** of the build; half of it was Python↔JVM round-trips for
+  measure/hierarchy registration. Round 2 took `build_cube` to **22.8 s**:
+  `docs/cube-opt-round2-startup.md`.**]**
 
 Also unresolved by a provider and worth flagging as the real next candidate: `/dims` at ~15 s,
 whose cost is `contributors.COUNT` **by Book** over those 6 M rows (13.1 s of the 14.9 s total,

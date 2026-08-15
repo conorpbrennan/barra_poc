@@ -26,11 +26,101 @@ The "one switch" is the ScenarioSet hierarchy: slice it, and the same measure gi
 from __future__ import annotations
 import os
 import pathlib
+import time
 import numpy as np
 import pandas as pd
 import atoti as tt
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
+
+# ---- build-stage timing (BARRA_CUBE_TIMINGS=1) --------------------------------------------
+# Start-up was believed to be dominated by `read_pandas` of the 6M-row exposures table, but that
+# was never attributed -- there was no per-stage clock inside build_cube. `_stage` is a no-op
+# context manager unless the env flag is set (one dict write and a perf_counter pair otherwise),
+# so it costs nothing in production. The last build's attribution is left on BUILD_TIMINGS for a
+# harness/test to read without re-parsing stdout.
+BUILD_TIMINGS: dict[str, float] = {}
+_TIMINGS_ON = bool(os.environ.get("BARRA_CUBE_TIMINGS"))
+_MARK_T0 = [0.0]
+
+
+def _mark(name: str) -> None:
+    """Close the stage that ended here: the time since the previous mark, keyed `name`.
+    A single env check + two floats when off; `_mark_reset` opens the first stage."""
+    if not _TIMINGS_ON:
+        return
+    now = time.perf_counter()
+    dt = now - _MARK_T0[0]
+    _MARK_T0[0] = now
+    BUILD_TIMINGS[name] = BUILD_TIMINGS.get(name, 0.0) + dt
+    print(f"    [stage] {name:34s} {dt:7.2f}s", flush=True)
+
+
+def _mark_reset() -> None:
+    if _TIMINGS_ON:
+        BUILD_TIMINGS.clear()
+        _MARK_T0[0] = time.perf_counter()
+
+
+class _DeferredMeasures:
+    """Collect every measure definition + formatter, publish them in ONE batch.
+
+    Why (measured, 2026-08-15): `cube.measures[name] = expr` goes through atoti's
+    `Measures._update_delegate`, which distils the one definition and then calls
+    `py4j_client.publish_measures(cube)` -- a FULL republish of the cube's measure DAG, PER
+    MEASURE. And every `m["X"]` READ is a `find_measure` GraphQL round-trip, as is every
+    `.formatter =`. On this cube that is ~55 republishes + ~120 round-trips = **21 s of a 57 s
+    build**, none of it computing anything.
+
+    `Measures.update({...})` distils the whole mapping and publishes ONCE, and
+    `tt.mapping_lookup(check=False)` (public API) drops the lookup round-trip -- which also
+    lets a definition REFERENCE a measure defined later in the same batch, since nothing is
+    validated against the server until the flush. Insertion order is dependency order, so the
+    distil pass resolves each reference against an already-distilled name.
+
+    The DAG published is identical to the one-at-a-time build -- same definitions, same order,
+    same formatters. Only the number of server round-trips changes.
+
+    NOT everything can be deferred to a single batch: `tt.array.*` helpers call
+    `check_array_type(measure)` -> `Measure.data_type`, which asks the server for the type of a
+    measure that a pending batch has not published yet (`NoSuchElementException: No value
+    present`). So the build calls `flush()` at the three points where an array helper takes a
+    MEASURE (not an expression) as its argument -- `Scenario PnL vector`, `Scenario dates
+    (epoch)`, `PIT Scenario PnL vector`. Four publishes instead of ~55; expressions built on
+    OPERATIONS (`book_pnl_vec`, `_up`, `_shock_vec`, ...) never trip the check.
+    """
+
+    def __init__(self, measures):
+        self._m = measures
+        self.defs: dict = {}
+        self.formats: dict[str, str] = {}
+
+    def __setitem__(self, name: str, definition) -> None:
+        self.defs[name] = definition
+
+    def __getitem__(self, name: str):
+        # A reference for use inside another definition. Unchecked: no server round-trip, and
+        # forward references (to a measure later in this same batch) are legal.
+        with tt.mapping_lookup(check=False):
+            return self._m[name]
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.defs
+
+    def fmt(self, name: str, formatter: str) -> None:
+        """Deferred `m[name].formatter = formatter` (each of those is its own mutation)."""
+        self.formats[name] = formatter
+
+    def flush(self) -> None:
+        """Publish everything collected since the last flush (a no-op when nothing is pending)."""
+        if not self.defs and not self.formats:
+            return
+        with tt.mapping_lookup(check=False):
+            if self.defs:
+                self._m.update(self.defs)
+            for name, formatter in self.formats.items():
+                self._m[name].formatter = formatter
+        self.defs, self.formats = {}, {}
 FRAME_NAMES = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var"]
 # specific_returns: v2-only (PnL attribution); v1 data degrades gracefully.
 # managers: multi-manager entity metadata (Phase 2, keyed on Book); absent on any build before it
@@ -157,6 +247,7 @@ def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFr
 
 
 def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
+    _mark_reset()
     exposures, positions = frames["exposures"], frames["positions"]
     securities, factor_meta = frames["securities"], frames["factor_meta"]
     factor_ret, specific = frames["factor_returns"], frames["specific_var"]
@@ -164,10 +255,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     style = [f for f in factor_ret["Factor"].unique() if f != "Market"]   # the 10 style factors (for reporting)
     # INCLUDE Market in the scenarios: it now carries a leaf loading of 1.0 per name (the v2
     # intercept), so the directional market factor return flows through dPnL. x_Market = Σ weights.
-    scn_factors = [f for f in factor_ret["Factor"].unique() if f in set(exposures["Factor"]) or f == "Market"]
+    # NB `.unique()` before the set(): `set(exposures["Factor"])` iterates 6M boxed Python strings
+    # and measured ~3 s of the build for a 23-element answer.
+    _exp_factors = set(exposures["Factor"].unique())
+    scn_factors = [f for f in factor_ret["Factor"].unique() if f in _exp_factors or f == "Market"]
+    _mark("prep.factor_lists")
     scenarios = build_scenarios(factor_ret, scn_factors)
     scn_axis = build_scenario_axis(factor_ret, scn_factors)   # date axis dual of the shock/P&L vectors
+    _mark("prep.build_scenarios")
     pit_scn = build_pit_scenarios(factor_ret, scn_factors)    # truncated-history sets, own hierarchy
+    _mark("prep.build_pit_scenarios")
 
     # Leaf products: `Net exposure` is now MEASURE-LEVEL (Loading x the JOINED Positions
     # Weight under an OriginScope) — benchmarked 2026-07-03 on atoti 0.9.15 at parity with the
@@ -214,6 +311,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
              [["Date", "Position", "Weight"]])
         exposures = exposures.merge(w, on=["Date", "Position"], how="left")
         exposures["WLoading"] = exposures["Loading"] * exposures["Weight"].fillna(0.0)
+    _mark("prep.wloading_merge")
 
     # ---- PnL attribution (Step 15, v2-only): forward-month realized contributions -------------
     # Convention: the row at month-end d0 carries the PnL over the FOLLOWING month (d0, d1] — the
@@ -248,6 +346,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         spec_pnl["SpecPnL"] = spec_pnl["Weight"] * spec_pnl["SpecificReturn"]
         spec_pnl = spec_pnl.loc[spec_pnl["SpecPnL"] != 0.0, ["Date", "Position", "SpecPnL"]]
     exposures = exposures.drop(columns=["Weight", "WLoading"], errors="ignore")   # prep-only
+    _mark("prep.attribution_pandas")
     # NB: the same trick must NOT be applied to specific_var — it is a *joined* table, and a
     # plain SUM over a joined column fans out by fact-row multiplicity (each (Date, Position)
     # specvar row is reached once per factor leaf -> ~10x inflated variance, observed √10
@@ -265,26 +364,63 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # -Xms2g starts small instead of committing a big heap up front, and G1PeriodicGCInterval
     # (5 min) makes G1 run a concurrent cycle while IDLE, so the burst is released between
     # sessions rather than held until the next allocation pressure.
+    # -Xms is the measured optimum, not an assumption: -Xms12g was tried on the theory that the
+    # 17.5M-row load would stop expanding the heap, and came out WORSE (40.4 s vs 38.8 s at that
+    # point in the programme). BARRA_CUBE_XMS overrides it. Application class-data sharing
+    # (`-XX:+AutoCreateSharedArchive`, JDK 21) was also tried against `Session.start`'s 5.3 s and
+    # REJECTED: this jdk4py runtime never writes the archive (verified down to a bare
+    # `java -version`; the JDK's own base archive is already mapped), and session.start measured
+    # 5.29 s -> 5.30 s. See docs/cube-opt-round2-startup.md.
+    xms = os.environ.get("BARRA_CUBE_XMS", "2g")
     session = tt.Session.start(tt.SessionConfig(port=port, java_options=[
-        f"-Xmx{xmx}", "-Xms2g", "-XX:G1PeriodicGCInterval=300000"]))
+        f"-Xmx{xmx}", f"-Xms{xms}", "-XX:G1PeriodicGCInterval=300000"]))
+    _mark("session.start")
     # ^ port pinned so the UI URL survives restarts
-    t_exp = session.read_pandas(exposures,  keys={"Date", "Position", "Factor"}, table_name="Exposures")
+    #
+    # ---- MODEL FIRST, DATA LAST (2026-08-15) -------------------------------------------------
+    # The three big tables are created from a SEED of their first `SEED_ROWS` rows, and the full
+    # frames are loaded at the very END of build_cube, after every join, hierarchy, parameter
+    # dimension and measure exists. Measured on this build: joins 3.9 s -> 0.3 s, hierarchy
+    # creation 6.8 s -> 0.4 s, create_cube 0.8 s -> 0.4 s, because each of those steps re-indexes
+    # / refreshes whatever the tables already hold; the bulk load that follows costs only ~2 s
+    # more than the up-front loads did. Net ~9 s off the build.
+    #
+    # Seeding (rather than `session.create_table` with a hand-written schema) keeps atoti's own
+    # pandas type inference as the ONE source of the schema -- and inference reads the frame's
+    # DTYPES, not its values, so `head()` infers exactly what the full frame would. The tables are
+    # KEYED, so re-loading the seed rows inside the full frame upserts them; no duplicates. The
+    # loaded columns are all non-null (checked: exposures/positions/specific_var/specific_pnl have
+    # zero NaN in every column the cube reads), so no seed/full nullability mismatch is possible.
+    # Small tables (securities, factor_meta, scenarios, the PIT sets, managers) are loaded whole
+    # up front -- together they cost ~1.5 s and several of them back a hierarchy.
+    SEED_ROWS = 1000
+    t_exp = session.read_pandas(exposures.head(SEED_ROWS),
+                                keys={"Date", "Position", "Factor"}, table_name="Exposures")
     # SLIM (optimization Step 4): only the columns a measure reads go into the JVM. MV and ADV are
     # never read by any measure -- /liquidity and the what-if editor read them from the pandas
     # frames on S["frames"], which keep their full width. Measured: 6.6s -> 5.0s on this table.
-    t_pos = session.read_pandas(positions[POSITION_CUBE_COLS],
+    positions_cube = positions[POSITION_CUBE_COLS]
+    t_pos = session.read_pandas(positions_cube.head(SEED_ROWS),
                                 keys={"Date", "Book", "Position"},               table_name="Positions")
+    t_sv  = session.read_pandas(specific.head(SEED_ROWS),
+                                keys={"Date", "Position"},                       table_name="SpecificVar")
+    _mark("load.seeds")
     t_sec = session.read_pandas(securities, keys={"Position"},                   table_name="Securities")
     t_fm  = session.read_pandas(factor_meta, keys={"Factor"},                    table_name="FactorMeta")
-    t_sv  = session.read_pandas(specific,   keys={"Date", "Position"},           table_name="SpecificVar")
+    _mark("load.Securities+FactorMeta")
     t_scn = session.read_pandas(scenarios,  keys={"ScenarioSet", "Factor"},      table_name="Scenarios")
     t_axis = session.read_pandas(scn_axis,  keys={"ScenarioSet"},                table_name="ScenarioAxis")
+    _mark("load.Scenarios+Axis")
     t_pit = (session.read_pandas(pit_scn, keys={"PITSet", "Factor"}, table_name="PITScenarios")
              if len(pit_scn) else None)
-    t_sr = (session.read_pandas(spec_pnl, keys={"Date", "Position"}, table_name="SpecificPnL")
+    _mark("load.PITScenarios")
+    t_sr = (session.read_pandas(spec_pnl.head(SEED_ROWS), keys={"Date", "Position"},
+                                table_name="SpecificPnL")
             if has_attribution else None)
+    _mark("load.SpecificPnL")
     t_mgr = (session.read_pandas(managers, keys={"Book"}, table_name="Managers")
              if has_managers else None)
+    _mark("load.Managers")
 
     t_exp.join(t_pos, (t_exp["Date"] == t_pos["Date"]) & (t_exp["Position"] == t_pos["Position"]))
     t_exp.join(t_sec, t_exp["Position"] == t_sec["Position"])
@@ -307,9 +443,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         # degrades cleanly when managers.parquet is absent (v1 data / any pre-Phase-2 build has
         # no entity dimension, nothing else affected).
         t_pos.join(t_mgr, t_pos["Book"] == t_mgr["Book"])
+    _mark("joins")
 
     cube = session.create_cube(t_exp, mode="manual")
-    h, l, m = cube.hierarchies, cube.levels, cube.measures
+    _mark("create_cube")
+    h, l = cube.hierarchies, cube.levels
+    # Every `m[...] = ...` below is COLLECTED, not published -- one `update()` at the end of
+    # build_cube publishes the lot (see _DeferredMeasures). Formatters go through `m.fmt(name,
+    # spec)` for the same reason. Definitions and their order are unchanged.
+    m = _DeferredMeasures(cube.measures)
 
     # Atoti guards a query's accumulated point count; the defaults are intermediate 1,000,000 /
     # transient 10,000,000. The single-book PoC never came near them, but the multi-manager build
@@ -326,34 +468,48 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # ~3s. Raised so cross-book comparison queries can complete rather than 500.
     cube.shared_context["queriesTimeLimit"] = 120
 
-    h["Security"]  = {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
-                      "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]}
-    # FLAT position hierarchy for GLOBAL cross-member ranking (tt.rank ranks siblings; under
-    # Security a position's siblings are its issuer's positions). Level named PositionR so the
-    # plain l["Position"] lookups stay unambiguous; hidden — rank plumbing, not a browse dim.
-    h["PositionRank"] = {"PositionR": t_exp["Position"]}
+    # ONE `update()` for every explicit hierarchy: `h[name] = ...` runs its own GraphQL mutation
+    # batch and a cube refresh per call, so the four (five with Manager) assignments cost five
+    # refreshes. Same hierarchies, same levels -- one round of mutations.
+    #   Security     — the browse dimension.
+    #   PositionRank — FLAT position hierarchy for GLOBAL cross-member ranking (tt.rank ranks
+    #                  siblings; under Security a position's siblings are its issuer's positions).
+    #                  Level named PositionR so the plain l["Position"] lookups stay unambiguous;
+    #                  hidden — rank plumbing, not a browse dim.
+    #   Manager      — entity dimension (Phase 2): a SEPARATE hierarchy, not extra levels grafted
+    #                  onto "Book", so the pre-existing auto-created single-level "Book" hierarchy
+    #                  (and every filter/level lookup against it elsewhere, incl. risk_api.py) is
+    #                  untouched. Manager is 1:1 with Book (same t_pos->t_mgr row), so filtering by
+    #                  either stays consistent. It's never passed to a lift/OriginScope call,
+    #                  exactly like Book itself -- so it always reads whatever book is currently
+    #                  sliced, and is blank/ambiguous at the no-book grand total (same as any other
+    #                  book-scoped attribute; see the grand-total note near Net exposure).
+    _hiers = {
+        "Security": {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
+                     "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]},
+        "PositionRank": {"PositionR": t_exp["Position"]},
+        "FactorDim": {"FactorGroup": t_fm["FactorGroup"], "Factor": t_exp["Factor"]},
+        "Date": {"Date": t_exp["Date"]},
+    }
+    if t_mgr is not None:
+        _hiers["Manager"] = {"FirmType": t_mgr["FirmType"], "EntityName": t_mgr["EntityName"],
+                             "CIK": t_mgr["CIK"]}
+    _mark("hierarchies.build_spec")
+    h.update(_hiers)
+    _mark("hierarchies.update")
     try:
         h["PositionRank"].visible = False
     except Exception:
         pass
-    h["FactorDim"] = {"FactorGroup": t_fm["FactorGroup"], "Factor": t_exp["Factor"]}
-    h["Date"]      = {"Date": t_exp["Date"]}
     # Book and ScenarioSet are NOT created manually: they are the un-mapped key columns of the
     # partial joins (Positions, Scenarios). In manual cube mode atoti auto-creates their
     # hierarchies once the mapped key columns (Date, Position, Factor) have hierarchies.
-    assert {"Book", "ScenarioSet"} <= {n for _, n in h}, sorted(n for _, n in h)
+    _mark("hierarchies.hide_rank")
+    _hier_names = {n for _, n in h}
+    assert {"Book", "ScenarioSet"} <= _hier_names, sorted(_hier_names)
     if t_pit is not None:
-        assert "PITSet" in {n for _, n in h}, sorted(n for _, n in h)
-    # Entity dimension (Phase 2): a SEPARATE hierarchy, not extra levels grafted onto "Book" --
-    # deliberately conservative so the pre-existing, auto-created, single-level "Book" hierarchy
-    # (and every filter/level lookup against it elsewhere, incl. risk_api.py) is untouched. Manager
-    # is 1:1 with Book (same t_pos->t_mgr row), so filtering by either stays consistent. It's never
-    # passed to a lift/OriginScope call, exactly like Book itself -- so it always reads whatever
-    # book is currently sliced, and is blank/ambiguous at the no-book grand total (same as any
-    # other book-scoped attribute; see the grand-total note near Net exposure).
-    if t_mgr is not None:
-        h["Manager"] = {"FirmType": t_mgr["FirmType"], "EntityName": t_mgr["EntityName"],
-                        "CIK": t_mgr["CIK"]}
+        assert "PITSet" in _hier_names, sorted(_hier_names)
+    _mark("hierarchies.assert")
 
     # ---- additive exposures (drill/slice; independent of ScenarioSet) -------------------------
     # MEASURE-LEVEL product of the leaf Loading and the JOINED Positions Weight (see the leaf-
@@ -363,14 +519,14 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Net exposure"] = tt.agg.sum(
         tt.agg.single_value(t_exp["Loading"]) * tt.agg.single_value(t_pos["Weight"]),
         scope=tt.OriginScope({l["Date"], l["Position"], l["Factor"]}))
-    m["Net exposure"].formatter = "DOUBLE[0.000]"
+    m.fmt("Net exposure", "DOUBLE[0.000]")
 
     # ---- entity dimension measures (Phase 2): the managers.parquet disclosure fields, read at
     # whatever Book is currently sliced (single_value over the Book-keyed Managers table joined
     # via Positions -- see the Manager hierarchy note above). Blank/ambiguous with no Book slice.
     if t_mgr is not None:
         m["Manager ETP dropped value share"] = tt.agg.single_value(t_mgr["dropped_value_share_latest"])
-        m["Manager ETP dropped value share"].formatter = "DOUBLE[0.00%]"
+        m.fmt("Manager ETP dropped value share", "DOUBLE[0.00%]")
         m["Manager n filings"] = tt.agg.single_value(t_mgr["n_filings"])
         m["Manager n positions"] = tt.agg.single_value(t_mgr["n_positions_distinct"])
 
@@ -381,12 +537,31 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Scenario PnL vector"] = tt.agg.sum(
         m["Net exposure"] * tt.agg.single_value(t_scn["ShockVec"]),
         scope=tt.OriginScope({l["Factor"]}))
+    # ---- index -> date DUAL of the P&L vector: aligned 1:1 with "Scenario PnL vector". --------
+    # DateVec[i] is the date that produced PnL vector[i] (epoch days; one row per set, so
+    # single_value is unambiguous when sliced to a single ScenarioSet -- the same constraint the
+    # vector measures carry). Lets a caller label the historical-sim / event-replay path and name
+    # the worst-loss / VaR-breach dates. Defined HERE, next to the vector it indexes, so that the
+    # one early publish below covers every array-typed measure (see _DeferredMeasures).
+    m["Scenario dates (epoch)"] = tt.agg.single_value(t_axis["DateVec"])
+    # ---- the PIT mirror's vector: the SAME engine driven by the PITSet switch. Its two scalar
+    # measures stay down with Model vol; only the vector is hoisted, for the same publish reason.
+    if t_pit is not None:
+        m["PIT Scenario PnL vector"] = tt.agg.sum(
+            m["Net exposure"] * tt.agg.single_value(t_pit["ShockVec"]),
+            scope=tt.OriginScope({l["Factor"]}))
+    # THE ONE EARLY PUBLISH. Every `tt.array.*` helper type-checks a MEASURE argument against the
+    # server (`Measure.data_type`), so the three array-typed measures above must exist before the
+    # expressions that consume them. Everything else -- ~50 measures -- goes in the final flush.
+    m.flush()
+    _mark("measures.flush_vectors")
     m["Scenario mean PnL"]   = tt.array.mean(m["Scenario PnL vector"])     # hypo: the shock P&L; hist: ~0
     m["Scenario VaR 99"]     = -tt.array.quantile(m["Scenario PnL vector"], 0.01)
     m["Scenario worst loss"] = -tt.array.min(m["Scenario PnL vector"])     # worst single scenario
     for k in ("Scenario mean PnL", "Scenario VaR 99", "Scenario worst loss"):
-        m[k].formatter = "DOUBLE[0.00%]"
+        m.fmt(k, "DOUBLE[0.00%]")
     m["Scenario n"] = tt.array.len(m["Scenario PnL vector"])   # THIS set's vector length
+    _mark("measures.scenario_core")
 
     # ---- extra confidence levels + Expected Shortfall (coherent tail measure) ------------------
     # VaR at 95 / 97.5 alongside the existing 99 (the 95/99 pair reads tail fatness; 97.5 is the
@@ -420,17 +595,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         (tt.array.sum(tt.array.positive_values(_up) / _up)
          + tt.array.sum(tt.array.negative_values(_dn) / _dn))
         / m["Scenario n"])
-    m["Exceedance rate 2s"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Exceedance rate 2s", "DOUBLE[0.00%]")
     for k in ("Scenario VaR 95", "Scenario VaR 97.5", "Scenario ES 97.5",
               "Scenario ES 99", "Scenario PnL vol"):
-        m[k].formatter = "DOUBLE[0.00%]"
+        m.fmt(k, "DOUBLE[0.00%]")
 
-    # ---- index -> date DUAL of the P&L vector: aligned 1:1 with "Scenario PnL vector". --------
-    # DateVec[i] is the date that produced PnL vector[i] (epoch days; one row per set, so
-    # single_value is unambiguous when sliced to a single ScenarioSet -- the same constraint
-    # the vector measures carry). Lets a caller label the historical-sim / event-replay path
-    # and name the worst-loss / VaR-breach dates.
-    m["Scenario dates (epoch)"] = tt.agg.single_value(t_axis["DateVec"])
+    # (`Scenario dates (epoch)`, the index->date dual, is defined up with the P&L vector.)
 
     # date of the WORST scenario (argmin of the P&L vector), computed IN THE CUBE: the index of the
     # minimum read against the date dual. Lets the API report the worst-loss date without any
@@ -442,6 +612,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # (tt.array.sort). Lets a distribution chart show the full shape (sorted P&L vs percentile)
     # without any client-side binning/counting; the array primitives can't COUNT-per-bin anyway.
     m["Scenario PnL sorted"] = tt.array.sort(m["Scenario PnL vector"])
+    _mark("measures.tail_and_dual")
 
     # ---- synthetic ScenarioDay dimension: UNPACK the P&L/date vectors into one row per array
     # element WITHOUT exploding the facts — the vector/array stays intact in the cube. A parameter
@@ -456,6 +627,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     N_days = int(scn_axis["DateVec"].map(len).max())   # longest set (HistFull) sizes the dimension
     cube.create_parameter_hierarchy_from_members(
         "ScenarioDay", list(range(N_days)), index_measure_name="ScenarioDay index")
+    _mark("param_hierarchy.ScenarioDay")
     _day = m["ScenarioDay index"]
     # Scenario n (this set's vector length) is defined up with the tail measures above.
     # CLAMP the index in-bounds before reading the vector: Atoti errors the WHOLE query on an
@@ -477,7 +649,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Scenario worst pnl at day"]          = tt.where(_in, -_book_loss, None)
     m["Scenario worst date at day (epoch)"] = tt.where(_in, m["Scenario worst date (epoch)"], None)
     for _mn in ("Scenario PnL at day", "Scenario VaR line at day", "Scenario worst pnl at day"):
-        m[_mn].formatter = "DOUBLE[0.00%]"
+        m.fmt(_mn, "DOUBLE[0.00%]")
+    _mark("measures.scenario_day")
 
     # ---- diagonal specific block (additive, scenario-independent) -----------------------------
     # OriginScope + single_value, NOT a columnar SUM: see the fan-out note at the top of
@@ -494,7 +667,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Gross weight"] = tt.agg.sum(tt.math.abs(wgt),
                                    scope=tt.OriginScope({l["Date"], l["Position"]}))
     for _mn in ("Net weight", "Gross weight"):
-        m[_mn].formatter = "DOUBLE[0.000]"
+        m.fmt(_mn, "DOUBLE[0.000]")
     # ---- model vol: THE reference risk number (2026-07-03), sigma = sqrt(x'Fx + w'dw) ---------
     # Factor half = std of the scenario P&L vector (atoti 'sample' mode == np.cov ddof=1), so
     # sliced to HistFull this IS the model sigma on the same full-history covariance the API uses
@@ -503,7 +676,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # Computed per cell (each slice's own vector + own specific block), so it drills by
     # sector/name/factor like the VaR measures.
     m["Model vol"] = tt.math.sqrt(m["Scenario PnL vol"] ** 2 + m["Specific variance"])
-    m["Model vol"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Model vol", "DOUBLE[0.00%]")
+    _mark("measures.specific_and_modelvol")
 
     # ---- the PIT mirror: the SAME engine driven by the PITSet switch --------------------------
     # Exactly the three measures the honest-vol path consumes (`_pred_book_vols` in risk_api:
@@ -513,24 +687,23 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # evaluate. `Specific vol`/`Specific variance` need no mirror: they are scenario-independent
     # and read correctly under a PITSet slice like any other.
     if t_pit is not None:
-        m["PIT Scenario PnL vector"] = tt.agg.sum(
-            m["Net exposure"] * tt.agg.single_value(t_pit["ShockVec"]),
-            scope=tt.OriginScope({l["Factor"]}))
+        # (`PIT Scenario PnL vector` is defined up with the other array-typed measures.)
         m["PIT Scenario PnL vol"] = tt.array.std(m["PIT Scenario PnL vector"])
         m["PIT Model vol"] = tt.math.sqrt(m["PIT Scenario PnL vol"] ** 2 + m["Specific variance"])
         for _mn in ("PIT Scenario PnL vol", "PIT Model vol"):
-            m[_mn].formatter = "DOUBLE[0.00%]"
+            m.fmt(_mn, "DOUBLE[0.00%]")
+    _mark("measures.pit_mirror")
     # approximate total tail: factor scenario VaR with an independent idiosyncratic tail (z=2.326)
     m["Total VaR 99"] = tt.math.sqrt(m["Scenario VaR 99"] * m["Scenario VaR 99"]
                                      + (2.326 * m["Specific vol"]) ** 2)
-    m["Specific vol"].formatter = "DOUBLE[0.00%]"
-    m["Total VaR 99"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Specific vol", "DOUBLE[0.00%]")
+    m.fmt("Total VaR 99", "DOUBLE[0.00%]")
     # Expected-Shortfall analogue of Total VaR: factor-ES combined in quadrature with the
     # idiosyncratic tail. For a normal tail the ES97.5 multiplier is phi(z)/(1-a) = 2.338 (~ the
     # 2.326 used for 99% VaR -- ES97.5 == VaR99 under normality), applied to the specific vol.
     m["Total ES 97.5"] = tt.math.sqrt(m["Scenario ES 97.5"] * m["Scenario ES 97.5"]
                                       + (2.338 * m["Specific vol"]) ** 2)
-    m["Total ES 97.5"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Total ES 97.5", "DOUBLE[0.00%]")
 
     # ---- PnL attribution measures (Step 15; only when the 7th frame was built) ----------------
     # All three are ADDITIVE scalars (same class as Net exposure — no ragged vectors), reading the
@@ -552,7 +725,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
             scope=tt.OriginScope({l["Date"], l["Position"]}))
         m["Realized PnL"] = m["Factor contribution"] + m["Specific PnL"]
         for _mn in ("Factor contribution", "Specific PnL", "Realized PnL"):
-            m[_mn].formatter = "DOUBLE[0.00%]"
+            m.fmt(_mn, "DOUBLE[0.00%]")
+    _mark("measures.attribution")
 
     # ---- Level-2 risk decomposition: additive contributions to Scenario VaR 99 ---------------
     # The factor-VaR is the book loss on the tail scenario t* (the 1%-quantile day of the BOOK
@@ -605,7 +779,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _name_share = (m["Marginal Total VaR 99"]
                    / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
     m["Risk HHI"] = tt.agg.sum(_name_share * _name_share, scope=tt.OriginScope({l["Position"]}))
-    m["Risk HHI"].formatter = "DOUBLE[0.000]"
+    m.fmt("Risk HHI", "DOUBLE[0.000]")
+    _mark("measures.decomposition")
 
     # ---- Top-5 risk share: the /limits concentration metric, cube-native via tt.rank ----------
     # tt.rank ranks SIBLINGS, and in the multilevel Security hierarchy a position's siblings are
@@ -618,7 +793,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Top-5 risk share"] = tt.agg.sum(
         tt.where(_rank_r <= 5, m["Marginal Total VaR 99"] / _tot_r, 0.0),
         scope=tt.OriginScope({l["PositionR"]}))
-    m["Top-5 risk share"].formatter = "DOUBLE[0.0%]"
+    m.fmt("Top-5 risk share", "DOUBLE[0.0%]")
+    _mark("measures.top5_rank")
 
     # --- INCREMENTAL VaR (Flex Agg sense): REMOVE the current member, recompute the BOOK VaR on
     #     the reduced portfolio, and subtract it from the reference book VaR. Unlike the marginals
@@ -645,6 +821,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     S_ex_var = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"]) - m["Specific variance"]
     Total_ex = tt.math.sqrt(VaR_ex * VaR_ex + (2.326 ** 2) * S_ex_var)
     m["Incremental Total VaR 99"] = book_total - Total_ex
+    _mark("measures.incremental")
 
     # ---- Model-vol decomposition: Euler marginal (== CTR) + incremental -----------------------
     # Marginal Model vol: the member's EULER contribution to book sigma — cov(member P&L vector,
@@ -664,6 +841,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # By Factor: per factor this IS the ch-09 CTV = x_k(Fx)_k (cross-terms 50/50, negative =
     # hedge) and Σ_factor = the factor variance x'Fx. /contributions serves it.
     m["Factor variance contribution"] = _cov_book
+    _mark("measures.euler_modelvol")
 
     # ---- Tier-1 cube migrations (docs/cube-measure-opportunities.md) -----------------------
     # Factor return vol: std of the RAW factor-return vector (the ShockVec itself, exposure-
@@ -673,26 +851,27 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # member (std(x·f) = |x|·std(f)).
     _shock_vec = tt.agg.single_value(t_scn["ShockVec"])
     m["Factor return vol"] = tt.array.std(_shock_vec)
-    m["Factor return vol"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Factor return vol", "DOUBLE[0.00%]")
     # Vol ex factor: book sigma with the current cell's FACTOR P&L removed but the FULL specific
     # block kept — by FACTOR this is the hedge table's vol-after-neutralizing-k (zeroing x_k
     # cannot touch specific risk; NB Incremental Model vol strips the cell's specific, which is
     # right for NAMES and wrong here — the fan-out trap, handled explicitly).
     _svar_book = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"])
     m["Vol ex factor"] = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + _svar_book)
-    m["Vol ex factor"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Vol ex factor", "DOUBLE[0.00%]")
     # Min-variance hedge ratio (appendix D6), in EXPOSURE units: h* = −(Fx)_k/F_kk. Via the
     # polarization cov: cov(book, v_k) = x_k·(Fx)_k and var(f_k) = F_kk, so
     # h* = −cov/(x_k·vol_k²) — algebraically x_k cancels out of (Fx)_k, so a near-zero exposure
     # still reads the true ratio (0/0 -> blank only at exactly zero).
     m["Min-variance hedge ratio"] = (-_cov_book
         / (m["Net exposure"] * m["Factor return vol"] ** 2))
-    m["Min-variance hedge ratio"].formatter = "DOUBLE[0.000]"
+    m.fmt("Min-variance hedge ratio", "DOUBLE[0.000]")
     # Vol at min-variance hedge: book sigma after ADDING h* units of the pure factor-k return
     # stream (specific block untouched) — the D6 single-instrument hedge priced per slice.
     _hedged_vec = book_pnl_vec + m["Min-variance hedge ratio"] * _shock_vec
     m["Vol at min-variance hedge"] = tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book)
-    m["Vol at min-variance hedge"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Vol at min-variance hedge", "DOUBLE[0.00%]")
+    _mark("measures.tier1_hedge")
 
     # ---- Stressed model vol: the correlation stress as a PARAMETERIZED measure ----------------
     # x'F'x under vols x m and correlations blended b toward 1 has a closed form needing no
@@ -702,13 +881,14 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # Parameters live on the CorrStress simulation (Base: mult 1, blend 0 -> equals Model vol).
     cube.create_parameter_simulation(
         "CorrStress", measures={"Vol mult": 1.0, "Rho blend": 0.0})
+    _mark("param_sim.CorrStress")
     _sxs = tt.agg.sum(m["Net exposure"] * m["Factor return vol"],
                       scope=tt.OriginScope({l["Factor"]}))          # SUM_k x_k * sigma_k (signed)
     m["Stressed model vol"] = m["Vol mult"] * tt.math.sqrt(
         (1.0 - m["Rho blend"]) * m["Scenario PnL vol"] ** 2
         + m["Rho blend"] * _sxs ** 2
         + m["Specific variance"])
-    m["Stressed model vol"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Stressed model vol", "DOUBLE[0.00%]")
 
     # ---- Tier-2 prototype: custom stress as a PARAMETER SIMULATION ----------------------------
     # (docs/cube-measure-opportunities.md #3.) A per-Factor "Shock sigma" parameter, default 0 on
@@ -717,12 +897,14 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # the API math cannot do and this gets free: the shock P&L drills by name/sector (each leaf
     # is w·L_k·sigma_k·vol_k, footing exactly), and composes with any cube filter.
     # NB Factor return vol is ScenarioSet-dependent — always read this sliced to HistFull.
+    _mark("measures.stressed_vol")
     cube.create_parameter_simulation(
         "StressShock", measures={"Shock sigma": 0.0}, levels=[l["Factor"]])
+    _mark("param_sim.StressShock")
     m["Custom stress PnL"] = tt.agg.sum(
         m["Net exposure"] * m["Shock sigma"] * m["Factor return vol"],
         scope=tt.OriginScope({l["Factor"]}))
-    m["Custom stress PnL"].formatter = "DOUBLE[0.00%]"
+    m.fmt("Custom stress PnL", "DOUBLE[0.00%]")
     # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
     # vector minus this cell's, its specific variance minus this cell's), subtract from the book
     # sigma. NOT additive (vol is sub-additive) — it answers "how much vol does removing this
@@ -731,15 +913,29 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _vol_ex = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + S_ex_var)
     m["Incremental Model vol"] = _sigma_book - _vol_ex
     for _mn in ("Marginal Model vol", "Incremental Model vol"):
-        m[_mn].formatter = "DOUBLE[0.00%]"
+        m.fmt(_mn, "DOUBLE[0.00%]")
 
     for _mn in ("Marginal Scenario VaR 99", "Marginal Total VaR 99",
                 "Incremental Scenario VaR 99", "Incremental Total VaR 99",
                 "Marginal Scenario ES 97.5"):
-        m[_mn].formatter = "DOUBLE[0.00%]"
-    m["VaR sensitivity"].formatter = "DOUBLE[0.0000]"
+        m.fmt(_mn, "DOUBLE[0.00%]")
+    m.fmt("VaR sensitivity", "DOUBLE[0.0000]")
     for _mn in ("% of Scenario VaR 99", "% of Total VaR 99", "% of Scenario ES 97.5"):
-        m[_mn].formatter = "DOUBLE[0.0%]"
+        m.fmt(_mn, "DOUBLE[0.0%]")
+    _mark("measures.define")
+    # ONE publish for every measure above, then the formatters (see _DeferredMeasures).
+    m.flush()
+    _mark("measures.flush")
+
+    # ---- DATA LAST: the whole model is now defined; fill the three big tables (see the seeding
+    # note by the loads). The seed rows are re-loaded inside the full frames and upsert on the
+    # table keys, so the result is exactly the frames, once.
+    t_exp.load(exposures)
+    t_pos.load(positions_cube)
+    t_sv.load(specific)
+    if t_sr is not None:
+        t_sr.load(spec_pnl)
+    _mark("load.bulk")
 
     print(f"cube built: {len(exposures):,} leaf rows, {len(style)} style factors, "
           f"{scenarios['ScenarioSet'].nunique()} scenario sets, "
