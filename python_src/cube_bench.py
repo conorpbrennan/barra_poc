@@ -193,7 +193,7 @@ def micro_bench_load(frames) -> dict:
 
 
 def main(out_path: str):
-    from barra_factor_risk_cube import load_frames, build_cube
+    from barra_factor_risk_cube import load_frames, build_cube, BUILD_TIMINGS
     me = psutil.Process()
     stages, t0 = {}, time.perf_counter()
 
@@ -205,6 +205,9 @@ def main(out_path: str):
     t = time.perf_counter()
     session, cube = build_cube(frames, port=9097)
     stages["build_cube_s"] = round(time.perf_counter() - t, 2)
+    # per-stage attribution of that number, when BARRA_CUBE_TIMINGS=1 was set (empty otherwise)
+    if BUILD_TIMINGS:
+        stages["build_stages_s"] = {k: round(v, 2) for k, v in BUILD_TIMINGS.items()}
     jvm = _jvm_proc()
     stages["jvm_rss_after_build_gb"] = round(_rss(jvm) / 1e9, 2)
     stages["py_rss_after_build_gb"] = round(me.memory_info().rss / 1e9, 2)
