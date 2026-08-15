@@ -221,8 +221,32 @@ async def lifespan(app: FastAPI):
     for _mn in [x for x in MEASURE_NAMES if x not in live]:
         MEASURE_NAMES.remove(_mn)
     print(f"[risk_api] cube ready on :{CUBE_PORT}; UI at {session.url}")
+    _prewarm()
     yield
     session.close()
+
+
+def _prewarm() -> None:
+    """Pay the one-per-process cold costs at START-UP, in a daemon thread, so no user request
+    ever sees them (docs/api-bench.md): /dims member enumeration (1.4-3 s, cached on the cube
+    identity -- docs/cube-opt-round2-dims.md) and the /dq check battery (7-14 s on the 124-book
+    frames, memoized on the frames' identity). Off the start-up critical path -- inline they would
+    delay 'ready' for nothing; in the thread the first request that arrives before a warm-up
+    finishes simply computes it itself (same memo, same answer). Each step is best-effort: a
+    failure is logged and the endpoint recomputes lazily on first call exactly as before;
+    prewarming can never fail start-up."""
+    import threading
+
+    def _run():
+        for name, fn in (("/dims", _dims_response), ("/dq", _dq_checks)):
+            t0 = time.perf_counter()
+            try:
+                fn()
+                print(f"[risk_api] {name} prewarmed in {time.perf_counter() - t0:.2f}s")
+            except Exception as e:                   # noqa: BLE001 -- best-effort by design
+                print(f"[risk_api] {name} prewarm failed ({type(e).__name__}: {e}); will compute lazily")
+
+    threading.Thread(target=_run, name="api-prewarm", daemon=True).start()
 
 
 app = FastAPI(title="Barra Factor Risk API", lifespan=lifespan)
@@ -434,15 +458,28 @@ async def trends(set: str = "HistFull",
             # book-level over the calendar, DATE-BY-DATE: the scenario/HHI measures pull the full P&L
             # vector per date, and asking for every date in one plan OOMs the cube — so loop, one
             # date (one vector) at a time. ~100 light scalar queries; cheap and cached upstream.
+            # 2026-08-15 (api_bench): the loop is MEMOIZED per (set, book, measures) on S -- the
+            # cube never changes in-process, so the series is a constant -- and a cold fill runs
+            # the per-date queries CONCURRENTLY (8 workers; results re-assembled in date order,
+            # so records are identical to the serial loop). Measured: Vanguard HistFull default
+            # measures 70 s -> see docs/api-bench.md; Soros 5.4 s -> ~1 s.
+            ck = ("_trends_memo", set, book, tuple(mlist), id(cube))
+            if ck in S:
+                return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             dates = sorted({pd.Timestamp(d).date() for d in S["frames"]["specific_var"]["Date"]})
+
+            def _one(d):
+                return cube.query(*meas, filter=(l["Date"] == d) & set_cond & (l["Book"] == book))
+
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                results = list(ex.map(_one, dates))
             recs = []
-            for d in dates:
-                r = cube.query(*meas, filter=(l["Date"] == d) & set_cond
-                                            & (l["Book"] == book))
+            for d, r in zip(dates, results):
                 if len(r):
                     row = r.iloc[0]
                     recs.append({"Date": d.isoformat(),
                                  **{x: _clean(row[y]) for y, x in back.items()}})
+            S[ck] = recs
         return {"set": set, "measures": mlist, "by": by, "records": recs}
     return await run_in_threadpool(run)
 
@@ -1367,12 +1404,24 @@ async def limits(date: str | None = None, set: str | None = None, book: str = "S
 # Run barra_dq_checks against the cube's LIVE in-memory frames (not a disk re-read) and add the
 # known-stub counts + per-frame latest date, so the desk can see whether to trust the numbers.
 
+def _dq_checks() -> list[dict]:
+    """barra_dq_checks.run on the live frames, MEMOIZED once per process (2026-08-15, api_bench):
+    the checks are a pure function of the in-memory frames (plus the regression_stats side
+    artifact read inside run()) and cost 7-14 s per call on the 124-book frames -- the Overview's
+    RAG strip paid that on every load. Frames are loaded once and never change in-process; keyed
+    on their identity. Prewarmed at start-up by _prewarm."""
+    ck = ("_dq_memo", id(S["frames"]))
+    if ck not in S:
+        S[ck] = barra_dq_checks.run(S["frames"])
+    return S[ck]
+
+
 @app.get("/dq")
 async def dq():
     """Data-quality report on the frames the cube is actually serving: PASS/WARN/FAIL checks, a
     worst-of status, the known stubs (Unknown sector, Country='US'), and each frame's latest date."""
     def run():
-        checks = barra_dq_checks.run(S["frames"])          # structured [{level,name,detail}]
+        checks = _dq_checks()                             # structured [{level,name,detail}]
         summary = {k: sum(1 for c in checks if c["level"] == k) for k in ("PASS", "WARN", "FAIL")}
         status = "fail" if summary["FAIL"] else ("warn" if summary["WARN"] else "pass")
         fr = S["frames"]
@@ -2583,18 +2632,37 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
         raise HTTPException(404, "specific_returns frame missing — rebuild with the v2 builder")
     exp_dates = np.sort(exp["Date"].unique())
     d0s = [pd.Timestamp(d) for d in exp_dates if lo <= pd.Timestamp(d) < hi]
+    # 2026-08-15 (api_bench): the per-month selections come off cached row indices instead of
+    # full-frame boolean masks -- specific_returns is the DAILY residual frame (~13M rows on the
+    # 124-book build) and scanning it once per month was most of /pnl_attribution/residual's
+    # cost. Same rows selected, same arithmetic (see _frame_rows_by).
+    pos_by = _frame_rows_by("positions", ("Book", "Date"))
+    exp_by = _frame_rows_by("exposures", ("Date",))
+    sr_by = _frame_rows_by("specific_returns", ("Date",))
+    sr_days = np.array(sorted(sr_by), dtype="datetime64[ns]")
+
+    def _sr_window(d0, nxt):
+        # rows of specific_returns with d0 < Date <= nxt (all later dates when nxt is None)
+        lo_i = np.searchsorted(sr_days, np.datetime64(d0), side="right")
+        hi_i = np.searchsorted(sr_days, np.datetime64(nxt), side="right") if nxt is not None else len(sr_days)
+        idx = [sr_by[pd.Timestamp(d)] for d in sr_days[lo_i:hi_i]]
+        return sr.iloc[np.concatenate(idx)] if idx else sr.iloc[:0]
+
     parts = []
     for d0 in d0s:
         nxt = exp_dates[np.searchsorted(exp_dates, np.datetime64(d0)) + 1] \
             if np.searchsorted(exp_dates, np.datetime64(d0)) + 1 < len(exp_dates) else None
-        w_ = pos[(pos["Book"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
+        pidx = pos_by.get((book, d0))
+        w_ = (pos.iloc[pidx] if pidx is not None else pos.iloc[:0]).groupby("Position")["Weight"].sum()
         if w_.empty:
             continue
         frd = frt[(frt["Date"] > d0) & ((frt["Date"] <= nxt) if nxt is not None else True)]
         fsum = frd.groupby("Factor")["Return"].sum()
-        srd = sr[(sr["Date"] > d0) & ((sr["Date"] <= nxt) if nxt is not None else True)]
+        srd = _sr_window(d0, nxt)
         eps = srd[srd["Position"].isin(w_.index)].groupby("Position")["SpecificReturn"].sum()
-        Ld = (exp[(exp["Date"] == d0) & (exp["Position"].isin(w_.index))]
+        eidx = exp_by.get(d0)
+        exp_d = exp.iloc[eidx] if eidx is not None else exp.iloc[:0]
+        Ld = (exp_d[exp_d["Position"].isin(w_.index)]
               .pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first"))
         facs = [c for c in Ld.columns if c in fsum.index]
         fac_i = (Ld[facs].fillna(0.0) @ fsum[facs]).reindex(w_.index).fillna(0.0)
@@ -2724,6 +2792,81 @@ def _monthly(series: pd.Series) -> pd.Series:
     return series.resample("ME").sum(min_count=1).dropna()
 
 
+def _frame_rows_by(name: str, keys: tuple) -> dict:
+    """{key: int row positions} for a frame grouped by `keys` -- computed ONCE per process per
+    (frame, keys) and cached on S (frames are loaded once and never change in-process). Replaces
+    the per-month full-frame boolean masks in _pred_book_vols: 126 months x (an 11.6M-row
+    positions scan + a 6M-row exposures scan + a specific_var scan) was most of /calibration's
+    107 s cold call (api_bench 2026-08-15)."""
+    fr = S["frames"][name]
+    ck = ("_rows_by", name, keys, id(fr))
+    if ck not in S:
+        S[ck] = fr.groupby(list(keys), sort=False).indices
+    return S[ck]
+
+
+def _pred_month_numpy(d0, book: str, frw: pd.DataFrame):
+    """The numpy F(<=t) point-in-time book/specific/per-factor daily vols for ONE month-start,
+    or None when the book is empty that month or history is under the 60-obs floor. Pure
+    function of the frames -- the same arithmetic _pred_book_vols always ran, just fed from the
+    cached row index instead of full-frame masks."""
+    f = S["frames"]
+    pos_idx = _frame_rows_by("positions", ("Book", "Date")).get((book, d0))
+    if pos_idx is None or len(pos_idx) == 0:
+        return None
+    w_ = f["positions"].iloc[pos_idx].groupby("Position")["Weight"].sum()
+    if w_.empty:
+        return None
+    exp_idx = _frame_rows_by("exposures", ("Date",)).get(d0)
+    exp_d = f["exposures"].iloc[exp_idx] if exp_idx is not None else f["exposures"].iloc[:0]
+    exp_d = exp_d[exp_d["Position"].isin(w_.index)]
+    L = exp_d.pivot_table(index="Position", columns="Factor", values="Loading",
+                          aggfunc="first").reindex(w_.index).fillna(0.0)
+    hist = frw.loc[frw.index <= d0]
+    if len(hist) < 60:
+        return None
+    facs = [c for c in L.columns if c in hist.columns]
+    x = L[facs].T @ w_
+    F = hist[facs].cov().to_numpy()
+    sv_idx = _frame_rows_by("specific_var", ("Date",)).get(d0)
+    sv = (f["specific_var"].iloc[sv_idx] if sv_idx is not None
+          else f["specific_var"].iloc[:0]).set_index("Position")["SpecificVar"]
+    svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
+    ref_book = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
+    ref_spec = float(np.sqrt(svar))
+    ref_fac = {f_: abs(float(x[f_])) * float(hist[f_].std()) for f_ in facs}
+    return ref_book, ref_spec, ref_fac
+
+
+def _pred_month_cube(d0, book: str, ref):
+    """The cube-served PIT read for one month: (bv, sv, fv, diff) or None where the PIT set is
+    absent (numpy stands). Raises on a cube error (the caller records it and falls back)."""
+    ref_book, ref_spec, ref_fac = ref
+    cube = S["cube"]; l, mm = cube.levels, cube.measures
+    have_book = "Book" in {n for _, n in cube.hierarchies}
+    # The PIT sets moved to their own hierarchy + mirrored measures on 2026-08-14 (cube
+    # optimization Step 2 — they were 95% of ScenarioSet's members and every group-by paid
+    # for them). Same set NAMES, same numbers; a pre-split cube still answers via ScenarioSet.
+    pit_split = _has_pit(cube)
+    set_lvl = l["PITSet"] if pit_split else l["ScenarioSet"]
+    vol_n, mvol_n = (("PIT Scenario PnL vol", "PIT Model vol") if pit_split
+                     else ("Scenario PnL vol", "Model vol"))
+    pit = f"PIT:{pd.Timestamp(d0).date()}"
+    flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (set_lvl == pit)
+    if have_book:
+        flt &= (l["Book"] == book)
+    q = cube.query(mm[mvol_n], mm["Specific vol"], filter=flt)
+    if not len(q) or pd.isna(q.iloc[0][mvol_n]):
+        return None                                    # no PIT set for this month — numpy stands
+    qf = cube.query(mm[vol_n], levels=[l["Factor"]], filter=flt).reset_index()
+    bv, sv_ = float(q.iloc[0][mvol_n]), float(q.iloc[0]["Specific vol"])
+    fv = {str(r["Factor"]): float(r[vol_n]) for _, r in qf.iterrows()
+          if not pd.isna(r[vol_n])}
+    diff = {"book": abs(bv - ref_book), "specific": abs(sv_ - ref_spec),
+            "factor": max([0.0] + [abs(fv[k] - v) for k, v in ref_fac.items() if k in fv])}
+    return bv, sv_, {k: fv.get(k, ref_fac.get(k)) for k in ref_fac}, diff
+
+
 def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
     """Per month-start d0: predicted DAILY book vol sqrt(x'Fx + Σw²σ²), predicted daily specific
     vol, and per-factor daily vol |x_k|·σ_k — all POINT-IN-TIME (history ≤ d0, no look-ahead).
@@ -2731,64 +2874,58 @@ def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
     Scenario PnL vol at (Date=d0, ScenarioSet=PIT:d0)); the numpy F(≤t) implementation is
     recomputed alongside as the live cross-check (max diffs stashed in
     S["pred_vols_verification"], served by /calibration), and is the per-month fallback where a
-    PIT set is absent (early months under the 60-obs floor)."""
+    PIT set is absent (early months under the 60-obs floor).
+
+    2026-08-15 (api_bench, cube-opt round 3): MEMOIZED per (book, month) on S -- /calibration
+    (full calendar) and /pnl_attribution/residual (its window) share the months, and the frames
+    and cube never change in-process -- with the numpy half fed from cached per-Date row indices
+    and the per-month PIT cube queries run CONCURRENTLY (8 workers). Same arithmetic, same
+    per-month values, same max-diff cross-check over the requested months; only the wall time
+    changes (/calibration cold 107 s -> see docs/api-bench.md)."""
+    memo = S.setdefault("_pred_vols_memo", {})
     f = S["frames"]
-    frw = f["factor_returns"].pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
-    ref_book, ref_spec, ref_fac = {}, {}, {}
-    for d0 in months:
-        pos = f["positions"]
-        w_ = pos[(pos["Book"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
-        if w_.empty:
-            continue
-        exp_d = f["exposures"][(f["exposures"]["Date"] == d0)
-                               & (f["exposures"]["Position"].isin(w_.index))]
-        L = exp_d.pivot_table(index="Position", columns="Factor", values="Loading",
-                              aggfunc="first").reindex(w_.index).fillna(0.0)
-        hist = frw.loc[frw.index <= d0]
-        if len(hist) < 60:
-            continue
-        facs = [c for c in L.columns if c in hist.columns]
-        x = L[facs].T @ w_
-        F = hist[facs].cov().to_numpy()
-        sv = f["specific_var"][f["specific_var"]["Date"] == d0].set_index("Position")["SpecificVar"]
-        svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
-        ref_book[d0] = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
-        ref_spec[d0] = float(np.sqrt(svar))
-        ref_fac[d0] = {f_: abs(float(x[f_])) * float(hist[f_].std()) for f_ in facs}
-    # cube-served PIT values, numpy as fallback + cross-check
-    book_v, spec_v, fac_v = dict(ref_book), dict(ref_spec), {k: dict(v) for k, v in ref_fac.items()}
+    todo = [d0 for d0 in months if (book, d0) not in memo]
+    err = None
+    if todo:
+        frw = (f["factor_returns"].pivot(index="Date", columns="Factor", values="Return")
+               .dropna(how="any"))
+        refs = {d0: _pred_month_numpy(d0, book, frw) for d0 in todo}
+        cube_res = {}
+
+        def _one(d0):
+            try:
+                return d0, _pred_month_cube(d0, book, refs[d0]), None
+            except Exception as e:                       # noqa: BLE001 -- recorded, numpy stands
+                return d0, None, f"{e.__class__.__name__}: {e}"
+
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            for d0, res, e in ex.map(_one, [d for d in todo if refs[d] is not None]):
+                cube_res[d0] = res
+                err = err or e
+        for d0 in todo:
+            ref = refs[d0]
+            if ref is None:
+                memo[(book, d0)] = None
+                continue
+            res = cube_res.get(d0)
+            if res is None:
+                memo[(book, d0)] = (ref[0], ref[1], dict(ref[2]), None)
+            else:
+                memo[(book, d0)] = res
+    book_v, spec_v, fac_v = {}, {}, {}
     diffs = {"book": 0.0, "specific": 0.0, "factor": 0.0, "months_from_cube": 0}
-    try:
-        cube = S["cube"]; l, mm = cube.levels, cube.measures
-        have_book = "Book" in {n for _, n in cube.hierarchies}
-        # The PIT sets moved to their own hierarchy + mirrored measures on 2026-08-14 (cube
-        # optimization Step 2 — they were 95% of ScenarioSet's members and every group-by paid
-        # for them). Same set NAMES, same numbers; a pre-split cube still answers via ScenarioSet.
-        pit_split = _has_pit(cube)
-        set_lvl = l["PITSet"] if pit_split else l["ScenarioSet"]
-        vol_n, mvol_n = (("PIT Scenario PnL vol", "PIT Model vol") if pit_split
-                         else ("Scenario PnL vol", "Model vol"))
-        for d0 in list(ref_book):
-            pit = f"PIT:{pd.Timestamp(d0).date()}"
-            flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (set_lvl == pit)
-            if have_book:
-                flt &= (l["Book"] == book)
-            q = cube.query(mm[mvol_n], mm["Specific vol"], filter=flt)
-            if not len(q) or pd.isna(q.iloc[0][mvol_n]):
-                continue                                   # no PIT set for this month — numpy stands
-            qf = cube.query(mm[vol_n], levels=[l["Factor"]], filter=flt).reset_index()
-            bv, sv_ = float(q.iloc[0][mvol_n]), float(q.iloc[0]["Specific vol"])
-            fv = {str(r["Factor"]): float(r[vol_n]) for _, r in qf.iterrows()
-                  if not pd.isna(r[vol_n])}
-            diffs["book"] = max(diffs["book"], abs(bv - ref_book[d0]))
-            diffs["specific"] = max(diffs["specific"], abs(sv_ - ref_spec[d0]))
-            diffs["factor"] = max([diffs["factor"]] + [abs(fv[k] - v) for k, v in ref_fac[d0].items()
-                                                       if k in fv])
-            book_v[d0], spec_v[d0] = bv, sv_
-            fac_v[d0] = {k: fv.get(k, ref_fac[d0].get(k)) for k in ref_fac[d0]}
+    for d0 in months:
+        ent = memo.get((book, d0))
+        if ent is None:
+            continue
+        bv, sv_, fv, diff = ent
+        book_v[d0], spec_v[d0], fac_v[d0] = bv, sv_, dict(fv)
+        if diff is not None:
+            for k in ("book", "specific", "factor"):
+                diffs[k] = max(diffs[k], diff[k])
             diffs["months_from_cube"] += 1
-    except Exception as e:
-        diffs["error"] = f"{e.__class__.__name__}: {e}"
+    if err:
+        diffs["error"] = err
     S["pred_vols_verification"] = diffs
     return book_v, spec_v, fac_v
 
