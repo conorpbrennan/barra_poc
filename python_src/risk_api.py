@@ -100,16 +100,19 @@ def _clean(v):
 
 
 # pivotable dimensions (level names, all unique across hierarchies) and SCALAR measures only.
-# ScenarioDay is the synthetic per-array-element dimension: levels=[ScenarioDay] UNPACKS the
-# scenario P&L vector into a tabular per-day series (so the scenario path is a normal /pivot query).
+# The legacy `ScenarioDay` parameter hierarchy (+ `Scenario PnL at day` & co.) was PRUNED from this
+# allowlist on 2026-08-15 (round-3): every consumer moved to the Day path below, and the legacy
+# per-member unpacking was the one query that could still trip the cube's 120 s timeout or a
+# BadArgumentException from the UI / `/ask`. The cube still defines it (cube_bench's A/B control).
 DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
-             "FactorGroup", "Factor", "ScenarioSet", "ScenarioDay",
-             # the FAST per-day path (2026-08-15, docs/cube-opt-round2-scenarioday.md): days as
-             # facts on the ScenarioDays table. `Day` = the set's day index, `DayDate` = its calendar
-             # date (a LEVEL, 1:1 with Day -- read it off the axis, not via a measure), `DaySet` =
-             # that table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+Sector for the
-             # breakout the old ScenarioDay path could not do) and a DaySet slice; ~10-40x faster
-             # than ScenarioDay, which is kept for backward compatibility only.
+             "FactorGroup", "Factor", "ScenarioSet",
+             # the per-day path (2026-08-15, docs/cube-opt-round2-scenarioday.md): days as facts on
+             # the ScenarioDays table. `Day` = the set's day index, `DayDate` = its calendar date (a
+             # LEVEL, 1:1 with Day -- read it off the axis, not via a measure), `DaySet` = that
+             # table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+ONE breakout dim,
+             # e.g. Sector) and a DaySet slice. The canonical Day shape is served by the VECTOR plan
+             # (`_day_vector_shape`: the cube's own P&L vector unpacked, ~0.5 s any book); other
+             # shapes fall to the level plan.
              "Day", "DayDate", "DaySet"]
 # The Day-path measures read the DaySet hierarchy, NOT ScenarioSet, so the scenario-context warning
 # below does not cover them; they get their own (see _pivot_result). Members of Day/DayDate are the
@@ -166,10 +169,6 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "Gross weight", "Net weight",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
-                 # per-day unpacked scenario series (read with ScenarioDay on an axis):
-                 "Scenario PnL at day", "Scenario date at day (epoch)",
-                 "Scenario VaR line at day", "Scenario worst pnl at day",
-                 "Scenario worst date at day (epoch)",
                  "Scenario worst date (epoch)", "Scenario n",
                  # the FAST per-day path (read with Day/DayDate on an axis + a DaySet slice; see
                  # DIM_NAMES): the per-day book P&L and its chart markers (book VaR rule, worst
@@ -190,9 +189,6 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Vol at min-variance hedge", "Custom stress PnL", "Top-5 risk share",
             "Exceedance rate 2s", "Stressed model vol",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
-            "Scenario PnL at day", "Scenario date at day (epoch)",
-            "Scenario VaR line at day", "Scenario worst pnl at day",
-            "Scenario worst date at day (epoch)",
             "Scenario worst date (epoch)", "Scenario n",
             # the Day-path chart markers read the ScenarioSet-context book VaR/worst loss (PnL at
             # day itself reads DaySet only -- see DAY_DEP):
@@ -4403,8 +4399,7 @@ QUERY_CUBE_TOOL = {
         "single month (e.g. \"2024-12-31\") and, for any scenario measure, slice ScenarioSet to ONE set "
         "(HistFull / Evt:* / Hypo:*) — scenario measures are blank without a single-ScenarioSet context.\n"
         "- For a per-day scenario path use rows [\"Day\", \"DayDate\"] (+ \"Sector\" to break it out) with "
-        "measure \"PnL at day\" and filter DaySet to ONE set (same set names as ScenarioSet) — that is "
-        "the fast path; ScenarioDay/\"Scenario PnL at day\" is the slow legacy one.\n"
+        "measure \"PnL at day\" and filter DaySet to ONE set (same set names as ScenarioSet).\n"
         "- Off-allowlist names are rejected; read the error and retry with a valid name."
     ),
     "input_schema": {

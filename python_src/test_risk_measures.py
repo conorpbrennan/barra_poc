@@ -204,74 +204,59 @@ def t_scenario_pnl_sector_breakout_stacks_to_book():
 
 
 @test
-def t_scenario_day_unpacks_vector_via_pivot():
-    """The synthetic ScenarioDay dimension turns the scenario P&L vector into a normal pivot query:
-    rows=[ScenarioDay] yields one row per REAL array element (each with its date dual + the gated
-    book markers), the surplus members of the full-size dimension are trimmed (every measure is
-    ScenarioDay-gated -> NON EMPTY), and the worst day reconstructs the book worst-loss marker."""
-    import requests, urllib.parse
-    flt = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
-    q = {"rows": "ScenarioDay",
-         "measures": ("Scenario PnL at day,Scenario date at day (epoch),"
-                      "Scenario VaR line at day,Scenario worst pnl at day"),
-         "filters": json.dumps(flt), "totals": "false"}
-    recs = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()["records"]
-    pnls = [r["Scenario PnL at day"] for r in recs]
-    # trimmed to the set's real length (COVID ≈ 82 days), NOT the full-size dimension (~2200)
-    assert 1 < len(pnls) < 500, f"expected the set's real days, got {len(pnls)}"
-    # all measures scalar (no out-of-range null cells survive) and every day carries its date dual
-    assert all(isinstance(p, (int, float)) for p in pnls), pnls[:3]
-    assert all(isinstance(r.get("Scenario date at day (epoch)"), int) for r in recs), recs[:1]
-    # the worst single day equals the (negative, book) worst-P&L marker carried on every row
-    worst_marker = min(r["Scenario worst pnl at day"] for r in recs)
-    assert abs(min(pnls) - worst_marker) < 1e-9, (min(pnls), worst_marker)
-
-
-@test
-def t_day_path_ties_scenario_day_and_foots_by_sector():
-    """The FAST per-day path (2026-08-15): rows=[Day, DayDate] + a DaySet slice reads the SAME
-    per-day P&L as the legacy ScenarioDay unpacking, day for day (to float precision), with the
-    calendar date off the DayDate LEVEL; the lifted markers (VaR line / worst P&L / worst date)
-    equal the legacy ones; the day x Sector breakout foots to the book day; and a query with no
-    DaySet context carries the DaySet warning (the ScenarioSet one does not cover it)."""
+def t_day_path_markers_tie_book_cells_and_legacy_is_pruned():
+    """The per-day path (2026-08-15): rows=[Day, DayDate] + a DaySet slice. Its markers are the
+    BOOK cells made chart-ready: `VaR line at day` == -`Scenario VaR 99`, `Worst pnl at day` ==
+    -`Scenario worst loss` (and == the minimum of the path itself), `Worst date at day (epoch)` ==
+    `Scenario worst date (epoch)` and names a real day of the path; the day x Sector breakout foots
+    to the book day; a query with no DaySet context carries the DaySet warning (the ScenarioSet one
+    does not cover it); and the legacy ScenarioDay names are OFF the allowlist (400), round 3."""
     import requests, urllib.parse
     import pandas as pd
     base = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
     new_f = {**base, "DaySet": ["Evt:COVID2020"]}
-    def piv(rows, measures, flt):
-        q = {"rows": rows, "measures": measures, "filters": json.dumps(flt), "totals": "false"}
-        return requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=120).json()
-    new = piv("Day,DayDate", "PnL at day,VaR line at day,Worst pnl at day,Worst date at day (epoch)", new_f)
-    old = piv("ScenarioDay", "Scenario PnL at day,Scenario date at day (epoch),"
-              "Scenario VaR line at day,Scenario worst pnl at day,Scenario worst date at day (epoch)", base)
+    def piv(rows, measures, flt, **extra):
+        q = {"rows": rows, "measures": measures, "filters": json.dumps(flt), "totals": "false", **extra}
+        return requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=120)
+    new = piv("Day,DayDate", "PnL at day,VaR line at day,Worst pnl at day,Worst date at day (epoch)", new_f).json()
     assert new["warning"] is None, new["warning"]
-    nr, orr = new["records"], old["records"]
-    assert len(nr) == len(orr) > 1, (len(nr), len(orr))
+    nr = new["records"]
+    assert 1 < len(nr) < 500, len(nr)
+    book = piv("ScenarioSet", "Scenario VaR 99,Scenario worst loss,Scenario worst date (epoch)", base).json()["records"][0]
     epoch = lambda d: (pd.Timestamp(d) - pd.Timestamp("1970-01-01")).days
-    for a, b in zip(nr, orr):
-        assert a["Day"] == b["ScenarioDay"], (a, b)
-        assert epoch(a["DayDate"]) == b["Scenario date at day (epoch)"], (a, b)
-        assert abs(a["PnL at day"] - b["Scenario PnL at day"]) < 1e-12, (a, b)
-        assert abs(a["VaR line at day"] - b["Scenario VaR line at day"]) < 1e-12, (a, b)
-        assert abs(a["Worst pnl at day"] - b["Scenario worst pnl at day"]) < 1e-12, (a, b)
-        assert a["Worst date at day (epoch)"] == b["Scenario worst date at day (epoch)"], (a, b)
-    # the breakout the old path could not do: sector rows of a day sum to that day's book P&L
-    sec = piv("Day,DayDate,Sector", "PnL at day", new_f)["records"]
+    for r in nr:
+        assert abs(r["VaR line at day"] + book["Scenario VaR 99"]) < 1e-12, (r, book)
+        assert abs(r["Worst pnl at day"] + book["Scenario worst loss"]) < 1e-12, (r, book)
+        assert r["Worst date at day (epoch)"] == book["Scenario worst date (epoch)"], (r, book)
+    pnls = [r["PnL at day"] for r in nr]
+    assert abs(min(pnls) - nr[0]["Worst pnl at day"]) < 1e-12, (min(pnls), nr[0]["Worst pnl at day"])
+    worst_day = nr[pnls.index(min(pnls))]
+    assert epoch(worst_day["DayDate"]) == nr[0]["Worst date at day (epoch)"], worst_day
+    assert [r["Day"] for r in nr] == list(range(len(nr))), "Day is the set's 0..n-1 index"
+    # the breakout: sector rows of a day sum to that day's book P&L
+    sec = piv("Day,DayDate,Sector", "PnL at day", new_f).json()["records"]
     for day in (0, 1, len(nr) - 1):
-        s = sum(r["PnL at day"] for r in sec if r["Day"] == day)
-        assert abs(s - nr[day]["PnL at day"]) < 1e-12, (day, s, nr[day]["PnL at day"])
+        s_ = sum(r["PnL at day"] for r in sec if r["Day"] == day)
+        assert abs(s_ - nr[day]["PnL at day"]) < 1e-12, (day, s_, nr[day]["PnL at day"])
     # no DaySet context -> the DaySet warning (its own, not the ScenarioSet one)
-    w = piv("Day,DayDate", "PnL at day", base)["warning"]
+    w = piv("Day,DayDate", "PnL at day", base).json()["warning"]
     assert w and "DaySet" in w, w
+    # the legacy path is pruned from the allowlist: dimension AND measures 400
+    r = piv("ScenarioDay", "PnL at day", base)
+    assert r.status_code == 400 and "ScenarioDay" in r.text, (r.status_code, r.text[:200])
+    r = piv("Day", "Scenario PnL at day", new_f)
+    assert r.status_code == 400 and "Scenario PnL at day" in r.text, (r.status_code, r.text[:200])
+    d = requests.get(f"{API}/dims", timeout=60).json()
+    assert "ScenarioDay" not in d["dimensions"] and not any("Scenario" in m and "at day" in m for m in d["measures"]), d["dimensions"]
 
 
 @test
-def t_day_vector_plan_ties_level_plan_and_legacy():
+def t_day_vector_plan_ties_level_plan():
     """The Day-shape VECTOR PLAN (follow-up 2, 2026-08-15): /pivot answers the Day shape from the
     cube's `Scenario PnL vector` (+ its dates dual, + one single-cell markers query) instead of
     the 2,618-member level scan. It must be indistinguishable in output: record-for-record equal
-    (same keys, same order, |diff| < 1e-12) to the LEVEL plan (`plan=levels`) AND to the legacy
-    ScenarioDay path, on Soros and Vanguard, HistFull and Evt:COVID2020, book path and the
+    (same keys, same order, |diff| < 1e-12) to the LEVEL plan (`plan=levels`) -- the fact-joined
+    Day level -- on Soros and Vanguard, HistFull and Evt:COVID2020, book path and the
     day x Sector breakout (which must still foot). Shapes the vector plan does not take (no
     DaySet, a Day filter, two breakouts) fall through to the level plan and its warning."""
     import requests, urllib.parse
@@ -301,21 +286,6 @@ def t_day_vector_plan_ties_level_plan_and_legacy():
             assert len(vr) == len(lr) > 1, (ctx, len(vr), len(lr))
             for a, b in zip(vr, lr):
                 same(a, b, ctx)
-            # ... and to the legacy ScenarioDay unpacking. NOT on Vanguard/HistFull: that legacy
-            # query is the 25-35 s quiet-box case and trips the cube's 120 s query timeout on a
-            # loaded box (measured) -- the level-plan tie-out above already covers that cell.
-            old = [] if (book, st) == ("Vanguard", "HistFull") else \
-                piv("ScenarioDay", "Scenario PnL at day,Scenario date at day (epoch),"
-                    "Scenario VaR line at day,Scenario worst pnl at day,"
-                    "Scenario worst date at day (epoch)",
-                    {"Book": [book], "Date": [date], "ScenarioSet": [st]})["records"]
-            assert not old or len(old) == len(vr), (ctx, len(old), len(vr))
-            for a, b in zip(vr, old):
-                assert a["Day"] == b["ScenarioDay"] and epoch(a["DayDate"]) == b["Scenario date at day (epoch)"], (ctx, a, b)
-                assert abs(a["PnL at day"] - b["Scenario PnL at day"]) < 1e-12, (ctx, a, b)
-                assert abs(a["VaR line at day"] - b["Scenario VaR line at day"]) < 1e-12, (ctx, a, b)
-                assert abs(a["Worst pnl at day"] - b["Scenario worst pnl at day"]) < 1e-12, (ctx, a, b)
-                assert a["Worst date at day (epoch)"] == b["Scenario worst date at day (epoch)"], (ctx, a, b)
             # DaySet-only filter (no ScenarioSet) is the same shape
             v2 = piv("Day,DayDate", "PnL at day", {"Book": [book], "Date": [date], "DaySet": [st]})
             assert v2.get("plan") == "vector" and len(v2["records"]) == len(vr), ctx
