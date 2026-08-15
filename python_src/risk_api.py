@@ -55,6 +55,7 @@ import inspect
 import datetime as _dt
 from collections import deque
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
 import numpy as np
@@ -508,29 +509,135 @@ async def validation(book: str = "Soros"):
 
 
 # ----------------------------------------------------------------------------- generic pivot
+_DIMS_CACHE: dict = {}   # {"key": (id(cube), response_dict)} -- see _dims_response
+
+
+def _dim_members_via_count(cube, l, m, d: str) -> list[str]:
+    """One dimension's member list via the ORIGINAL contributors.COUNT groupby -- semantics
+    byte-identical to the pre-2026-08-15 /dims, just factored out so callers can run several of
+    these concurrently (see _dims_response)."""
+    idx = cube.query(m["contributors.COUNT"], levels=[_lvl(l, d)]).index
+    # deep levels (Factor under FactorGroup, Sector under Country) come back as a MultiIndex
+    # hierarchy path -- the level's own member is the last component.
+    vals = idx.get_level_values(-1) if isinstance(idx, pd.MultiIndex) else idx
+    if d == "Date":
+        return sorted({str(pd.Timestamp(x).date()) for x in vals})
+    return sorted({str(x) for x in vals})
+
+
+def _manager_members(cube, session, l, m) -> list[str]:
+    """Book/Manager members WITHOUT the fan-out contributors.COUNT groupby (2026-08-15 cube-opt
+    round 2, docs/cube-opt-round2-dims.md). That groupby is ~85-90% of /dims's cost on the
+    124-book build (13-25s of 15-28s measured across runs): Book is an UN-MAPPED key of the
+    Positions table's partial join onto Exposures (Date+Position only, Book left out -- the same
+    partial-join trick ScenarioSet uses), so counting contributors per Book member means fanning
+    the 6M-row Exposures fact out against the matching slice of the 11.6M-row Positions table for
+    EVERY member at once.
+
+    Three cheap engine queries replace it (all round-trip into the live Atoti session, never
+    S["frames"]/pandas.read_parquet -- the cube stays the source of truth). Two variants were
+    tried and measured before this one:
+      - fetching the WHOLE Positions.Book column (Table.query, 11.6M rows) and de-duping
+        client-side: correct, but the data volume alone costs ~3.5s;
+        `t_pos.query(t_pos["Book"], max_rows=20_000_000)` then `.unique()`.
+      - the SAME idea flattened into one big worker pool alongside everything else: measured
+        WORSE (2.8s cold) than the nested version below -- too much concurrent JVM query
+        dispatch contends with itself; small, separately-pooled batches of concurrent work beat
+        one giant flat one.
+    What's here instead, and what's actually fast (measured ~1.4-1.5s for the whole /dims call
+    including this): candidate names come off the tiny (~124-row) Managers table (near-instant),
+    then EACH candidate's existence in Positions is checked with its own tightly-filtered,
+    max_rows=1 Table.query (the engine can short-circuit on the first match instead of scanning),
+    run CONCURRENTLY in their own worker pool. "N/A" (an Exposures (Date, Position) row that no
+    book holds that date -- the partial join's unmatched placeholder) is checked the same way as
+    before: a SINGLE-CELL FILTERED contributors.COUNT (`Book.isin("N/A")`) instead of enumerating
+    and counting all 124 members, so the engine answers from its per-member index rather than a
+    full fan-out scan. One measured, disclosed gap: the Managers table (managers.parquet, Phase-2
+    optional) lists every manager the desk tracks, including ones with zero equity positions ever
+    (e.g. MetLife -- 6 CUSIPs, no equity 13F row, "stays in MANAGERS but never reaches the
+    cube/UI" per CLAUDE.md); the existence check is exactly what filters those back out, so the
+    result still matches the fan-out truth, not the raw candidate list.
+    """
+    t_mgr = session.tables.get("Managers")   # None on pre-Phase-2 builds / v1 data (no managers.parquet)
+
+    def _exists(t_pos, name: str) -> bool:
+        r = t_pos.query(t_pos["Book"], filter=t_pos["Book"] == name, max_rows=1)
+        return len(r) > 0
+
+    t_pos = session.tables["Positions"]
+    if t_mgr is not None:
+        cand_df = t_mgr.query(t_mgr["Book"], max_rows=1000)
+        candidates = sorted({str(x) for x in cand_df["Book"].unique()})
+        # 32 workers, NOT one-per-candidate: measured worse (2.8s vs 1.4-1.5s) with a worker per
+        # candidate (124 here) -- too much concurrent JVM query dispatch contends with itself.
+        with ThreadPoolExecutor(max_workers=32) as ex:
+            futs = {c: ex.submit(_exists, t_pos, c) for c in candidates}
+            members = {c for c, f in futs.items() if f.result()}
+    else:
+        # no managers.parquet (pre-Phase-2 build / v1 data): fall back to the full-column scan --
+        # slower (~3.5s) but still cube-native, and the only source of Book candidates available.
+        book_df = t_pos.query(t_pos["Book"], max_rows=20_000_000)
+        members = {str(x) for x in book_df["Book"].unique()}
+
+    na_df = cube.query(m["contributors.COUNT"], filter=l["Book"].isin("N/A"))
+    if len(na_df) and int(na_df.iloc[0, 0]) > 0:
+        members.add("N/A")
+    return sorted(members)
+
+
+def _dims_response_fallback() -> dict:
+    """The pre-2026-08-15 sequential contributors.COUNT logic, byte-identical to the original
+    /dims -- kept as a safety net if the cube-native fast path above raises for any reason (e.g.
+    a cube variant with no Positions table registered under that name)."""
+    cube = S["cube"]; l, m = cube.levels, cube.measures
+    members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES}
+    members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
+    return {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
+            "scenario_dependent": sorted(SCEN_DEP), "members": members,
+            "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
+
+
+def _dims_response() -> dict:
+    """Member lists for every sliceable dimension, so the UI can offer single/multi selection on
+    any of them (not just Date / ScenarioSet). Cached on a cube-identity token (recomputes only if
+    the cube is ever rebuilt in-process -- never happens today, frames/cube are loaded once at
+    startup and held for the process lifetime) so every call after the first is a dict lookup.
+
+    2026-08-15 cube-opt round 2 (docs/cube-opt-round2-dims.md): this used to be ten sequential
+    contributors.COUNT groupbys, one per DIM_NAMES entry, ~28s total on the 124-book build (~24s
+    of it the Book/Manager dimension alone -- Step 7's flagged next candidate in
+    docs/cube-optimization-plan.md). Now: the nine cheap dimensions run CONCURRENTLY (same exact
+    query each, just not serialized -- correctness is untouched by construction), and Book/Manager
+    is answered by _manager_members's two targeted engine queries instead of the fan-out groupby.
+    Measured end to end (124-book build, cold): see the round-2 doc.
+    """
+    cube, session = S["cube"], S["session"]
+    key = id(cube)
+    cached = _DIMS_CACHE.get("key")
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    try:
+        l, m = cube.levels, cube.measures
+        cheap_dims = [d for d in DIM_NAMES if d != "Manager"]
+        with ThreadPoolExecutor(max_workers=len(DIM_NAMES)) as ex:
+            futs = {d: ex.submit(_dim_members_via_count, cube, l, m, d) for d in cheap_dims}
+            f_mgr = ex.submit(_manager_members, cube, session, l, m)
+            members = {d: f.result() for d, f in futs.items()}
+            members["Manager"] = f_mgr.result()
+        members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
+        resp = {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
+                "scenario_dependent": sorted(SCEN_DEP), "members": members,
+                "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
+    except Exception:
+        resp = _dims_response_fallback()
+    _DIMS_CACHE["key"] = (key, resp)
+    return resp
+
+
 @app.get("/dims")
 async def dims():
     """Fields the pivot UI may use: dimensions, scalar measures, and slicer member lists."""
-    def run():
-        cube = S["cube"]; l, m = cube.levels, cube.measures
-        # member lists for every sliceable dimension, so the UI can offer single/multi
-        # selection on any of them (not just Date / ScenarioSet).
-        members = {}
-        for d in DIM_NAMES:
-            idx = cube.query(m["contributors.COUNT"], levels=[_lvl(l, d)]).index
-            # deep levels (Factor under FactorGroup, Sector under Country) come back as a
-            # MultiIndex hierarchy path — the level's own member is the last component.
-            vals = idx.get_level_values(-1) if isinstance(idx, pd.MultiIndex) else idx
-            if d == "Date":
-                members[d] = sorted({str(pd.Timestamp(x).date()) for x in vals})
-            else:
-                members[d] = sorted({str(x) for x in vals})
-        # PIT:* plumbing sets stay out of the pivot's slicer list (addressable by name)
-        members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-        return {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
-                "scenario_dependent": sorted(SCEN_DEP), "members": members,
-                "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
-    return await run_in_threadpool(run)
+    return await run_in_threadpool(_dims_response)
 
 
 def _csv(s: str | None) -> list[str]:
