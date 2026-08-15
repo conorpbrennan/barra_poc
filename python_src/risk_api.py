@@ -822,14 +822,132 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
             and "Date" not in axis and "Date" not in fdict)
 
 
+# The Day-shape VECTOR PLAN (2026-08-15, follow-up 2 of docs/cube-opt-round2-scenarioday.md).
+# `PnL at day` over the Day/DayDate LEVELS pays an irreducible per-member fact scan (~0.5-0.8 ms
+# per fact-joined member on atoti 0.9.15, x 2,618 days, x every measure on the axis -- and it
+# parallelises across every core, so on a shared box it runs 5-10x slower than the quiet-box
+# bench). The SAME numbers are already in the cube as ONE cell: `Scenario PnL vector` (per
+# breakout member when there is one) and its `Scenario dates (epoch)` dual -- ~0.15 s on the
+# largest book regardless of load. So when a /pivot query is exactly the Day shape, read the
+# vector(s) and RESHAPE them into the identical tidy records (the /backtest, /drawdown and
+# /scenario_pnl precedent: unpacking a cube vector is reshape, not analytics -- every number is
+# still the cube's own vector element; the tie-out is pinned at 1e-12 by test_risk_measures).
+# Anything else falls through to the level plan untouched, and `plan=levels` forces it.
+_DAY_BREAKOUTS = ("Sector", "Issuer", "Position", "Factor", "FactorGroup", "Country")
+
+
+def _day_vector_shape(rlist: list, clist: list, mlist: list, fdict: dict):
+    """Is (rows, cols, measures, filters) the Day shape the vector plan serves? Returns
+    (with_daydate, breakout_or_None, set_name) or None. Pure (no cube), unit-testable.
+    Shape: rows = Day [, DayDate] [, ONE breakout]; no cols; every measure in DAY_DEP; filters
+    carry exactly one Date, one Manager, and ONE DaySet (plus at most one ScenarioSet, equal to
+    it -- the two hierarchies carry the same names for the 7 real sets)."""
+    if clist or not rlist or rlist[0] != "Day":
+        return None
+    if not mlist or any(x not in DAY_DEP for x in mlist):
+        return None
+    rest = list(rlist[1:])
+    with_daydate = bool(rest) and rest[0] == "DayDate"
+    if with_daydate:
+        rest = rest[1:]
+    if len(rest) > 1 or (rest and rest[0] not in _DAY_BREAKOUTS):
+        return None
+    breakout = rest[0] if rest else None
+    for k in ("Date", "Manager"):
+        if len(fdict.get(k) or []) != 1:
+            return None
+    ds, ss = fdict.get("DaySet") or [], fdict.get("ScenarioSet") or []
+    # DaySet is REQUIRED (a ScenarioSet-only query is the warned "no DaySet context" shape and
+    # stays on the level plan, so the warning and the served result keep saying the same thing).
+    if len(ds) != 1 or len(ss) > 1:
+        return None
+    if ds and ss and ds[0] != ss[0]:
+        return None
+    set_name = (ds or ss)[0]
+    if str(set_name).startswith("PIT:"):
+        return None                     # PIT sets are their own hierarchy; not a Day-path case
+    if "Day" in fdict or "DayDate" in fdict:
+        return None                     # a day-index filter is a level-plan feature
+    return with_daydate, breakout, str(set_name)
+
+
+def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: dict,
+                        stress_scenario: str | None) -> list[dict]:
+    """The vector plan's records: identical columns/order/types to the level plan (Day int,
+    DayDate ISO date, the breakout's full hierarchy path as the cube emits it, then the measures
+    in the caller's order). Book-level markers (`VaR line at day` & co.) come from ONE single-cell
+    query and are broadcast to every row, exactly what the cube's lifted markers evaluate to."""
+    with_daydate, breakout, set_name = shape
+    fd = {k: v for k, v in fdict.items() if k not in ("DaySet", "ScenarioSet")}
+    fd["ScenarioSet"] = [set_name]
+    filt = _build_filter(l, fd)
+    if stress_scenario is not None:
+        filt = filt & (l["StressShock"] == stress_scenario)
+    dv = cube.query(m["Scenario dates (epoch)"], filter=(l["ScenarioSet"] == set_name))
+    days = np.asarray(dv.iloc[0, 0], dtype=int) if len(dv) and dv.iloc[0, 0] is not None \
+        else np.zeros(0, dtype=int)
+    if breakout is None:
+        pv = cube.query(m["Scenario PnL vector"], filter=filt, **query_kw)
+        vecs = [((), np.asarray(pv.iloc[0, 0], dtype=float))] \
+            if len(pv) and pv.iloc[0, 0] is not None else []
+        path_names: list = []
+    else:
+        pv = cube.query(m["Scenario PnL vector"], levels=[_lvl(l, breakout)], filter=filt, **query_kw)
+        path_names = list(pv.index.names)
+        vecs = []
+        for idx, row in pv.iterrows():
+            arr = row.iloc[0]
+            if arr is None:
+                continue
+            key = idx if isinstance(idx, tuple) else (idx,)
+            vecs.append((tuple(key), np.asarray(arr, dtype=float)))
+    markers = {}
+    if any(x != "PnL at day" for x in mlist):
+        sc = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"],
+                        m["Scenario worst date (epoch)"], filter=filt, **query_kw)
+        r = sc.iloc[0] if len(sc) else None
+        def _f(name, sign=1.0):
+            if r is None or r[name] is None:
+                return None
+            f = float(r[name]); return None if math.isnan(f) else sign * f
+        wd = None if r is None or r["Scenario worst date (epoch)"] is None \
+            else int(r["Scenario worst date (epoch)"])
+        markers = {"VaR line at day": _f("Scenario VaR 99", -1.0),
+                   "Worst pnl at day": _f("Scenario worst loss", -1.0),
+                   "Worst date at day (epoch)": wd}
+    n_days = int(min([len(days)] + [len(a) for _, a in vecs])) if vecs else 0
+    # Build the dicts directly (no DataFrame/iterrows: 199k rows on Vanguard x Sector cost ~6 s
+    # that way). Same key order and value types as _records: Day int, DayDate ISO string, the
+    # path members as the cube emitted them, then the measures (float / marker / None).
+    day_iso = [(_EPOCH + pd.Timedelta(days=int(days[d]))).date().isoformat() for d in range(n_days)]
+    keys = [(tuple(_clean(kv) for kv in key), [float(x) for x in arr[:n_days]]) for key, arr in vecs]
+    static = {x: markers.get(x) for x in mlist if x != "PnL at day"}
+    out = []
+    for day in range(n_days):
+        for key, vals in keys:
+            rec = {"Day": day}
+            if with_daydate:
+                rec["DayDate"] = day_iso[day]
+            for nm, kv in zip(path_names, key):
+                rec[nm] = kv
+            v = vals[day]
+            for x in mlist:
+                rec[x] = (None if v != v else v) if x == "PnL at day" else static[x]
+            out.append(rec)
+    return out
+
+
 def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
-                  scenario: str | None = None, stress_scenario: str | None = None) -> dict:
+                  scenario: str | None = None, stress_scenario: str | None = None,
+                  plan: str | None = None) -> dict:
     """The tidy pivot result (records [+ per_row/per_col/grand margins when totals]). Extracted
     from /pivot so /analysis feeds the model the EXACT numbers the view renders. Synchronous —
     call via run_in_threadpool. Assumes _validate_pivot has already run.
     `scenario` = a SOURCE-scenario branch name (what-if trades — cube.query(scenario=...));
     `stress_scenario` = a StressShock PARAMETER-simulation scenario (custom sigmas — selected
-    by slicing the StressShock level). Both default to the base."""
+    by slicing the StressShock level). Both default to the base.
+    `plan` = None/"auto" (the Day shape takes the vector plan, see _day_vector_shape) or
+    "levels" (force the level plan — the tie-out tests use it)."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
     seen, axis = set(), []
     for name in rlist + clist:          # dedupe, preserve order
@@ -871,9 +989,19 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
         df = df.rename(columns=_back) if pit_mode else df
         return df.rename_axis(index={"Book": "Manager"}) if "Book" in (df.index.names or []) else df
 
+    shape = None if plan == "levels" or pit_mode else _day_vector_shape(rlist, clist, mlist, fdict)
+    if shape is not None:
+        recs = _day_vector_records(cube, l, m, shape, mlist, fdict, _kw, stress_scenario)
+        out = {"rows": rlist, "cols": clist, "measures": mlist, "totals": bool(totals),
+               "warning": warning, "plan": "vector", "records": recs}
+        if totals:
+            # the Day path has no meaningful margins (a sum over days is not a risk number);
+            # keep the keys the UI expects.
+            out["per_row"] = []; out["grand"] = {}
+        return out
     df = _canon_ax(cube.query(*meas_objs, levels=[_lvl(l, a) for a in axis], filter=filt, **_kw))
     out = {"rows": rlist, "cols": clist, "measures": mlist, "totals": bool(totals),
-           "warning": warning, "records": _records(df)}
+           "warning": warning, "plan": "levels", "records": _records(df)}
     if totals:
         def _ax(names):     # margins ride the same PIT rewrite as the main axis
             return [("PITSet" if (pit_mode and x == "ScenarioSet") else x) for x in names]
@@ -992,7 +1120,9 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
                 whatif: str | None = Query(None, description=
                     'JSON [{"position","weight"}] — run the pivot on a transient what-if branch'),
                 shocks: str | None = Query(None, description=
-                    'JSON {"Factor": sigma} — run the pivot under a transient custom stress')):
+                    'JSON {"Factor": sigma} — run the pivot under a transient custom stress'),
+                plan: str | None = Query(None, description=
+                    '"levels" forces the level plan for the Day shape (default: vector plan)')):
     """Tidy long result of cube.query(measures, levels=rows+cols, filter=<slicers>).
 
     Slicers: `filters` is a JSON object {dimension: [members]} — AND across dimensions,
@@ -1017,7 +1147,8 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
     _validate_pivot(rlist, clist, mlist, fdict)
     wtrades, shk = _parse_hypo(whatif, shocks, fdict)
     if not wtrades and not shk:
-        return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals))
+        return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals),
+                                       None, None, plan)
     return await run_in_threadpool(_hypothetical_pivot, rlist, clist, mlist, fdict,
                                    bool(totals), wtrades, shk)
 

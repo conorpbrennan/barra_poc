@@ -274,3 +274,70 @@ Both items below are shipped:
   existing scenario-context warning does not cover them) and is a separate, testable change.
 - `author_chart_views.py`'s two scenario-path chart views still author `rows=["ScenarioDay"]`.
   They keep working; they would get ~10× faster by moving to `rows=["Day","DayDate"]`.
+
+## Follow-up 2 — the vector plan (2026-08-15, later the same day)
+
+The Day path shipped above is load-bound, not code-bound: the same `PnL at day` over
+Vanguard/HistFull measured 1.5 s in the quiet-box bench, 3 s on a fresh in-process cube at load 9,
+7 s on a freshly restarted service and 13–15 s on the service an hour later — the per-member fact
+scan parallelises across every core, so ambient load on this shared box multiplies it 5–10×. The
+per-member floor is also paid once PER MEASURE on the axis (each chart marker adds it again) and
+day × Sector at 199k rows stayed at 12–35 s.
+
+The same numbers already exist in the cube as ONE cell: `Scenario PnL vector` (one per breakout
+member when there is a breakout) and its `Scenario dates (epoch)` dual — 0.14 s cold / 0.02 s
+warm on Vanguard, and independent of load. So `/pivot` now recognises the Day shape and takes a
+**vector plan** (`risk_api.py`: `_day_vector_shape` — pure, `_day_vector_records`):
+
+- **Shape:** rows = `Day` [, `DayDate`] [, ONE breakout of Sector/Issuer/Position/Factor/
+  FactorGroup/Country]; no cols; every measure in `DAY_DEP`; filters with exactly one Date, one
+  Manager, one `DaySet` (plus at most one ScenarioSet, equal to it), no Day/DayDate filter, no PIT
+  set. Anything else falls through to the level plan untouched (so does `plan=levels`, which the
+  tie-out test uses). A ScenarioSet-only query is the warned "no DaySet context" shape and STAYS
+  on the level plan — the warning and the served result keep saying the same thing.
+- **How:** one `Scenario dates (epoch)` cell (the set's calendar), the P&L vector sliced to
+  Date/Manager/ScenarioSet==set (per breakout member via `levels=[breakout]`, whose index gives
+  the same hierarchy-path columns the level plan emits — Country+Sector etc.), and, only when a
+  marker is requested, ONE single-cell query of `Scenario VaR 99` / `Scenario worst loss` /
+  `Scenario worst date (epoch)` at book level (negated as the cube's lifted markers are),
+  broadcast to every row. Records are built as plain dicts (a first cut via DataFrame +
+  `iterrows` cost ~6 s on Vanguard × Sector's 199k rows). The payload carries `plan:
+  "vector"|"levels"` (additive).
+- **What it is, honestly:** API-side reshaping of a cube vector — the `/backtest`, `/drawdown`
+  and `/scenario_pnl` precedent ("unpacking is reshape, not analytics"). Every number is the
+  cube's own vector element; nothing is recomputed in numpy. It is not a cube-native level, which
+  is why it is gated by the tie-out below and why `plan=levels` remains available.
+
+**Correctness gate** — `test_risk_measures.py::t_day_vector_plan_ties_level_plan_and_legacy`: on
+Soros and Vanguard (2026-06-30), HistFull and Evt:COVID2020, the vector plan equals the level plan
+record-for-record (same keys, same order, |Δ| < 1e-12) for the book path with all four measures,
+equals the legacy ScenarioDay path (except Vanguard/HistFull, where the legacy query trips the
+cube's 120 s timeout on a loaded box — the level tie-out already covers that cell), the
+DaySet-only filter is the same shape, day × Sector equals the level plan (Soros both sets,
+Vanguard COVID) and foots to the book day, and the non-vector shapes (no DaySet, two breakouts,
+a Day filter) fall through with `plan: "levels"` and the DaySet warning. All pass; the suite's
+one failure is the pre-existing `t_incremental_total_is_subadditive` (`docs/multi-manager-plan.md`).
+
+**Measured** — over HTTP against one worktree instance (12 g heap, cube port 9097, `plan=levels`
+vs default in the SAME process, best of 2, loadavg 14–20 throughout — two sibling agents were
+running their own cubes; the level numbers here are the loaded-box reality, not the quiet bench):
+
+| query | level plan | vector plan |
+|---|---|---|
+| Soros HistFull book path | 0.99 s | **0.48 s** |
+| Soros HistFull + 3 markers | 1.62 s | **0.47 s** |
+| Soros HistFull × Sector (44.5k rows) | 4.29 s | **0.72 s** |
+| Soros COVID + markers / × Sector | 0.47 / 0.56 s | 0.48 / 0.47 s |
+| Vanguard HistFull book path | 11.14 s | **0.44 s** |
+| Vanguard HistFull + 3 markers | 21.42 s | **0.47 s** |
+| Vanguard HistFull × Sector (199k rows) | 28.67 s | **1.69 s** |
+| Vanguard COVID + markers / × Sector | 1.14 / 1.14 s | 0.49 / 0.58 s |
+
+The ~0.45 s floor is HTTP + FastAPI + the two/three small cube round-trips; Vanguard × Sector's
+1.7 s is dominated by serialising 199k records. The Day-shape cost no longer depends on the book
+size, the number of measures, or (materially) the box's load. Round 2's two unmet gates — book
+path warm < 0.5 s and day × Sector < 5 s — are met by this plan on the loaded box.
+
+Not done here: `/analysis` and `/ask` reach the same `_pivot_result`, so they inherit the plan
+(default `plan=None`); the Vite Pivot lens and the chart views need no change (same records).
+The level plan, the `ScenarioDay` legacy path and their measures are untouched.
