@@ -743,7 +743,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["PnL at day"] = tt.agg.sum(
         _exp_ex_day * tt.agg.single_value(t_days["ShockAtDay"]),
         scope=tt.OriginScope({l["Factor"]}))
-    m["PnL at day"].formatter = "DOUBLE[0.00%]"
+    m.fmt("PnL at day", "DOUBLE[0.00%]")   # deferred: the batched publish owns formatters
     # The date dual, epoch days like `Scenario dates (epoch)`. MAX, not SUM: the epoch is the same
     # on every factor row of a (DaySet, Day), so max reads it once instead of fanning out 23x (the
     # joined-column fan-out trap the SpecificVar note above flags).
