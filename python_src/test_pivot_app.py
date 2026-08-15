@@ -269,27 +269,27 @@ def _seed_chart_view(name, slug_unused=None):
 
 @test
 def t_scenario_day_chart_renders_records():
-    """A scenario query (rows=[ScenarioDay]) is a NORMAL pivot query: the synthetic ScenarioDay
-    dimension unpacks the P&L vector per day, and the /pivot records bind as the spec's default
-    dataset (no named-dataset machinery). The chart renders with a non-empty DataFrame."""
+    """A scenario-path query (rows=[Day, DayDate] + a DaySet slice — the fast day-facts path) is a
+    NORMAL pivot query: the per-day P&L comes back one row per real day of the set with its calendar
+    date on the DayDate LEVEL, and the /pivot records bind as the spec's default dataset (no
+    named-dataset machinery). The chart renders with a non-empty DataFrame."""
     import streamlit as st
     import views_repo as R
     import pandas as pd
     spec = {"$schema": _VL5, "source": "Path",
-            "transform": [{"calculate": "toDate(datum['Scenario date at day (epoch)'] * 86400000)",
-                           "as": "date"}],
+            "transform": [{"calculate": "toDate(datum['DayDate'] + 'T00:00:00')", "as": "date"}],
             "mark": {"type": "line"},
             "encoding": {"x": {"field": "date", "type": "temporal"},
-                         "y": {"field": "Scenario PnL at day", "type": "quantitative"}}}
-    covid = {"Book": ["Soros"], "Date": ["2024-12-31"], "ScenarioSet": ["Evt:COVID2020"]}
+                         "y": {"field": "PnL at day", "type": "quantitative"}}}
+    covid = {"Book": ["Soros"], "Date": ["2024-12-31"], "ScenarioSet": ["Evt:COVID2020"],
+             "DaySet": ["Evt:COVID2020"]}
     R.save_view("Scen Day", "Public", {
-        "rows": ["ScenarioDay"], "cols": [], "measures": ["Scenario PnL at day"],
-        "slice_dims": ["Book", "Date", "ScenarioSet"], "filters": covid,
+        "rows": ["Day", "DayDate"], "cols": [], "measures": ["PnL at day"],
+        "slice_dims": ["Book", "Date", "ScenarioSet", "DaySet"], "filters": covid,
         "row_tot": False, "col_tot": False, "as_pct": True, "hide_empty": True, "heat": True,
         "prec": 3, "sort": [], "render": "chart",
-        "queries": [{"name": "Path", "rows": ["ScenarioDay"], "cols": [],
-                     "measures": ["Scenario PnL at day", "Scenario date at day (epoch)"],
-                     "filters": covid}], "chart": spec})
+        "queries": [{"name": "Path", "rows": ["Day", "DayDate"], "cols": [],
+                     "measures": ["PnL at day"], "filters": covid}], "chart": spec})
     captured = []
     orig = st.vega_lite_chart
 
@@ -310,7 +310,7 @@ def t_scenario_day_chart_renders_records():
     assert captured, "no chart rendered"
     df = captured[0]
     assert isinstance(df, pd.DataFrame) and len(df) > 0, df
-    assert "Scenario PnL at day" in df.columns, list(df.columns)
+    assert "PnL at day" in df.columns and "DayDate" in df.columns, list(df.columns)
 
 
 @test
@@ -521,7 +521,7 @@ def t_graph_builder_new_graph_has_full_defaults():
 
 @test
 def t_builder_named_queries_and_graph_refs():
-    """Define 2 named pivot queries (structurally different — a Date series and a ScenarioDay/Sector
+    """Define 2 named pivot queries (structurally different — a Date series and a Day/DayDate/Sector
     series), then 2 graphs each referencing one by name -> `queries` is the 2 named definitions, and
     each spec references its query by name."""
     at = _run()
@@ -532,8 +532,8 @@ def t_builder_named_queries_and_graph_refs():
     # 2nd query: per-day scenario P&L by Sector, named
     at.button(key="pv_qry_add").click().run()
     at.text_input(key="pv_qry_name_1").set_value("By Sector").run()
-    at.multiselect(key="pv_qry_rows_1").set_value(["ScenarioDay", "Sector"]).run()
-    at.multiselect(key="pv_qry_meas_1").set_value(["Scenario PnL at day"]).run()
+    at.multiselect(key="pv_qry_rows_1").set_value(["Day", "DayDate", "Sector"]).run()
+    at.multiselect(key="pv_qry_meas_1").set_value(["PnL at day"]).run()
     # 2nd graph referencing the 2nd query
     at.button(key="pv_gb_add").click().run()
     at.selectbox(key="pv_gb_source_1").set_value("By Sector").run()
@@ -541,7 +541,7 @@ def t_builder_named_queries_and_graph_refs():
     qs = _ss(at, "pv_queries")
     assert isinstance(qs, list) and len(qs) == 2, qs
     assert qs[0]["name"] == "By date" and qs[0]["rows"] == ["Date"], qs[0]
-    assert qs[1]["name"] == "By Sector" and qs[1]["rows"] == ["ScenarioDay", "Sector"], qs[1]
+    assert qs[1]["name"] == "By Sector" and qs[1]["rows"] == ["Day", "DayDate", "Sector"], qs[1]
     ch = _ss(at, "pv_chart")
     assert isinstance(ch, list) and len(ch) == 2
     assert ch[0].get("source") == "By date" and ch[1].get("source") == "By Sector"
@@ -575,8 +575,8 @@ def t_graph_raw_bundle_applies_queries_and_chart():
     """Applying a full {queries, chart} bundle in the raw editor sets BOTH the named queries and the
     specs (the view is entirely self-contained)."""
     view = {"queries": [{"name": "A", "rows": ["Date"], "cols": [], "measures": ["Net exposure"]},
-                        {"name": "B", "rows": ["ScenarioDay", "Sector"], "cols": [],
-                         "measures": ["Scenario PnL at day"]}],
+                        {"name": "B", "rows": ["Day", "DayDate", "Sector"], "cols": [],
+                         "measures": ["PnL at day"]}],
             "chart": [_LINE_SPEC, {"mark": "area", "encoding": {}}]}
     at = _run()
     at.text_area(key="pv_graph_json").set_value(json.dumps(view)).run()

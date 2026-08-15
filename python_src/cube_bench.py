@@ -104,6 +104,7 @@ def build_suite(cube, ctx):
     BK = l["Book"] == B
     DT = l["Date"] == D
     base = DT & BK & HF
+    DAY_HF = l["DaySet"] == "HistFull"      # the day-facts table's OWN set key (day_path_* entries)
     q = cube.query
     books = ctx["books"]
 
@@ -127,8 +128,18 @@ def build_suite(cube, ctx):
         # C — vector family
         ("pnl_vector_book",          "vector",   lambda: q(m["Scenario PnL vector"], filter=base)),
         ("pnl_sorted_book",          "vector",   lambda: q(m["Scenario PnL sorted"], filter=base)),
+        # legacy per-day path (ScenarioDay parameter hierarchy) — kept for the A/B against the twins below
         ("scenario_day_path",        "vector",   lambda: q(m["Scenario PnL at day"], levels=[l["ScenarioDay"]], filter=base)),
         ("scenario_day_by_sector",   "vector",   lambda: q(m["Scenario PnL at day"], levels=[l["ScenarioDay"], l["Sector"]], filter=base)),
+        # the FAST per-day path (2026-08-15): days as facts on ScenarioDays, read off Day/DayDate with a
+        # DaySet slice (`PnL at day` reads DaySet; the lifted markers read ScenarioSet, so both are set)
+        ("day_path",                 "vector",   lambda: q(m["PnL at day"], levels=[l["Day"], l["DayDate"]],
+                                                           filter=base & DAY_HF)),
+        ("day_path_markers",         "vector",   lambda: q(m["PnL at day"], m["VaR line at day"], m["Worst pnl at day"],
+                                                           m["Worst date at day (epoch)"],
+                                                           levels=[l["Day"], l["DayDate"]], filter=base & DAY_HF)),
+        ("day_path_by_sector",       "vector",   lambda: q(m["PnL at day"], levels=[l["Day"], l["DayDate"], l["Sector"]],
+                                                           filter=base & DAY_HF)),
         # D — decomposition family
         ("marginal_var_by_factor",   "decomp",   lambda: q(m["Marginal Scenario VaR 99"], m["% of Scenario VaR 99"],
                                                            levels=[l["Factor"]], filter=base)),

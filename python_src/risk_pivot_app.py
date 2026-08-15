@@ -143,9 +143,11 @@ def _build_specs(graphs: list, queries: list, date_fmt: str = DATE_FMT_DEFAULT):
 
 def _queries_from_state(state: dict) -> list:
     """The view's `queries` (self-contained pivot queries). If a view predates the model and only
-    has a legacy `source` feed-list, migrate it: a scenario_pnl feed -> a ScenarioDay query over the
-    per-day measures (its breakout becomes a second row dim); a bare pivot feed -> inherit the view's
-    own rows/cols/measures/filters. Lets old saved views still load."""
+    has a legacy `source` feed-list, migrate it: a scenario_pnl feed -> a Day/DayDate query over the
+    fast per-day measures (its breakout becomes a third row dim; the view's ScenarioSet filter is
+    mirrored onto DaySet — `PnL at day` reads DaySet, the book markers read ScenarioSet); a bare
+    pivot feed -> inherit the view's own rows/cols/measures/filters. Lets old saved views still load.
+    (Pre-2026-08-15 this migrated onto the legacy ScenarioDay parameter hierarchy, ~10-40x slower.)"""
     qs = state.get("queries")
     if isinstance(qs, list):
         return qs
@@ -162,11 +164,13 @@ def _queries_from_state(state: dict) -> list:
         s = s if isinstance(s, dict) else {}
         name = s.get("name") or f"Query {i + 1}"
         if s.get("endpoint") == "scenario_pnl":
-            rows = ["ScenarioDay"] + ([s["breakout"]] if s.get("breakout") else [])
+            rows = ["Day", "DayDate"] + ([s["breakout"]] if s.get("breakout") else [])
+            dflt = dict(vflt)
+            if "ScenarioSet" in dflt and "DaySet" not in dflt:
+                dflt["DaySet"] = list(dflt["ScenarioSet"])
             out.append({"name": name, "rows": rows, "cols": [],
-                        "measures": ["Scenario PnL at day", "Scenario date at day (epoch)",
-                                     "Scenario VaR line at day", "Scenario worst pnl at day",
-                                     "Scenario worst date at day (epoch)"], "filters": vflt})
+                        "measures": ["PnL at day", "VaR line at day", "Worst pnl at day",
+                                     "Worst date at day (epoch)"], "filters": dflt})
         else:
             out.append({"name": name, "rows": vrows, "cols": list(state.get("cols") or []),
                         "measures": list(state.get("measures") or []), "filters": vflt})
@@ -1654,7 +1658,7 @@ with st.sidebar:
                               label_visibility="collapsed", placeholder=f"query {_j + 1} name")
                 # full-width, stacked (NOT side-by-side) so every selected member is readable
                 st.multiselect("Rows", _dim_opts, key=f"pv_qry_rows_{_j}", on_change=_gb_touch,
-                               help="Group-by dimensions. ScenarioDay unpacks the scenario P&L vector per day.")
+                               help="Group-by dimensions. Day + DayDate (with a DaySet filter) give the per-day scenario P&L path.")
                 st.multiselect("Columns", _dim_opts, key=f"pv_qry_cols_{_j}", on_change=_gb_touch,
                                help="Optional cross-tab dimension(s); leave empty for a flat series.")
                 st.multiselect("Measures", _all_meas, key=f"pv_qry_meas_{_j}", on_change=_gb_touch)
@@ -1924,8 +1928,8 @@ def render_spec(view_filters: dict) -> None:
 
     `chart` is a single spec or a LIST of specs (each drawn as its own chart). `queries` is a list
     of NAMED pivot queries; each spec carries `"source": <query name>` linking the graph to ONE
-    query (e.g. the COVID view: graph 1 → "Scenario P&L" [rows=ScenarioDay], graph 2 → "Scenario
-    P&L by Sector" [rows=ScenarioDay,Sector]). Identical queries are run once (cached). Positional
+    query (e.g. the COVID view: graph 1 → "Scenario P&L" [rows=Day,DayDate], graph 2 → "Scenario
+    P&L by Sector" [rows=Day,DayDate,Sector]). Identical queries are run once (cached). Positional
     fallback keeps a name-less spec working."""
     ss = st.session_state
     spec = ss.get("pv_chart")

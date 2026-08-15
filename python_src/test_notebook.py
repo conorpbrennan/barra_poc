@@ -56,27 +56,31 @@ def t_stress_board_all_sets(cube):
 
 @_test
 def t_covid_path_unpacks_vector(cube):
-    """ScenarioDay turns the COVID P&L vector into a per-day series (the graph-1 query)."""
+    """The Day/DayDate levels read the COVID P&L vector as a per-day series (the graph-1 query):
+    `PnL at day` sliced by DaySet, the calendar date off the DayDate LEVEL, the book VaR marker
+    (lifted, reads ScenarioSet) constant along the rows."""
     l, m = cube.levels, cube.measures
-    covid = (l["Book"] == "Soros") & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
-    df = cube.query(m["Scenario PnL at day"], m["Scenario date at day (epoch)"],
-                    m["Scenario VaR line at day"], levels=[l["ScenarioDay"]], filter=covid)
+    covid = ((l["Book"] == "Soros") & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
+             & (l["DaySet"] == "Evt:COVID2020"))
+    df = cube.query(m["PnL at day"], m["VaR line at day"],
+                    levels=[l["Day"], l["DayDate"]], filter=covid).reset_index()
     assert 60 < len(df) < 120, len(df)                      # ~80 trading days, << HistFull's length
-    dates = pd.to_datetime(df["Scenario date at day (epoch)"].astype("int64"), unit="D")
+    dates = pd.to_datetime(df["DayDate"])
     assert dates.dt.year.eq(2020).all()
+    assert df["VaR line at day"].astype(float).nunique() == 1   # one book-level rule
 
 
 @_test
 def t_covid_sector_rank_is_monotonic(cube):
     """The graph-2 loss-curve ordering computed in the DataFrame is monotonic in book-total P&L."""
     l, m = cube.levels, cube.measures
-    covid = (l["Book"] == "Soros") & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
-    sector = cube.query(m["Scenario PnL at day"], m["Scenario date at day (epoch)"],
-                        levels=[l["ScenarioDay"], l["Sector"]], filter=covid).reset_index()
-    sector["Scenario PnL at day"] = sector["Scenario PnL at day"].astype(float)
-    order = (sector.groupby("ScenarioDay", as_index=False)["Scenario PnL at day"]
-                    .sum().sort_values("Scenario PnL at day"))
-    assert order["Scenario PnL at day"].is_monotonic_increasing    # worst-first -> non-decreasing
+    covid = (l["Book"] == "Soros") & (l["Date"] == D) & (l["DaySet"] == "Evt:COVID2020")
+    sector = cube.query(m["PnL at day"],
+                        levels=[l["Day"], l["DayDate"], l["Sector"]], filter=covid).reset_index()
+    sector["PnL at day"] = sector["PnL at day"].astype(float)
+    order = (sector.groupby("Day", as_index=False)["PnL at day"]
+                    .sum().sort_values("PnL at day"))
+    assert order["PnL at day"].is_monotonic_increasing    # worst-first -> non-decreasing
     assert sector["Sector"].nunique() > 5, sector["Sector"].nunique()
 
 

@@ -913,7 +913,14 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   works. `VaR line at day` / `Worst pnl at day` / `Worst date at day (epoch)` are its chart markers
   (book constants lifted over the day hierarchies). The legacy `ScenarioDay` parameter hierarchy +
   `Scenario PnL at day` & co. stay on the allowlist for backward compatibility only (~5-40× slower,
-  × Sector fails). The COVID chart views and `/ask`'s grounding use the fast route.
+  × Sector fails). Every in-repo consumer is on the fast route as of 2026-08-15: the COVID chart
+  views (`author_chart_views.py`), `/ask`'s grounding, the Streamlit app's legacy `scenario_pnl`
+  feed migration (`_queries_from_state` — mirrors the view's ScenarioSet filter onto DaySet), the
+  two demo notebooks' idiom cells (`notebooks/*_13f_risk.ipynb`, source rewritten, outputs from the
+  last executed run — re-run to refresh), `test_notebook.py`, `test_pivot_app.py`, the Vite
+  `ChartMode` fixtures, and `cube_bench.py`'s `day_path_*` entries (the legacy `scenario_day_*`
+  entries stay for the A/B). Only `test_risk_measures.py` still queries the legacy names — as the
+  tie-out control for the fast path.
 - **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
   `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
   `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".

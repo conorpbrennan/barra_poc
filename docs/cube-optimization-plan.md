@@ -255,7 +255,9 @@ address:
   `Net exposure` at (Date, Book, Factor) leaves the 2,618 vector index reads untouched. Note also
   how narrow this hotspot is in practice: the UI's per-day path comes from `/scenario_pnl`, which
   reads the whole P&L vector + its date dual in ONE query (`pnl_vector_book`: **0.04 s cold**).
-  The ScenarioDay dimension is used only by the notebook idiom and a hand-built pivot. Step 1
+  The ScenarioDay dimension was used only by the notebook idiom and a hand-built pivot (both
+  migrated onto the Day/DayDate day-facts path on 2026-08-15 — see the round-2 verdict below;
+  ScenarioDay is now legacy, kept in the cube for backward compatibility only). Step 1
   proved padding can't fix it on this SDK; the next idea worth testing is capping the parameter
   hierarchy (e.g. the last 500 days) or serving the drill from the vector in the API.
 - **Build time** (~64 s) is dominated by `read_pandas` of the 6 M-row `exposures` table. A
