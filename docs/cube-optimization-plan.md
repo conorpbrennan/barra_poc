@@ -71,6 +71,12 @@ So VaR/ES/vol on every non-HistFull set would go NaN. A companion mask can't res
 there is no elementwise NaN filter in the array API, only length-preserving `positive_values`/
 `negative_values`. Padding is off, permanently, on this SDK.
 
+**Round 2 (2026-08-15) took hotspot 1 up again and got it 10×** — days as a physical fact table
+with an ordinary `Day` level instead of the 2,618-member parameter hierarchy: book path 25 s → 2.5 s,
++14 G → +0.9 G, and `day × Sector` works where it used to fail. The hard < 2 s / < 0.5 s targets were
+still missed on the largest book's full history, and the reason is now measured rather than guessed.
+Attempt log, numbers and verdict: `docs/cube-opt-round2-scenarioday.md`.
+
 The one numerically-safe half of the step was then tried alone and **also reverted**: making
 `Scenario n` a physical `VecLen` column on `ScenarioAxis` (instead of `tt.array.len` of the P&L
 vector), so the ScenarioDay in-range gate stops depending on the whole vector being evaluated.
@@ -233,7 +239,12 @@ baseline says routine queries don't need it — this is insurance for future sca
 daily calendar), gated like everything else on a harness diff and a what-if branch check
 (providers must respect source scenarios, or the branch-sensitivity design breaks).
 
-**Assessment (2026-08-14): NOT warranted, not implemented.** After Steps 2/4/5/6 every routine
+**Assessment (2026-08-14): NOT warranted, not implemented. And since 2026-08-15, not POSSIBLE:**
+round 2 tried an aggregate provider at {Date, Book, Factor} and atoti refused it outright —
+`Hierarchy[Positions, Book] cannot be part of the partial provider definition because it is an
+analysis hierarchy. This use case is not supported.` Every hierarchy this cube would want to
+pre-aggregate on (Book, ScenarioSet, PITSet, Day) is an analysis hierarchy created by a partial
+join, so Step 7 is closed for any book-scoped measure on this SDK, not merely deferred. After Steps 2/4/5/6 every routine
 query in the suite is 0.03–0.5 s cold and 0.01–0.05 s warm, the all-sets family no longer fails,
 and the one query shape that could take a minute is now bounded by policy at 1.1 s. A provider
 would buy nothing there. The two things still slow are the two a `Net exposure` provider does not
