@@ -1,0 +1,228 @@
+{
+ "stages": {
+  "load_frames_s": 0.75,
+  "build_cube_s": 58.26,
+  "jvm_rss_after_build_gb": 8.31,
+  "py_rss_after_build_gb": 1.72,
+  "jvm_rss_after_gb": 10.93
+ },
+ "queries": {
+  "new_day_path": {
+   "cold": {
+    "s": 2.484,
+    "jvm_before_gb": 8.34,
+    "jvm_after_gb": 9.23,
+    "jvm_peak_gb": 9.23,
+    "jvm_delta_gb": 0.89,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 2.095,
+    "jvm_before_gb": 9.23,
+    "jvm_after_gb": 9.87,
+    "jvm_peak_gb": 9.87,
+    "jvm_delta_gb": 0.63,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_no_date": {
+   "cold": {
+    "s": 2.175,
+    "jvm_before_gb": 9.87,
+    "jvm_after_gb": 9.87,
+    "jvm_peak_gb": 9.87,
+    "jvm_delta_gb": 0.0,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 2.158,
+    "jvm_before_gb": 9.87,
+    "jvm_after_gb": 9.88,
+    "jvm_peak_gb": 9.87,
+    "jvm_delta_gb": 0.01,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_date_measure": {
+   "cold": {
+    "s": 4.434,
+    "jvm_before_gb": 9.88,
+    "jvm_after_gb": 9.88,
+    "jvm_peak_gb": 9.88,
+    "jvm_delta_gb": 0.0,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 4.408,
+    "jvm_before_gb": 9.88,
+    "jvm_after_gb": 9.95,
+    "jvm_peak_gb": 9.95,
+    "jvm_delta_gb": 0.07,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_by_sector": {
+   "cold": {
+    "s": 14.088,
+    "jvm_before_gb": 9.95,
+    "jvm_after_gb": 11.24,
+    "jvm_peak_gb": 11.24,
+    "jvm_delta_gb": 1.29,
+    "rows": 198968,
+    "error": null
+   },
+   "warm": {
+    "s": 13.792,
+    "jvm_before_gb": 11.24,
+    "jvm_after_gb": 11.37,
+    "jvm_peak_gb": 11.37,
+    "jvm_delta_gb": 0.12,
+    "rows": 198968,
+    "error": null
+   }
+  },
+  "new_day_path_covid": {
+   "cold": {
+    "s": 0.12,
+    "jvm_before_gb": 11.37,
+    "jvm_after_gb": 11.37,
+    "jvm_peak_gb": 11.37,
+    "jvm_delta_gb": 0.0,
+    "rows": 82,
+    "error": null
+   },
+   "warm": {
+    "s": 0.038,
+    "jvm_before_gb": 11.37,
+    "jvm_after_gb": 11.37,
+    "jvm_peak_gb": 11.37,
+    "jvm_delta_gb": 0.0,
+    "rows": 82,
+    "error": null
+   }
+  },
+  "new_day_path_small_book": {
+   "cold": {
+    "s": 1.524,
+    "jvm_before_gb": 11.37,
+    "jvm_after_gb": 8.5,
+    "jvm_peak_gb": 11.38,
+    "jvm_delta_gb": -2.86,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 1.587,
+    "jvm_before_gb": 8.5,
+    "jvm_after_gb": 10.31,
+    "jvm_peak_gb": 11.22,
+    "jvm_delta_gb": 1.81,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "pnl_vector_book": {
+   "cold": {
+    "s": 0.147,
+    "jvm_before_gb": 10.31,
+    "jvm_after_gb": 9.19,
+    "jvm_peak_gb": 10.27,
+    "jvm_delta_gb": -1.12,
+    "rows": 1,
+    "error": null
+   },
+   "warm": {
+    "s": 0.024,
+    "jvm_before_gb": 9.19,
+    "jvm_after_gb": 8.93,
+    "jvm_peak_gb": 9.19,
+    "jvm_delta_gb": -0.26,
+    "rows": 1,
+    "error": null
+   }
+  }
+ },
+ "checks": [
+  {
+   "book": "Vanguard",
+   "set": "HistFull",
+   "n_days": 2618,
+   "n_vector": 2618,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "Vanguard",
+   "set": "Evt:COVID2020",
+   "n_days": 82,
+   "n_vector": 82,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "ThirdPoint",
+   "set": "HistFull",
+   "n_days": 2618,
+   "n_vector": 2618,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "ThirdPoint",
+   "set": "Evt:COVID2020",
+   "n_days": 82,
+   "n_vector": 82,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "check": "sector_footing",
+   "book": "Vanguard",
+   "set": "HistFull",
+   "days": [
+    0,
+    1,
+    41
+   ],
+   "max_abs_diff": 3.469446951953614e-18,
+   "pass": true
+  }
+ ],
+ "verdict": {
+  "day_path_cold_lt_2s": false,
+  "day_path_warm_lt_0p5s": false,
+  "day_by_sector_ok": false,
+  "jvm_delta_lt_2g": true,
+  "correctness": true,
+  "ALL": false
+ },
+ "meta": {
+  "book": "Vanguard",
+  "small_book": "ThirdPoint",
+  "date": "2026-06-30",
+  "loadavg": [
+   10.3,
+   8.9,
+   9.7
+  ],
+  "ts": "2026-08-15 02:11:33"
+ }
+}

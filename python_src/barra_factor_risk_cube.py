@@ -131,6 +131,46 @@ def build_pit_scenarios(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFr
     return pd.DataFrame(rows, columns=["PITSet", "Factor", "ShockVec"])
 
 
+def build_scenario_days(scenarios: pd.DataFrame, scn_axis: pd.DataFrame) -> pd.DataFrame:
+    """The SAME shocks as `build_scenarios`, one row per (set, factor, DAY) instead of one vector
+    per (set, factor): (DaySet, Factor, Day) -> ShockAtDay, DayEpoch.
+
+    Why a physical table (2026-08-15, optimization round 2). The per-day drill used to be served
+    ONLY by the `ScenarioDay` parameter hierarchy, which reads `vector[member]` for each of its
+    2,618 members: every member materialises the whole P&L vector and indexes it, so the book path
+    cost ~10 s warm / ~25-50 s cold and +14 G of heap, and `ScenarioDay x Sector` failed outright.
+    The cost was per-member evaluation machinery, not data volume — an 82-day event set measured
+    the same as the 2,618-day HistFull.
+
+    Exploded into facts, a day is an ordinary level: `PnL at day` is a plain additive sum-product
+    (Net exposure x this day's shock) over the 23 factors, cacheable like any other aggregation,
+    and day x Sector is a plain pivot. Derived from `scenarios`/`scn_axis` rather than recomputed
+    from `factor_ret`, so element i of a set's ShockVec and Day=i are the same number BY
+    CONSTRUCTION, not by two code paths agreeing. ~68k rows on the 7 real sets (the PIT sets get
+    no day drill: they are the honest-vol path's plumbing, addressed by name, never unpacked).
+    """
+    axis = dict(zip(scn_axis["ScenarioSet"], scn_axis["DateVec"]))
+    sets, factors, days, shocks, epochs = [], [], [], [], []
+    for s, f, v in zip(scenarios["ScenarioSet"], scenarios["Factor"], scenarios["ShockVec"]):
+        v = np.asarray(v, dtype="float64")
+        dv = np.asarray(axis[s], dtype="int32")
+        assert len(dv) == len(v), f"{s}/{f}: date axis {len(dv)} != shock vector {len(v)}"
+        sets.append(np.full(len(v), s))
+        factors.append(np.full(len(v), f))
+        days.append(np.arange(len(v), dtype="int32"))
+        shocks.append(v)
+        epochs.append(dv)
+    epoch = np.concatenate(epochs)
+    return pd.DataFrame({"DaySet": np.concatenate(sets), "Factor": np.concatenate(factors),
+                         "Day": np.concatenate(days),
+                         # the calendar date as a KEY, so it is a LEVEL (a labelled x axis) rather
+                         # than a measure: reading it off the axis costs no per-member aggregation,
+                         # where `Date at day (epoch)` (a max over the joined column) measured
+                         # roughly as much as the P&L measure itself.
+                         "DayDate": pd.to_datetime(epoch, unit="D"),
+                         "ShockAtDay": np.concatenate(shocks), "DayEpoch": epoch})
+
+
 def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
     """Per ScenarioSet, the ordered DATE AXIS of its shock/P&L vector, as epoch-day ints.
 
@@ -167,6 +207,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     scn_factors = [f for f in factor_ret["Factor"].unique() if f in set(exposures["Factor"]) or f == "Market"]
     scenarios = build_scenarios(factor_ret, scn_factors)
     scn_axis = build_scenario_axis(factor_ret, scn_factors)   # date axis dual of the shock/P&L vectors
+    scn_days = build_scenario_days(scenarios, scn_axis)       # the same shocks as day-grain FACTS
     pit_scn = build_pit_scenarios(factor_ret, scn_factors)    # truncated-history sets, own hierarchy
 
     # Leaf products: `Net exposure` is now MEASURE-LEVEL (Loading x the JOINED Positions
@@ -279,6 +320,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     t_sv  = session.read_pandas(specific,   keys={"Date", "Position"},           table_name="SpecificVar")
     t_scn = session.read_pandas(scenarios,  keys={"ScenarioSet", "Factor"},      table_name="Scenarios")
     t_axis = session.read_pandas(scn_axis,  keys={"ScenarioSet"},                table_name="ScenarioAxis")
+    t_days = session.read_pandas(scn_days, keys={"DaySet", "Factor", "Day", "DayDate"},
+                                                                                 table_name="ScenarioDays")
     t_pit = (session.read_pandas(pit_scn, keys={"PITSet", "Factor"}, table_name="PITScenarios")
              if len(pit_scn) else None)
     t_sr = (session.read_pandas(spec_pnl, keys={"Date", "Position"}, table_name="SpecificPnL")
@@ -296,6 +339,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # is selected per (ScenarioSet, Factor); exposures fan across sets but Net exposure is unaffected.
     t_exp.join(t_scn, t_exp["Factor"] == t_scn["Factor"])
     t_scn.join(t_axis, t_scn["ScenarioSet"] == t_axis["ScenarioSet"])   # date axis, one row per set
+    # The day-grain twin of that partial join, DIRECTLY off the fact table (see build_scenario_days).
+    # Its two un-mapped keys auto-create the `DaySet` and `Day` hierarchies, and nothing else in the
+    # cube reads this table -- the existing scenario topology (and every measure on it) is untouched.
+    # Deliberately NOT hung off Scenarios on (ScenarioSet, Factor), which would have reused the
+    # existing set hierarchy: atoti 0.9.15 silently drops such a table from the cube's datastore
+    # selection ("ShockAtDay is not part of the cube's datastore selection"), whichever order the
+    # joins are declared in -- a second-hop join may not introduce a new key. Hanging Scenarios off
+    # ScenarioDays instead DOES work and keeps one set hierarchy, but then every existing vector
+    # measure reads its ShockVec through a 2,618x day fan-out: not worth the risk to the fast paths.
+    t_exp.join(t_days, t_exp["Factor"] == t_days["Factor"])
     if t_pit is not None:
         # The SAME partial-join trick, second copy: PITSet is its own switch hierarchy, so the
         # ~123 truncated-history sets are off ScenarioSet and every "group by ScenarioSet" costs
@@ -453,6 +506,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # longest set (HistFull); shorter sets index past their length -> null (hide_empty drops them).
     # The calendar DATE rides along as the "Scenario date at day" measure, not a member — event
     # windows span different dates per set, so they can't be shared global members.
+    #
+    # SUPERSEDED FOR NEW WORK (2026-08-15): use the `Day` level and `PnL at day` defined below —
+    # same numbers to the last bit, measured 10x faster (2.5 s vs 25 s on the largest book's full
+    # history, 0.12 s vs ~25-50 s on an event set) with ~1 G of heap instead of ~15 G, and the
+    # `x Sector` drill WORKS there where this one raises a BadArgumentException. This block stays
+    # because the notebook and `author_chart_views.py` address it by name.
     N_days = int(scn_axis["DateVec"].map(len).max())   # longest set (HistFull) sizes the dimension
     cube.create_parameter_hierarchy_from_members(
         "ScenarioDay", list(range(N_days)), index_measure_name="ScenarioDay index")
@@ -478,6 +537,43 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Scenario worst date at day (epoch)"] = tt.where(_in, m["Scenario worst date (epoch)"], None)
     for _mn in ("Scenario PnL at day", "Scenario VaR line at day", "Scenario worst pnl at day"):
         m[_mn].formatter = "DOUBLE[0.00%]"
+
+    # ---- THE FAST PER-DAY PATH: days as FACTS, not array indices (2026-08-15) -----------------
+    # Same numbers as `Scenario PnL at day`, reached by ordinary additive aggregation over the
+    # ScenarioDays table (build_scenario_days) instead of 2,618 vector-index evaluations. USE THIS
+    # for any per-day drill; the ScenarioDay parameter hierarchy above is kept for backward
+    # compatibility only (the notebook idiom) and is ~40x slower.
+    #
+    #   book path      cube.query(m["PnL at day"], levels=[l["Day"], l["DayDate"]],
+    #                             filter=(l["Date"] == d) & (l["Book"] == b) & (l["DaySet"] == "HistFull"))
+    #   day x sector   ... levels=[l["Day"], l["Sector"]]  (the shape the old path could not do at all)
+    #
+    # Take the calendar date off the `DayDate` LEVEL (1:1 with Day, so it adds no rows) rather than
+    # the `Date at day (epoch)` measure: a level is read off the axis, a measure is aggregated per
+    # member -- measured, the epoch measure cost about as much again as the P&L itself.
+    #
+    # `DaySet` is the day table's OWN set key -- slice it, not `ScenarioSet`, for these two measures
+    # (a `ScenarioSet` slice is harmless but selects nothing here; the two hierarchies carry the same
+    # member names for the 7 real sets). Members of Day are per-set real days, so a DaySet slice
+    # already trims the axis to that set's length -- no in-range gate, no clamp, nothing to null out.
+    assert {"DaySet", "Day", "DayDate"} <= {n for _, n in h}, sorted(n for _, n in h)
+    # THE LIFT IS THE WHOLE OPTIMIZATION. Without it (measured, attempt 1) this measure costs
+    # 30.8 s on Vanguard/HistFull and +20 G of heap -- WORSE than the parameter hierarchy it
+    # replaces -- because the day table is joined to the FACT table, so every one of the 2,618 day
+    # members re-derives `Net exposure` from the 84k (Position x Factor) leaves in its own cell:
+    # cost ~ days x book size (COVID's 82 days measured 0.83 s, the small book 1.47 s, both on the
+    # same code). `tt.total(..., h["DaySet"], h["Day"])` lifts the day hierarchies to their top
+    # INSIDE the exposure term, so the book's 23 factor exposures are computed ONCE at the
+    # day-independent context and every day member reuses them; only the shock scalar varies.
+    _exp_ex_day = tt.total(m["Net exposure"], h["DaySet"], h["Day"], h["DayDate"])
+    m["PnL at day"] = tt.agg.sum(
+        _exp_ex_day * tt.agg.single_value(t_days["ShockAtDay"]),
+        scope=tt.OriginScope({l["Factor"]}))
+    m["PnL at day"].formatter = "DOUBLE[0.00%]"
+    # The date dual, epoch days like `Scenario dates (epoch)`. MAX, not SUM: the epoch is the same
+    # on every factor row of a (DaySet, Day), so max reads it once instead of fanning out 23x (the
+    # joined-column fan-out trap the SpecificVar note above flags).
+    m["Date at day (epoch)"] = tt.agg.max(t_days["DayEpoch"])
 
     # ---- diagonal specific block (additive, scenario-independent) -----------------------------
     # OriginScope + single_value, NOT a columnar SUM: see the fan-out note at the top of
@@ -743,7 +839,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
 
     print(f"cube built: {len(exposures):,} leaf rows, {len(style)} style factors, "
           f"{scenarios['ScenarioSet'].nunique()} scenario sets, "
-          f"{pit_scn['PITSet'].nunique()} PIT sets")
+          f"{pit_scn['PITSet'].nunique()} PIT sets, {len(scn_days):,} scenario-day rows")
     return session, cube
 
 
