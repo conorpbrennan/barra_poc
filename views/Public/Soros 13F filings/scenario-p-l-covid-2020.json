@@ -3,7 +3,7 @@
   "name": "Scenario P&L \u2014 COVID 2020",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T02:27:04Z",
-  "updated": "2026-06-16T16:48:52Z",
+  "updated": "2026-08-15T06:05:04Z",
   "state": {
     "rows": [
       "Factor"
@@ -80,11 +80,11 @@
         },
         "transform": [
           {
-            "calculate": "toDate(datum['Scenario date at day (epoch)'] * 86400000)",
+            "calculate": "toDate(datum['DayDate'] + 'T00:00:00')",
             "as": "date"
           },
           {
-            "calculate": "toDate(datum['Scenario worst date at day (epoch)'] * 86400000)",
+            "calculate": "toDate(datum['Worst date at day (epoch)'] * 86400000)",
             "as": "worst_date"
           }
         ],
@@ -116,7 +116,7 @@
                 "title": null
               },
               "y": {
-                "field": "Scenario PnL at day",
+                "field": "PnL at day",
                 "type": "quantitative",
                 "axis": {
                   "format": "%"
@@ -129,7 +129,7 @@
                   "type": "temporal"
                 },
                 {
-                  "field": "Scenario PnL at day",
+                  "field": "PnL at day",
                   "type": "quantitative",
                   "format": ".2%",
                   "title": "P&L"
@@ -154,7 +154,7 @@
                   "type": "temporal"
                 },
                 {
-                  "field": "Scenario PnL at day",
+                  "field": "PnL at day",
                   "type": "quantitative",
                   "format": ".2%",
                   "title": "P&L"
@@ -173,7 +173,7 @@
             },
             "encoding": {
               "y": {
-                "field": "Scenario VaR line at day",
+                "field": "VaR line at day",
                 "type": "quantitative",
                 "aggregate": "min"
               }
@@ -193,7 +193,7 @@
                 "aggregate": "min"
               },
               "y": {
-                "field": "Scenario worst pnl at day",
+                "field": "Worst pnl at day",
                 "type": "quantitative",
                 "aggregate": "min"
               },
@@ -204,7 +204,7 @@
                   "title": "worst date"
                 },
                 {
-                  "field": "Scenario worst pnl at day",
+                  "field": "Worst pnl at day",
                   "type": "quantitative",
                   "format": ".2%",
                   "title": "worst P&L",
@@ -258,7 +258,7 @@
         },
         "transform": [
           {
-            "calculate": "toDate(datum['Scenario date at day (epoch)'] * 86400000)",
+            "calculate": "toDate(datum['DayDate'] + 'T00:00:00')",
             "as": "date"
           }
         ],
@@ -273,22 +273,22 @@
             },
             "encoding": {
               "x": {
-                "field": "Scenario date at day (epoch)",
+                "field": "DayDate",
                 "type": "ordinal",
                 "sort": {
-                  "field": "Scenario PnL at day",
+                  "field": "PnL at day",
                   "op": "sum",
                   "order": "ascending"
                 },
                 "axis": {
-                  "labelExpr": "timeFormat(toDate(datum.value * 86400000), '%d %b')",
+                  "labelExpr": "timeFormat(toDate(datum.value + 'T00:00:00'), '%d %b')",
                   "labelOverlap": true,
                   "labelAngle": -45
                 },
                 "title": "scenario date (worst \u2192 best)"
               },
               "y": {
-                "field": "Scenario PnL at day",
+                "field": "PnL at day",
                 "type": "quantitative",
                 "stack": "zero",
                 "axis": {
@@ -318,7 +318,7 @@
                   "type": "nominal"
                 },
                 {
-                  "field": "Scenario PnL at day",
+                  "field": "PnL at day",
                   "type": "quantitative",
                   "format": ".2%",
                   "title": "P&L"
@@ -337,7 +337,7 @@
             },
             "encoding": {
               "y": {
-                "field": "Scenario VaR line at day",
+                "field": "VaR line at day",
                 "type": "quantitative",
                 "aggregate": "min"
               }
@@ -350,15 +350,15 @@
       {
         "name": "Scenario P&L",
         "rows": [
-          "ScenarioDay"
+          "Day",
+          "DayDate"
         ],
         "cols": [],
         "measures": [
-          "Scenario PnL at day",
-          "Scenario date at day (epoch)",
-          "Scenario VaR line at day",
-          "Scenario worst pnl at day",
-          "Scenario worst date at day (epoch)"
+          "PnL at day",
+          "VaR line at day",
+          "Worst pnl at day",
+          "Worst date at day (epoch)"
         ],
         "filters": {
           "Book": [
@@ -369,20 +369,23 @@
           ],
           "ScenarioSet": [
             "Evt:COVID2020"
+          ],
+          "DaySet": [
+            "Evt:COVID2020"
           ]
         }
       },
       {
         "name": "Scenario P&L by Sector",
         "rows": [
-          "ScenarioDay",
+          "Day",
+          "DayDate",
           "Sector"
         ],
         "cols": [],
         "measures": [
-          "Scenario PnL at day",
-          "Scenario date at day (epoch)",
-          "Scenario VaR line at day"
+          "PnL at day",
+          "VaR line at day"
         ],
         "filters": {
           "Book": [
@@ -392,6 +395,9 @@
             "2024-12-31"
           ],
           "ScenarioSet": [
+            "Evt:COVID2020"
+          ],
+          "DaySet": [
             "Evt:COVID2020"
           ]
         }

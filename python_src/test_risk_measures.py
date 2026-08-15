@@ -227,6 +227,44 @@ def t_scenario_day_unpacks_vector_via_pivot():
     assert abs(min(pnls) - worst_marker) < 1e-9, (min(pnls), worst_marker)
 
 
+@test
+def t_day_path_ties_scenario_day_and_foots_by_sector():
+    """The FAST per-day path (2026-08-15): rows=[Day, DayDate] + a DaySet slice reads the SAME
+    per-day P&L as the legacy ScenarioDay unpacking, day for day (to float precision), with the
+    calendar date off the DayDate LEVEL; the lifted markers (VaR line / worst P&L / worst date)
+    equal the legacy ones; the day x Sector breakout foots to the book day; and a query with no
+    DaySet context carries the DaySet warning (the ScenarioSet one does not cover it)."""
+    import requests, urllib.parse
+    import pandas as pd
+    base = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
+    new_f = {**base, "DaySet": ["Evt:COVID2020"]}
+    def piv(rows, measures, flt):
+        q = {"rows": rows, "measures": measures, "filters": json.dumps(flt), "totals": "false"}
+        return requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=120).json()
+    new = piv("Day,DayDate", "PnL at day,VaR line at day,Worst pnl at day,Worst date at day (epoch)", new_f)
+    old = piv("ScenarioDay", "Scenario PnL at day,Scenario date at day (epoch),"
+              "Scenario VaR line at day,Scenario worst pnl at day,Scenario worst date at day (epoch)", base)
+    assert new["warning"] is None, new["warning"]
+    nr, orr = new["records"], old["records"]
+    assert len(nr) == len(orr) > 1, (len(nr), len(orr))
+    epoch = lambda d: (pd.Timestamp(d) - pd.Timestamp("1970-01-01")).days
+    for a, b in zip(nr, orr):
+        assert a["Day"] == b["ScenarioDay"], (a, b)
+        assert epoch(a["DayDate"]) == b["Scenario date at day (epoch)"], (a, b)
+        assert abs(a["PnL at day"] - b["Scenario PnL at day"]) < 1e-12, (a, b)
+        assert abs(a["VaR line at day"] - b["Scenario VaR line at day"]) < 1e-12, (a, b)
+        assert abs(a["Worst pnl at day"] - b["Scenario worst pnl at day"]) < 1e-12, (a, b)
+        assert a["Worst date at day (epoch)"] == b["Scenario worst date at day (epoch)"], (a, b)
+    # the breakout the old path could not do: sector rows of a day sum to that day's book P&L
+    sec = piv("Day,DayDate,Sector", "PnL at day", new_f)["records"]
+    for day in (0, 1, len(nr) - 1):
+        s = sum(r["PnL at day"] for r in sec if r["Day"] == day)
+        assert abs(s - nr[day]["PnL at day"]) < 1e-12, (day, s, nr[day]["PnL at day"])
+    # no DaySet context -> the DaySet warning (its own, not the ScenarioSet one)
+    w = piv("Day,DayDate", "PnL at day", base)["warning"]
+    assert w and "DaySet" in w, w
+
+
 def main():
     if not _backend_up():
         print(f"SKIP: backend not reachable at {API} (start risk_api on :8010 to run measure tests)")

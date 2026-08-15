@@ -906,6 +906,14 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   `exposures` + a `specific_pnl` frame) so the cube skips it — **regenerate or delete both after
   any rebuild**; absent, the cube derives them as before. Full attribution, rejected levers, and
   the remaining floor: `docs/cube-opt-round2-startup.md`.
+- **The per-day scenario path has two routes; use the fast one.** `rows=[Day, DayDate]` (+ `Sector`)
+  with `PnL at day` and a **`DaySet`** slice (its own hierarchy — same set names as ScenarioSet, but
+  the ScenarioSet warning does not cover it; `DAY_DEP` carries its own) reads the day-facts table
+  (`ScenarioDays`, docs/cube-opt-round2-scenarioday.md): ~0.5 s COVID / ~2.4 s HistFull, day×Sector
+  works. `VaR line at day` / `Worst pnl at day` / `Worst date at day (epoch)` are its chart markers
+  (book constants lifted over the day hierarchies). The legacy `ScenarioDay` parameter hierarchy +
+  `Scenario PnL at day` & co. stay on the allowlist for backward compatibility only (~5-40× slower,
+  × Sector fails). The COVID chart views and `/ask`'s grounding use the fast route.
 - **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
   `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
   `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".

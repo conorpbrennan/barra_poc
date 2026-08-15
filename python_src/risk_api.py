@@ -103,7 +103,20 @@ def _clean(v):
 # ScenarioDay is the synthetic per-array-element dimension: levels=[ScenarioDay] UNPACKS the
 # scenario P&L vector into a tabular per-day series (so the scenario path is a normal /pivot query).
 DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
-             "FactorGroup", "Factor", "ScenarioSet", "ScenarioDay"]
+             "FactorGroup", "Factor", "ScenarioSet", "ScenarioDay",
+             # the FAST per-day path (2026-08-15, docs/cube-opt-round2-scenarioday.md): days as
+             # facts on the ScenarioDays table. `Day` = the set's day index, `DayDate` = its calendar
+             # date (a LEVEL, 1:1 with Day -- read it off the axis, not via a measure), `DaySet` =
+             # that table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+Sector for the
+             # breakout the old ScenarioDay path could not do) and a DaySet slice; ~10-40x faster
+             # than ScenarioDay, which is kept for backward compatibility only.
+             "Day", "DayDate", "DaySet"]
+# The Day-path measures read the DaySet hierarchy, NOT ScenarioSet, so the scenario-context warning
+# below does not cover them; they get their own (see _pivot_result). Members of Day/DayDate are the
+# union across sets, so a query with no DaySet context reads every set's days stacked -- blank
+# P&L for the sets that don't hold that day, and multi-set sums where they overlap.
+DAY_DEP = {"PnL at day", "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
+DAY_DIMS = ["Day", "DayDate", "DaySet"]
 # "Manager" is the USER-FACING name of the cube's Book level (renamed at the API surface
 # 2026-08-14 for the multi-manager demo — "Book" is desk jargon; prospects pick a manager).
 # The cube hierarchy/level itself is still named "Book": renaming it in atoti would break the
@@ -158,6 +171,10 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "Scenario VaR line at day", "Scenario worst pnl at day",
                  "Scenario worst date at day (epoch)",
                  "Scenario worst date (epoch)", "Scenario n",
+                 # the FAST per-day path (read with Day/DayDate on an axis + a DaySet slice; see
+                 # DIM_NAMES): the per-day book P&L and its chart markers (book VaR rule, worst
+                 # P&L point + its date -- book-level constants lifted over the day hierarchies):
+                 "PnL at day", "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)",
                  # PnL attribution (Step 15, v2-only; pruned at startup if the cube lacks them).
                  # Forward-month convention: the value at Date d0 is the PnL over the month after d0.
                  "Factor contribution", "Specific PnL", "Realized PnL"]
@@ -176,7 +193,10 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Scenario PnL at day", "Scenario date at day (epoch)",
             "Scenario VaR line at day", "Scenario worst pnl at day",
             "Scenario worst date at day (epoch)",
-            "Scenario worst date (epoch)", "Scenario n"}
+            "Scenario worst date (epoch)", "Scenario n",
+            # the Day-path chart markers read the ScenarioSet-context book VaR/worst loss (PnL at
+            # day itself reads DaySet only -- see DAY_DEP):
+            "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
 
 
 def _records(df: pd.DataFrame) -> list[dict]:
@@ -585,15 +605,32 @@ def _manager_members(cube, session, l, m) -> list[str]:
     return sorted(members)
 
 
+def _day_members(session) -> dict[str, list]:
+    """Members of the three Day-path dimensions, off the ScenarioDays table itself (one factor's
+    rows -- every factor carries the same (DaySet, Day, DayDate) triples). NOT the
+    contributors.COUNT groupby: `Day` has ~2.6k members and that fan-out is the measured ~16 s
+    per-member floor (docs/cube-opt-round2-scenarioday.md) -- it would undo the /dims work."""
+    t = session.tables.get("ScenarioDays")
+    if t is None:
+        return {d: [] for d in DAY_DIMS}
+    df = t.query(t["DaySet"], t["Day"], t["DayDate"], filter=t["Factor"] == "Market",
+                 max_rows=1_000_000)
+    return {"Day": sorted({int(x) for x in df["Day"]}),
+            "DayDate": sorted({str(pd.Timestamp(x).date()) for x in df["DayDate"]}),
+            "DaySet": sorted({str(x) for x in df["DaySet"]})}
+
+
 def _dims_response_fallback() -> dict:
     """The pre-2026-08-15 sequential contributors.COUNT logic, byte-identical to the original
     /dims -- kept as a safety net if the cube-native fast path above raises for any reason (e.g.
     a cube variant with no Positions table registered under that name)."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
-    members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES}
+    members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES if d not in DAY_DIMS}
+    members.update(_day_members(S["session"]))
     members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
     return {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
-            "scenario_dependent": sorted(SCEN_DEP), "members": members,
+            "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
+            "members": members,
             "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
 
 
@@ -618,15 +655,18 @@ def _dims_response() -> dict:
         return cached[1]
     try:
         l, m = cube.levels, cube.measures
-        cheap_dims = [d for d in DIM_NAMES if d != "Manager"]
+        cheap_dims = [d for d in DIM_NAMES if d != "Manager" and d not in DAY_DIMS]
         with ThreadPoolExecutor(max_workers=len(DIM_NAMES)) as ex:
             futs = {d: ex.submit(_dim_members_via_count, cube, l, m, d) for d in cheap_dims}
             f_mgr = ex.submit(_manager_members, cube, session, l, m)
+            f_day = ex.submit(_day_members, session)
             members = {d: f.result() for d, f in futs.items()}
             members["Manager"] = f_mgr.result()
+            members.update(f_day.result())
         members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
         resp = {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
-                "scenario_dependent": sorted(SCEN_DEP), "members": members,
+                "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
+            "members": members,
                 "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
     except Exception:
         resp = _dims_response_fallback()
@@ -672,7 +712,12 @@ def _build_filter(l, fd: dict):
     Dimension keys are canonical API names (Manager, ...), mapped to cube levels via _lvl."""
     cond = None
     for d, vals in fd.items():
-        members = [_date(v) for v in vals] if d == "Date" else list(vals)
+        if d in ("Date", "DayDate"):
+            members = [_date(v) for v in vals]
+        elif d == "Day":
+            members = [int(v) for v in vals]     # the set's day index is an int level
+        else:
+            members = list(vals)
         c = _lvl(l, _canon_dim(d)).isin(*members)
         cond = c if cond is None else (cond & c)
     return cond
@@ -772,7 +817,7 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
     builds one P&L vector per book over the whole calendar. The SAME query with a single Date is
     **0.76 s**. Nothing asks for the multi-date shape on purpose: it is what a field-list drag
     produces before the user picks a date."""
-    return (any(x in SCEN_DEP for x in mlist)
+    return (any(x in SCEN_DEP or x in DAY_DEP for x in mlist)
             and "Manager" in axis
             and "Date" not in axis and "Date" not in fdict)
 
@@ -811,6 +856,11 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
     if any(x in SCEN_DEP for x in mlist) and not scen_ctx:
         warnings.append("Scenario measures need a ScenarioSet context — put ScenarioSet on an "
                         "axis or pick a single scenario; otherwise those cells are blank.")
+    day_ctx = ("DaySet" in axis) or ("DaySet" in fdict)
+    if any(x in DAY_DEP for x in mlist) and not day_ctx:
+        warnings.append("Per-day measures (PnL at day & co.) read the DaySet hierarchy, not "
+                        "ScenarioSet — put DaySet on an axis or pick a single DaySet; otherwise "
+                        "the Day/DayDate axis stacks every set's days.")
     warning = " ".join(warnings) or None
     meas_objs = [m[x] for x in mnames]
     _back = dict(zip(mnames, mlist))     # PIT mirror -> the name the caller asked for (identity off PIT)
@@ -4221,6 +4271,9 @@ QUERY_CUBE_TOOL = {
         "- `filters` is {dimension: [members]} — AND across dimensions, OR within one. Slice Date to a "
         "single month (e.g. \"2024-12-31\") and, for any scenario measure, slice ScenarioSet to ONE set "
         "(HistFull / Evt:* / Hypo:*) — scenario measures are blank without a single-ScenarioSet context.\n"
+        "- For a per-day scenario path use rows [\"Day\", \"DayDate\"] (+ \"Sector\" to break it out) with "
+        "measure \"PnL at day\" and filter DaySet to ONE set (same set names as ScenarioSet) — that is "
+        "the fast path; ScenarioDay/\"Scenario PnL at day\" is the slow legacy one.\n"
         "- Off-allowlist names are rejected; read the error and retry with a valid name."
     ),
     "input_schema": {
@@ -4286,6 +4339,9 @@ How to use the cube:
 - EVERY scenario measure is blank unless you slice ScenarioSet to ONE set. Sets: HistFull (full
   historical sim), Evt:* (a past window — COVID2020, Rates2022, Selloff2018), Hypo:* (hand-set sigma
   shocks — ValueRotation, RiskOff, MomentumCrash). Slice Date to one month for a point-in-time read.
+- PnL at day (if listed) is the per-day scenario P&L path: rows Day + DayDate, filter DaySet (not
+  ScenarioSet) to ONE set; add Sector on rows for the day x sector breakout. Read the path, the
+  worst days, and the sector split on a bad day — the sum across days is not a risk number.
 - KEY CAVEAT: every name shares the uniform Market loading of 1.0, so in any set with real market moves
   (HistFull, Evt:*) Market dominates book risk (~95%) and HHI is low. The Hypo:* shocks zero Market and
   bump only style factors, so risk collapses onto the few names with those tilts and HHI jumps. A Hypo:*

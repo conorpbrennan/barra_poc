@@ -349,3 +349,10 @@ which is what the merged numbers above are.
 
 Per-item attempt logs: `docs/cube-opt-round2-startup.md`, `docs/cube-opt-round2-scenarioday.md`,
 `docs/cube-opt-round2-dims.md`.
+
+**Post-merge follow-ups shipped (2026-08-15):** the fast per-day path is on the `/pivot` allowlist
+(`Day`/`DayDate`/`DaySet` + `PnL at day` and its lifted chart markers, own DaySet-context warning,
+`/dims` members off the ScenarioDays table) and the two COVID chart views author it — see the
+"Follow-ups — DONE" section of `docs/cube-opt-round2-scenarioday.md`. Still open, all measured
+floors rather than unfinished work: ScenarioDay warm (< 0.5 s) and day×Sector (< 5 s) gates, `/dims`
+cold < 1 s, and the start-up bulk-load lever (`Table.load_async` / serve-before-load).

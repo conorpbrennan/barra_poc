@@ -748,6 +748,21 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # on every factor row of a (DaySet, Day), so max reads it once instead of fanning out 23x (the
     # joined-column fan-out trap the SpecificVar note above flags).
     m["Date at day (epoch)"] = tt.agg.max(t_days["DayEpoch"])
+    # Chart-ready markers for the Day path (the twins of `Scenario VaR line at day` & co. above,
+    # 2026-08-15): book-level VaR / worst-loss / worst-date, LIFTED over the day hierarchies too,
+    # so a `rows=[Day, DayDate]` chart query reads each once (day-independent context) instead of
+    # re-deriving the book vector per day member -- the same lift that makes `PnL at day` fast.
+    # No in-range gate needed: Day members are per-set real days once DaySet is sliced. Signs are
+    # baked for the chart (loss threshold and worst P&L negative), same as the legacy markers.
+    _day_h = (h["DaySet"], h["Day"], h["DayDate"])
+    m["VaR line at day"] = -tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"],
+                                     h["PositionRank"], *_day_h)
+    m["Worst pnl at day"] = -tt.total(m["Scenario worst loss"], h["Security"], h["FactorDim"],
+                                      h["PositionRank"], *_day_h)
+    m["Worst date at day (epoch)"] = tt.total(m["Scenario worst date (epoch)"], h["Security"],
+                                              h["FactorDim"], h["PositionRank"], *_day_h)
+    for _mn in ("VaR line at day", "Worst pnl at day"):
+        m.fmt(_mn, "DOUBLE[0.00%]")
 
     # ---- diagonal specific block (additive, scenario-independent) -----------------------------
     # OriginScope + single_value, NOT a columnar SUM: see the fan-out note at the top of

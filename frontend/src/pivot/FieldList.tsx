@@ -51,6 +51,9 @@ export function FieldList({
   const scenCtx = cfg.rows.includes("ScenarioSet") || cfg.cols.includes("ScenarioSet")
     || "ScenarioSet" in cfg.filters;
   const scenMeasureNoCtx = cfg.measures.some((m) => dims.scenario_dependent.includes(m)) && !scenCtx;
+  // The per-day path (PnL at day & co.) reads DaySet, not ScenarioSet — same idiom, own hierarchy.
+  const dayCtx = cfg.rows.includes("DaySet") || cfg.cols.includes("DaySet") || "DaySet" in cfg.filters;
+  const dayMeasureNoCtx = cfg.measures.some((m) => (dims.day_dependent ?? []).includes(m)) && !dayCtx;
 
   const addRow = (d: string) => setCfg((c) => (c.rows.includes(d) ? c : { ...c, rows: [...c.rows, d] }));
   const addCol = (d: string) => setCfg((c) => ({ ...c, cols: [d] }));
@@ -107,6 +110,11 @@ export function FieldList({
       {scenMeasureNoCtx && (
         <div className="small rag-amber" style={{ marginBottom: "0.5rem" }}>
           ⚠ scenario measure needs a ScenarioSet — put it on Rows/Columns or filter to one set, else cells are blank.
+        </div>
+      )}
+      {dayMeasureNoCtx && (
+        <div className="small rag-amber" style={{ marginBottom: "0.5rem" }}>
+          ⚠ per-day measure needs a DaySet — put it on Rows/Columns or filter to one set, else every set's days stack.
         </div>
       )}
 

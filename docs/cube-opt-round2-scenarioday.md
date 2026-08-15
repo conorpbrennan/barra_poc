@@ -244,7 +244,28 @@ same measure, untouched code, once again swinging 6×; it is not a number to rea
 `scenario_day_by_sector` **still fails with `BadArgumentException` on both** (59 s control, 15.6 s
 new build) — the failure the new path fixes.
 
-## Follow-ups not done here
+## Follow-ups — DONE 2026-08-15 (same day, after the merge)
+
+Both items below are shipped:
+
+- `/pivot` now exposes the fast path: `Day`/`DayDate`/`DaySet` in `DIM_NAMES`, `PnL at day` plus
+  three chart markers (`VaR line at day`, `Worst pnl at day`, `Worst date at day (epoch)` — the
+  book-level constants lifted over the day hierarchies too, so a `rows=[Day, DayDate]` chart query
+  reads each once) in `MEASURE_NAMES`. A `DAY_DEP` set drives its own DaySet-context warning
+  (server payload + the Vite field list via `/dims.day_dependent`) and the Manager×no-Date default.
+  `/dims` enumerates the three day dimensions off the ScenarioDays table (one factor's rows), NOT
+  the contributors.COUNT groupby — that fan-out is the ~16 s per-member floor. `/ask`'s tool
+  description and `ASK_SYSTEM` point the model at the fast shape. Pinned by
+  `test_risk_measures.py::t_day_path_ties_scenario_day_and_foots_by_sector` (day-for-day equality
+  with the legacy path to 1e-12, marker equality, sector footing, the warning). Measured via HTTP
+  on Soros: COVID path 0.5–0.8 s (legacy 3.9 s); HistFull `PnL at day` 2.4 s (legacy 4.7 s on this
+  small book); each extra marker measure adds ~1.8 s on HistFull (the per-member floor, paid per
+  measure); HistFull × Sector 5.9 s (legacy: fails).
+- `author_chart_views.py`'s two COVID chart views author `rows=["Day","DayDate"(,"Sector")]` with
+  the new measures; the calendar date is read off the `DayDate` level (`toDate(DayDate +
+  'T00:00:00')` so the browser parses it in local time). The saved view is regenerated in `views/`.
+
+## Follow-ups not done here (original list, kept for the record)
 
 - `risk_api.py`'s `/pivot` allowlist still exposes only the OLD per-day path (`ScenarioDay` +
   `Scenario PnL at day`). Adding `Day`/`DaySet`/`DayDate` to `DIM_NAMES` and `PnL at day` to
