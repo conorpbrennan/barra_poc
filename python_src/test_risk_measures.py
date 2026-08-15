@@ -265,6 +265,84 @@ def t_day_path_ties_scenario_day_and_foots_by_sector():
     assert w and "DaySet" in w, w
 
 
+@test
+def t_day_vector_plan_ties_level_plan_and_legacy():
+    """The Day-shape VECTOR PLAN (follow-up 2, 2026-08-15): /pivot answers the Day shape from the
+    cube's `Scenario PnL vector` (+ its dates dual, + one single-cell markers query) instead of
+    the 2,618-member level scan. It must be indistinguishable in output: record-for-record equal
+    (same keys, same order, |diff| < 1e-12) to the LEVEL plan (`plan=levels`) AND to the legacy
+    ScenarioDay path, on Soros and Vanguard, HistFull and Evt:COVID2020, book path and the
+    day x Sector breakout (which must still foot). Shapes the vector plan does not take (no
+    DaySet, a Day filter, two breakouts) fall through to the level plan and its warning."""
+    import requests, urllib.parse
+    import pandas as pd
+    def piv(rows, measures, flt, **extra):
+        q = {"rows": rows, "measures": measures, "filters": json.dumps(flt), "totals": "false", **extra}
+        return requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=300).json()
+    epoch = lambda d: (pd.Timestamp(d) - pd.Timestamp("1970-01-01")).days
+    def same(a, b, ctx):
+        assert list(a.keys()) == list(b.keys()), (ctx, list(a.keys()), list(b.keys()))
+        for k in a:
+            x, y = a[k], b[k]
+            if isinstance(x, float) or isinstance(y, float):
+                assert x is not None and y is not None and abs(x - y) < 1e-12, (ctx, k, x, y)
+            else:
+                assert x == y, (ctx, k, x, y)
+    MEAS = "PnL at day,VaR line at day,Worst pnl at day,Worst date at day (epoch)"
+    for book, date in (("Soros", DATE), ("Vanguard", "2026-06-30")):
+        for st in ("HistFull", "Evt:COVID2020"):
+            ctx = (book, st)
+            f = {"Book": [book], "Date": [date], "ScenarioSet": [st], "DaySet": [st]}
+            vec = piv("Day,DayDate", MEAS, f)
+            lev = piv("Day,DayDate", MEAS, f, plan="levels")
+            assert vec.get("plan") == "vector" and lev.get("plan") == "levels", (ctx, vec.get("plan"), lev.get("plan"))
+            assert vec["warning"] is None, (ctx, vec["warning"])
+            vr, lr = vec["records"], lev["records"]
+            assert len(vr) == len(lr) > 1, (ctx, len(vr), len(lr))
+            for a, b in zip(vr, lr):
+                same(a, b, ctx)
+            # ... and to the legacy ScenarioDay unpacking. NOT on Vanguard/HistFull: that legacy
+            # query is the 25-35 s quiet-box case and trips the cube's 120 s query timeout on a
+            # loaded box (measured) -- the level-plan tie-out above already covers that cell.
+            old = [] if (book, st) == ("Vanguard", "HistFull") else \
+                piv("ScenarioDay", "Scenario PnL at day,Scenario date at day (epoch),"
+                    "Scenario VaR line at day,Scenario worst pnl at day,"
+                    "Scenario worst date at day (epoch)",
+                    {"Book": [book], "Date": [date], "ScenarioSet": [st]})["records"]
+            assert not old or len(old) == len(vr), (ctx, len(old), len(vr))
+            for a, b in zip(vr, old):
+                assert a["Day"] == b["ScenarioDay"] and epoch(a["DayDate"]) == b["Scenario date at day (epoch)"], (ctx, a, b)
+                assert abs(a["PnL at day"] - b["Scenario PnL at day"]) < 1e-12, (ctx, a, b)
+                assert abs(a["VaR line at day"] - b["Scenario VaR line at day"]) < 1e-12, (ctx, a, b)
+                assert abs(a["Worst pnl at day"] - b["Scenario worst pnl at day"]) < 1e-12, (ctx, a, b)
+                assert a["Worst date at day (epoch)"] == b["Scenario worst date at day (epoch)"], (ctx, a, b)
+            # DaySet-only filter (no ScenarioSet) is the same shape
+            v2 = piv("Day,DayDate", "PnL at day", {"Book": [book], "Date": [date], "DaySet": [st]})
+            assert v2.get("plan") == "vector" and len(v2["records"]) == len(vr), ctx
+            for a, b in zip(v2["records"], vr):
+                assert abs(a["PnL at day"] - b["PnL at day"]) < 1e-12, (ctx, a, b)
+            # day x Sector: vector == levels record-for-record (same hierarchy path columns) + foots
+            if st == "Evt:COVID2020" or book == "Soros":      # keep the Vanguard HistFull level scan out of the gate
+                vs = piv("Day,DayDate,Sector", "PnL at day,VaR line at day", f)
+                ls = piv("Day,DayDate,Sector", "PnL at day,VaR line at day", f, plan="levels")
+                assert vs.get("plan") == "vector" and len(vs["records"]) == len(ls["records"]) > 0, (ctx, len(vs["records"]), len(ls["records"]))
+                key = lambda r: (r["Day"], r.get("Country"), r.get("Sector"))
+                vs_s, ls_s = sorted(vs["records"], key=key), sorted(ls["records"], key=key)
+                for a, b in zip(vs_s, ls_s):
+                    same(a, b, ctx)
+                for day in (0, len(vr) - 1):
+                    tot = sum(r["PnL at day"] for r in vs["records"] if r["Day"] == day)
+                    assert abs(tot - vr[day]["PnL at day"]) < 1e-12, (ctx, day, tot, vr[day]["PnL at day"])
+    # non-vector shapes fall through to the level plan
+    f = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
+    r = piv("Day,DayDate", "PnL at day", f)                        # no DaySet -> level plan + warning
+    assert r.get("plan") == "levels" and r["warning"] and "DaySet" in r["warning"], (r.get("plan"), r["warning"])
+    r = piv("Day,DayDate,Sector,Issuer", "PnL at day", {**f, "DaySet": ["Evt:COVID2020"]})
+    assert r.get("plan") == "levels", r.get("plan")               # two breakouts -> level plan
+    r = piv("Day,DayDate", "PnL at day", {**f, "DaySet": ["Evt:COVID2020"], "Day": [0, 1]})
+    assert r.get("plan") == "levels" and len(r["records"]) == 2, (r.get("plan"), len(r["records"]))
+
+
 def main():
     if not _backend_up():
         print(f"SKIP: backend not reachable at {API} (start risk_api on :8010 to run measure tests)")
