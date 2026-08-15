@@ -27,6 +27,14 @@ warm before the programme and is unchanged; nothing regressed beyond harness noi
 number is pinned by the accuracy gates (`test_model_vol` 5e-10 tie-outs, `test_contributions`,
 `test_stress`, `test_whatif`, `test_risk_measures`).
 
+## Round 0 — the 124-book expansion's own perf changes (2026-08-14, before the programme)
+
+| # | Optimization | Mechanism | Measured |
+|---|---|---|---|
+| 0.1 | **Explicit JVM heap + query limit** (`bc1ae26`) | `BARRA_CUBE_XMX` (default 32g; the JVM ran on the 25 %-of-RAM default ≈ 15.6g), `BARRA_CUBE_XMS` (2g measured optimum — 12g worse), query time limit 30 → 120 s. | the 124-book cube fits; cross-book queries get headroom (all-123-books-in-one-cell still trips the 20 M-row guardrail — slice or loop) |
+| 0.2 | **HTTP retries in the builder** (`b21639d`) | `_get`/`_post_json` retry transient timeouts / 429 / 5xx — one SEC timeout used to kill a ~60-min 124-book pull. | no more restarts of the full pull |
+| 0.3 | **`UNIVERSE_CAP` 35k → 200k** (`b21639d`) | `sec.head(UNIVERSE_CAP)` truncates silently and order-dependently; raised well above the measured ~5,197 resolved securities. | correctness, not speed — listed because it gates every number above |
+
 ## Round 1 — query pathologies (2026-08-14, `cube-optimization-plan.md`)
 
 Built the harness first: `cube_bench.py` — 44 queries over every measure family, cold + warm,
