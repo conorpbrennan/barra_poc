@@ -319,3 +319,33 @@ outright.
 same order, cube code the only variable) puts the PIT split at 42.0 → 44.3 s, i.e. ~5%. Whatever
 drives the 4× spread is JVM heap/GC state at the point in the suite where the query runs, not the
 code under test. Read that row only against a controlled probe, never off the diff.
+
+## Round 2 — merged verdict (2026-08-15)
+
+Three parallel agents (isolated worktrees, up to 5 attempts each, hard timing/memory metrics,
+lateral redesign required between attempts) took on the three items round 1 left open. All three
+merged onto `feat/buyside-124-books` in dependency order (start-up → ScenarioDay → /dims); the
+full harness (`docs/cube_bench_merged_20260815.json`) and the 57-test accuracy gate
+(`test_model_vol` 15, `test_contributions` 6, `test_stress` 17, `test_whatif` 9, `test_analysis`
+10 — all pass) ran on the merged code against the restarted service.
+
+| item | before | after (merged, this box) | hard metric | verdict |
+|---|---|---|---|---|
+| **start-up** `build_cube` | 56–64 s | **26.9 s** harness / service up in ~40 s (was ~70) | < 35 s | **MET** — root cause was model-definition round-trips (49%), not the exposures load (6%) |
+| **ScenarioDay** book path | 25 s cold, +14 G | **1.5 s cold / 1.2 s warm, +0.9 G**; COVID replay 0.09 s; day×Sector 12.7 s (was: fails) | < 2 s / < 0.5 s; sector < 5 s | cold MET; warm + sector NOT MET — measured SDK floor ~0.5–0.8 ms per fact-joined member; aggregate providers hard-refused by atoti |
+| **/dims** | 15–28 s every call | **1.4–3.2 s once per frame swap** (ambient-load dependent), then **~8 ms** cached | < 1 s cold / < 50 ms cached | cached MET (by 4 orders); cold NOT MET on the letter — first-call cost is paid once |
+
+Cross-cutting: JVM after build 7.8 → 6.1 G; no query regressed beyond the harness's own noise
+(the merged-vs-step6 diff flags only sub-0.25 s queries moving by tens of ms; every warm column
+~1.0×). The one harness "ERR" is the legacy `Scenario PnL at day × Sector` shape, unchanged from
+day one — the new `PnL at day` / `Day` path is what makes that query work.
+
+Two directive-shaped lessons for the record: (1) the /dims agent's first attempt derived member
+lists from the pandas frames — fast, correct, and **wrong for this project**; redirected on the
+user's rule that every measure stays cube-native, and the cube-native redesign got most of the
+way there anyway. (2) Sibling-agent load moved individual timings up to 5× mid-program; every
+agent had to detect that and re-base — parallel optimization needs a quiet-box confirmation pass,
+which is what the merged numbers above are.
+
+Per-item attempt logs: `docs/cube-opt-round2-startup.md`, `docs/cube-opt-round2-scenarioday.md`,
+`docs/cube-opt-round2-dims.md`.
