@@ -894,7 +894,7 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   124-book cube idles ~6-8G RSS after the load and grows to ~37G under heavy queries. All-123-books
   scenario measures in ONE query trip the 20M-row intermediate limit — slice one book (~3s) or
   loop; the query time limit is 120s.
-- **Cube start-up is ~23s** (was ~57-64s until 2026-08-15). Two structural facts, both measured —
+- **Cube start-up is ~19s** (`build_cube`, quiet box, arrow cache warm; ~23 s round 2, ~57-64s before 2026-08-15). Two structural facts, both measured —
   set `BARRA_CUBE_TIMINGS=1` for the per-stage table (`BUILD_TIMINGS`, folded into `cube_bench`'s
   `stages.build_stages_s`): (1) **`build_cube` defines the model on SEEDED tables** (`head(1000)`)
   and calls `Table.load(full_frame)` at the very end, because joins/hierarchies/parameter
@@ -908,24 +908,29 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   the remaining floor: `docs/cube-opt-round2-startup.md`. Round 3 (same doc): the bulk load's
   pandas→arrow half is cached under `data/.cube_cache/<table>.arrow` (atoti's own converter +
   writer, keyed on the source parquet's mtime/size + shape; `BARRA_CUBE_ARROW_CACHE=0` disables;
-  first build after a rebuild writes it) — `load.bulk` ~15 s → ~9 s under load; concurrent table
+  first build after a rebuild writes it) — `load.bulk` ~12 s → 7.4 s quiet-box (build_cube 26.9 → 18.9 s with the persisted attribution); concurrent table
   loads (`BARRA_CUBE_LOAD=threads|async`) buy nothing (the JVM serialises the commits) and
   direct `ParquetLoad` was 2×–50× slower, both rejected; serve-before-load evaluated, not done.
-- **The per-day scenario path has two routes; use the fast one.** `rows=[Day, DayDate]` (+ `Sector`)
-  with `PnL at day` and a **`DaySet`** slice (its own hierarchy — same set names as ScenarioSet, but
-  the ScenarioSet warning does not cover it; `DAY_DEP` carries its own) reads the day-facts table
-  (`ScenarioDays`, docs/cube-opt-round2-scenarioday.md): ~0.5 s COVID / ~2.4 s HistFull, day×Sector
-  works. `VaR line at day` / `Worst pnl at day` / `Worst date at day (epoch)` are its chart markers
-  (book constants lifted over the day hierarchies). The legacy `ScenarioDay` parameter hierarchy +
-  `Scenario PnL at day` & co. stay on the allowlist for backward compatibility only (~5-40× slower,
-  × Sector fails). Every in-repo consumer is on the fast route as of 2026-08-15: the COVID chart
-  views (`author_chart_views.py`), `/ask`'s grounding, the Streamlit app's legacy `scenario_pnl`
-  feed migration (`_queries_from_state` — mirrors the view's ScenarioSet filter onto DaySet), the
-  two demo notebooks' idiom cells (`notebooks/*_13f_risk.ipynb`, source rewritten, outputs from the
-  last executed run — re-run to refresh), `test_notebook.py`, `test_pivot_app.py`, the Vite
-  `ChartMode` fixtures, and `cube_bench.py`'s `day_path_*` entries (the legacy `scenario_day_*`
-  entries stay for the A/B). Only `test_risk_measures.py` still queries the legacy names — as the
-  tie-out control for the fast path.
+- **The per-day scenario path is `rows=[Day, DayDate]` (+ ONE breakout dim, e.g. `Sector`) with
+  `PnL at day` and a `DaySet` slice** (its own hierarchy — same set names as ScenarioSet, but the
+  ScenarioSet warning does not cover it; `DAY_DEP` carries its own; `/dims.day_dependent` for the
+  UI). `VaR line at day` / `Worst pnl at day` / `Worst date at day (epoch)` are its chart markers
+  (book constants). That canonical shape is served by the **vector plan** (`_day_vector_shape` /
+  `_day_vector_records` in `risk_api.py`, round 3): the cube's own `Scenario PnL vector` + dates
+  dual (+ one single-cell markers query) unpacked in the API — the `/backtest`/`/drawdown` idiom, an
+  API-side reshape of a cube vector, NOT a cube-native level, disclosed as such — **~0.5 s for any
+  book, any set, any load; day×Sector ~0.8 s Soros / ~2 s Vanguard (199k rows)**. Every other Day
+  shape (no DaySet, a Day filter, two breakouts, `plan=levels`) falls to the level plan over the
+  day-facts table (`ScenarioDays`, docs/cube-opt-round2-scenarioday.md), which is correct but pays
+  the SDK's per-member floor (~0.5–1 s Soros, ~11 s Vanguard HistFull, and 5–10× worse under
+  ambient load — the box is shared); the payload's `plan` key says which ran, and
+  `test_risk_measures.py` pins vector == levels record-for-record. **The legacy `ScenarioDay`
+  parameter hierarchy + `Scenario PnL at day` & co. are PRUNED from the `/pivot` allowlist**
+  (2026-08-15 round 3; still defined in the cube for `cube_bench`'s A/B) — every consumer is on
+  the Day path: the COVID chart views (`author_chart_views.py`), `/ask`'s grounding, the Streamlit
+  `scenario_pnl` feed migration (`_queries_from_state`, mirrors ScenarioSet onto DaySet), the two
+  demo notebooks (source rewritten; re-run to refresh outputs), `test_notebook.py`,
+  `test_pivot_app.py`, the Vite `ChartMode` fixtures, `cube_bench.py`'s `day_path_*` entries.
 - **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
   `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
   `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".

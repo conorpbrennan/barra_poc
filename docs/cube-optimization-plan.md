@@ -355,6 +355,37 @@ Per-item attempt logs: `docs/cube-opt-round2-startup.md`, `docs/cube-opt-round2-
 **Post-merge follow-ups shipped (2026-08-15):** the fast per-day path is on the `/pivot` allowlist
 (`Day`/`DayDate`/`DaySet` + `PnL at day` and its lifted chart markers, own DaySet-context warning,
 `/dims` members off the ScenarioDays table) and the two COVID chart views author it — see the
-"Follow-ups — DONE" section of `docs/cube-opt-round2-scenarioday.md`. Still open, all measured
-floors rather than unfinished work: ScenarioDay warm (< 0.5 s) and day×Sector (< 5 s) gates, `/dims`
-cold < 1 s, and the start-up bulk-load lever (`Table.load_async` / serve-before-load).
+"Follow-ups — DONE" section of `docs/cube-opt-round2-scenarioday.md`.
+
+## Round 3 — merged verdict (2026-08-15, later the same day)
+
+Four parallel agents (isolated worktrees) took the six items the round-2 verdict left, plus a
+finding made while scoping them: **the level-plan day path is load-bound** — the same Vanguard
+HistFull `PnL at day` measured 1.5 s (round-2 bench, loadavg 4), 3 s (fresh cube, loadavg 9), 7 s
+(fresh service) and 13–15 s (service an hour old, loadavg 10–13). The per-member fact scan
+parallelises across all cores, so a shared box multiplies it 5–10×; round 2's "MET" was a
+quiet-box number. That is why item 1 stopped paying the per-member scan rather than tuning it.
+
+Merged in dependency order (B start-up → A vector plan → D migration → allowlist prune → C API);
+gates on the merged service: `test_risk_measures` 11/12 (the documented pre-existing
+`t_incremental_total_is_subadditive`), `test_model_vol` 15, `test_contributions` 6, `test_stress`
+17, `test_whatif` 9, `test_analysis` 10, `test_ask` 4, `test_trends` 4, `test_dq` 5, `test_limits` 8,
+`test_backtest` 11, `test_pivot_app` 23/29 (the 6 pre-existing graph-builder failures, none new),
+frontend tsc clean + vitest 48/48. Quiet-box confirmation pass (loadavg 7–9, nothing else of ours
+running) — `docs/api_bench_merged_20260815.json`:
+
+| item | before (round 2 / this box) | after (merged, quiet box) | verdict |
+|---|---|---|---|
+| **1+2 per-day path** — vector plan (`_day_vector_shape`; cube's P&L vector + one markers cell, unpacked in the API; level plan kept for other shapes, `plan=` param, payload `plan` key) | Vanguard HistFull book 11.5 s (level plan, same box) / +markers 21 s / ×Sector 29 s; Soros 1.0 / 1.6 / 4.3 s | **0.53 / 0.50 / 2.1 s Vanguard; 0.52 / 0.47 / 0.84 s Soros**; COVID ~0.45 s any book | both round-2 gates MET (warm < 0.5 s on the small shapes; ×Sector < 5 s); invariant to book size, measure count, load. Honest caveat: API-side reshape of a cube vector, not a cube-native level — disclosed in the doc + code |
+| **3 start-up** — arrow cache for the bulk load (`data/.cube_cache`), persisted attribution regenerated; `load_async`/threads and `ParquetLoad` measured and rejected; serve-before-load evaluated, not done | build_cube 26.9 s (round-2 harness), `load.bulk` 12.0 s, attribution prep 3.7 s live | **build_cube 18.8 / 19.0 s**, `load.bulk` 7.4 s, attribution prep ~0; service answers `/meta` ~25 s after restart | MET; the floor is now `session.start` 5.3 s + `load.bulk` 7.4 s (JVM ingest, serialised by the datastore) |
+| **4 /dims cold** — `_prewarm()` daemon thread after `cube ready` (also `/dq`) | 1.4–3 s first call | **10 ms / 24 ms first user call** | MET (nobody pays the cold call) |
+| **5 API loops** — `api_bench.py` (34 requests × 2 books, cold+warm, payload identity gate `--same`); `_pred_book_vols`/`_name_attr` row-index memo + concurrent PIT queries, `/trends` book memo + concurrent cold fill, `/dq` memo | calibration@Vanguard 120–370 s, @Soros 94 s; trends_book@Vanguard 34/36 s; pnl_attribution_residual 24–30 s; /dq warm 7–9 s | **calibration 7.0 / 5.6 s cold, 0.04 warm; trends_book@Vanguard 13.0 cold / 0.01 warm; residual 1.4 / 0.33; /dq 0.02** | MET; 66/68 payloads byte-identical (2 `/span` diffs are pre-existing set-order only). Left: `/pnl_attribution/linkage` 1–2 s, `/whatchanged` 1.5 s, `pivot_var_trend_by_date` 2.6–3.5 s |
+| **6 legacy path** — every consumer migrated to Day/DayDate (Streamlit feed migration, notebooks, tests, Vite fixtures, bench twins), then `ScenarioDay` + the five `Scenario … at day` measures PRUNED from the allowlist (400; cube still defines them for the A/B) | the one UI/`/ask` path that could hit the 120 s timeout / BadArgumentException | gone from the API surface | done |
+
+Two lessons for the record: (1) the box is shared and the JVM's parallel scans are load-bound —
+quote loadavg with every timing, and treat any "MET" without a quiet-box confirmation as
+provisional; (2) four cubes at once OOM-killed the production service once mid-program (systemd
+restarted it) — parallel optimization needs a memory budget per agent, not just port isolation.
+
+Per-item logs: `docs/cube-opt-round2-scenarioday.md` ("Follow-up 2 — the vector plan"),
+`docs/cube-opt-round2-startup.md` ("Round 3 — bulk load"), `docs/api-bench.md`.
