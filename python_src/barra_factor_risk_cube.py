@@ -56,6 +56,129 @@ def _mark(name: str) -> None:
     print(f"    [stage] {name:34s} {dt:7.2f}s", flush=True)
 
 
+# ---- bulk load: arrow cache + scheduling (2026-08-15, round 3) -------------------------------
+# The four full-frame loads at the end of build_cube cost ~12 s of a ~27 s build. Attributed on
+# a bare session (docs/cube-opt-round2-startup.md, round 3): ~45% is PYTHON -- atoti's
+# `Table.load(DataFrame)` converts pandas -> arrow (1.5 s exposures, 2.8 s positions) and writes
+# an arrow IPC file to a temp dir, THEN the JVM ingests that file; ~50% is the JVM ingest; the
+# rest is cube-side indexing. Two things follow:
+#   * The pandas -> arrow half is a pure function of the frame, identical on every restart. So it
+#     is CACHED: the arrow file is written ONCE under data/.cube_cache/<table>.arrow, keyed on
+#     the source parquet's path/mtime/size (stamped on the frame by load_frames) + row count +
+#     columns, and the JVM ingests it directly (`ArrowLoad`) on the next start-up. Bytes on the
+#     wire are identical to the uncached path (same converter, same writer -- atoti's own), so
+#     the table contents cannot differ; a stale or missing entry falls back to the plain load.
+#   * Concurrency across tables buys nothing measurable: `Table.load_async` is literally
+#     `to_thread(self.load)`, and the JVM serialises the datastore transactions -- serial vs
+#     threads measured 13.3 / 12.5 s and 17.8 / 16.9 s in back-to-back A/Bs (noise). Direct
+#     `ParquetLoad` of cube-ready parquet was tried and REJECTED: the JVM parquet reader was
+#     2x slower on Exposures and pathological on Positions (286 s, 11.6 M rows).
+# BARRA_CUBE_LOAD=serial|threads|async picks the schedule (default serial -- the simplest thing
+# that is not slower); BARRA_CUBE_ARROW_CACHE=0 disables the cache (default on).
+_LOAD_MODE = os.environ.get("BARRA_CUBE_LOAD", "serial").lower()
+_ARROW_CACHE_ON = os.environ.get("BARRA_CUBE_ARROW_CACHE", "1") not in ("0", "false", "no")
+_ARROW_CACHE_DIR = OUT / ".cube_cache"
+
+
+def _arrow_cache_key(table, df: pd.DataFrame) -> dict | None:
+    """The staleness key: source parquet identity + the frame's shape. None = uncacheable."""
+    src = df.attrs.get("source") if hasattr(df, "attrs") else None
+    if not src or not isinstance(src, dict) or "mtime_ns" not in src:
+        return None
+    return {"table": table.name, "source": src, "n_rows": int(len(df)),
+            "columns": [str(c) for c in df.columns],
+            "dtypes": [str(t) for t in df.dtypes], "data_types": dict(table._data_types)}
+
+
+def _load_one(table, df: pd.DataFrame) -> str:
+    """Load one frame into its table; returns how ("arrow-cache" | "arrow-cache-write" | "pandas").
+    Cache path: read the JSON sidecar, compare the key, `ArrowLoad` the file. Miss: convert with
+    atoti's own converter, write the IPC file into the cache, then load THAT file (so the first
+    build after a rebuild pays what it always paid, plus one file write it now keeps)."""
+    if not _ARROW_CACHE_ON:
+        table.load(df); return "pandas"
+    key = _arrow_cache_key(table, df)
+    if key is None:
+        table.load(df); return "pandas"
+    try:
+        import json
+        from atoti._pandas_utils import pandas_to_arrow
+        from atoti._arrow import write_arrow_to_file
+        from atoti.data_load._arrow_load import ArrowLoad
+    except Exception:                                   # private atoti API moved: no cache
+        table.load(df); return "pandas"
+    _ARROW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    arrow_path = _ARROW_CACHE_DIR / f"{table.name}.arrow"
+    meta_path = _ARROW_CACHE_DIR / f"{table.name}.json"
+    try:
+        if arrow_path.exists() and meta_path.exists() \
+                and json.loads(meta_path.read_text()) == key:
+            table.load(ArrowLoad(arrow_path))
+            return "arrow-cache"
+    except Exception as e:                              # unreadable/corrupt cache: rebuild it
+        print(f"[cube] arrow cache for {table.name} unusable ({e!r}); regenerating", flush=True)
+    try:
+        for p in (arrow_path, meta_path):
+            if p.exists():
+                p.unlink()
+        arrow = pandas_to_arrow(df, data_types=table._data_types)
+        tmp = arrow_path.with_suffix(".arrow.tmp")
+        write_arrow_to_file(arrow, tmp)
+        del arrow
+        os.replace(tmp, arrow_path)
+        table.load(ArrowLoad(arrow_path))
+        meta_path.write_text(json.dumps(key))           # written LAST: no key without its file
+        return "arrow-cache-write"
+    except Exception as e:
+        print(f"[cube] arrow cache write for {table.name} failed ({e!r}); plain load", flush=True)
+        for p in (arrow_path, meta_path, arrow_path.with_suffix(".arrow.tmp")):
+            if p.exists():
+                p.unlink()
+        table.load(df)
+        return "pandas"
+
+
+def _bulk_load(pairs: list) -> None:
+    """Load every (table, frame) pair (see the note above). Whatever the schedule or cache state,
+    each table ends up holding exactly its frame -- the modes differ only in scheduling and in
+    where the arrow bytes come from, never in what lands in the table."""
+    def _one(p):
+        t, df = p
+        _t0 = time.perf_counter()
+        how = _load_one(t, df)
+        if _TIMINGS_ON:
+            print(f"    [stage]   load.bulk.{t.name:12s} {len(df):>10,} rows "
+                  f"{time.perf_counter() - _t0:6.2f}s  ({how})", flush=True)
+    if _LOAD_MODE == "serial" or len(pairs) < 2:
+        for p in pairs:
+            _one(p)
+        return
+    if _LOAD_MODE == "threads":
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(pairs)) as ex:
+            list(ex.map(_one, pairs))
+        return
+    import asyncio, threading
+
+    async def _all():
+        await asyncio.gather(*[asyncio.to_thread(_one, p) for p in pairs])
+
+    # build_cube may be called from inside a running event loop (uvicorn's lifespan), where
+    # asyncio.run() is illegal -- so the gather runs on its own loop in a helper thread.
+    err: list = []
+
+    def _run():
+        try:
+            asyncio.run(_all())
+        except Exception as e:                       # noqa: BLE001 -- fall back below
+            err.append(e)
+    th = threading.Thread(target=_run, name="barra-bulk-load"); th.start(); th.join()
+    if err:
+        print(f"[cube] concurrent bulk load failed ({err[0]!r}); loading serially", flush=True)
+        for p in pairs:
+            _one(p)
+
+
 def _mark_reset() -> None:
     if _TIMINGS_ON:
         BUILD_TIMINGS.clear()
@@ -158,6 +281,13 @@ def load_frames(folder: pathlib.Path = OUT) -> dict[str, pd.DataFrame]:
     for n in OPTIONAL_FRAMES:
         if (folder / f"{n}.parquet").exists():
             frames[n] = pd.read_parquet(folder / f"{n}.parquet")
+    for n, df in frames.items():
+        # Provenance stamp for the bulk-load arrow cache (see _bulk_load): which parquet, and
+        # its mtime/size at read time. `attrs` ride along through column selection / head();
+        # a frame that lost them (any other construction) simply gets no cache -- never a wrong one.
+        st = (folder / f"{n}.parquet").stat()
+        df.attrs["source"] = {"path": str(folder / f"{n}.parquet"), "mtime_ns": st.st_mtime_ns,
+                              "size": st.st_size}
     return frames
 
 
@@ -1042,11 +1172,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # ---- DATA LAST: the whole model is now defined; fill the three big tables (see the seeding
     # note by the loads). The seed rows are re-loaded inside the full frames and upsert on the
     # table keys, so the result is exactly the frames, once.
-    t_exp.load(exposures)
-    t_pos.load(positions_cube)
-    t_sv.load(specific)
+    _bulk = [(t_exp, exposures), (t_pos, positions_cube), (t_sv, specific)]
     if t_sr is not None:
-        t_sr.load(spec_pnl)
+        _bulk.append((t_sr, spec_pnl))
+    _bulk_load(_bulk)
     _mark("load.bulk")
 
     print(f"cube built: {len(exposures):,} leaf rows, {len(style)} style factors, "

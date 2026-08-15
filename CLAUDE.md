@@ -905,7 +905,12 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   `python_src/barra_persist_attribution.py` persists the attribution prep (a `FactorPnL` column on
   `exposures` + a `specific_pnl` frame) so the cube skips it — **regenerate or delete both after
   any rebuild**; absent, the cube derives them as before. Full attribution, rejected levers, and
-  the remaining floor: `docs/cube-opt-round2-startup.md`.
+  the remaining floor: `docs/cube-opt-round2-startup.md`. Round 3 (same doc): the bulk load's
+  pandas→arrow half is cached under `data/.cube_cache/<table>.arrow` (atoti's own converter +
+  writer, keyed on the source parquet's mtime/size + shape; `BARRA_CUBE_ARROW_CACHE=0` disables;
+  first build after a rebuild writes it) — `load.bulk` ~15 s → ~9 s under load; concurrent table
+  loads (`BARRA_CUBE_LOAD=threads|async`) buy nothing (the JVM serialises the commits) and
+  direct `ParquetLoad` was 2×–50× slower, both rejected; serve-before-load evaluated, not done.
 - **The per-day scenario path has two routes; use the fast one.** `rows=[Day, DayDate]` (+ `Sector`)
   with `PnL at day` and a **`DaySet`** slice (its own hierarchy — same set names as ScenarioSet, but
   the ScenarioSet warning does not cover it; `DAY_DEP` carries its own) reads the day-facts table

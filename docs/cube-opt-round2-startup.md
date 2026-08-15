@@ -201,3 +201,104 @@ genuinely doing work. The next real lever, if start-up ever matters again, is lo
 tables **concurrently or asynchronously** (`Table.load_async` exists) — or serving before the bulk
 load finishes, since the model is fully defined by then. Everything else in the build now totals
 under 5 s.
+
+## Round 3 — bulk load (2026-08-15, agent B, same day)
+
+Round 2's floor note named two levers: load the four tables concurrently, or serve before the
+bulk load finishes. Both were tested; neither is where the win was. All timings below were taken
+on a SHARED box with three sibling agents building 12 g cubes at the same time (loadavg 11–35 —
+recorded on every run; the round-2 22.8 s was at loadavg ~4). Only back-to-back same-condition
+pairs are quoted as A/Bs. **A quiet-box confirmation pass is still needed** — the orchestrator
+runs it after the merge.
+
+### Attempt 1 — `Table.load_async` / threads across the four tables: no gain
+
+`Table.load_async` in atoti 0.9.15 is literally `await to_thread(self.load, data)`, so it is the
+same as a thread pool over `Table.load`. Back-to-back A/Bs (fresh process each, `BARRA_CUBE_LOAD`
+switch): serial **13.33 s** vs async **12.53 s** (loadavg 1→4 / 4→8); serial **17.77 s** vs threads
+**16.87 s** (7→10 / 10→14). Inside the noise. The per-table timings in threads mode show why —
+they COMPLETE serially (4.8 / 5.8 / 10.7 / 11.8 s cumulative on the cached run below): the JVM
+serialises the datastore transactions, one load commits at a time. Async with the arrow cache on
+was actually worse (25.4 s vs 11.4 s serial, and it pushed loadavg 15 → 23). **Default stays
+serial**; the switch is kept for the record.
+
+### Attempt 2 — where the 12 s actually goes (bare session, no cube)
+
+`Table.load(DataFrame)` = `pandas_to_arrow` (Python) → `write_arrow_to_file` (temp dir) →
+`ArrowLoad` (JVM reads the IPC file). Measured per table at loadavg 18:
+
+| table | rows | to_arrow | to_file | JVM ingest | total |
+|---|---|---|---|---|---|
+| Exposures | 6.0 M | 1.46 s | 0.11 s (242 MB) | 1.85 s | 3.43 s |
+| Positions | 11.6 M | 2.82 s | 0.22 s (477 MB) | 2.82 s | 5.85 s |
+| SpecificVar | 0.5 M | 0.11 s | 0.01 s | 0.12 s | 0.23 s |
+
+So ~45% of the bulk load is Python-side arrow conversion — a pure function of the frame, redone
+identically on every restart — ~50% is JVM ingest, and the difference to the in-build 12–13 s is
+cube-side indexing.
+
+### Attempt 3 — direct `ParquetLoad` of cube-ready parquet: REJECTED
+
+Skip pandas entirely and let the JVM read parquet. The frames' own parquet fails type validation
+(`timestamp[ns]` vs the tables' `LocalDate`: "Incompatible Type: datastore type
+'java.time.LocalDate' doesn't match parquet type 'long'"), so cube-ready copies were written
+(date32 Date, cube columns only, 4.3 s to write). Result: Exposures **6.35 s** (vs 3.07 s pandas
+control, same process), Positions **285.9 s** (vs 6.73 s) — the JVM's vectorized parquet reader is
+pathological on the 11.6 M-row string-keyed table and drove the box to loadavg 191. Contents were
+exact (slice check maxdiff 0.0), speed disqualifying. Not pursued further.
+
+### Attempt 4 — cache the arrow bytes: **load.bulk ~15 s → ~9 s under load** ✅
+
+`_bulk_load` / `_load_one` in `barra_factor_risk_cube.py`: on a miss, the frame is converted with
+atoti's OWN `pandas_to_arrow` and written with its OWN `write_arrow_to_file` into
+`data/.cube_cache/<table>.arrow` (+ a JSON sidecar), then loaded from that file; on a hit the JVM
+`ArrowLoad`s the cached file directly. Bytes on the wire are identical to the uncached path (same
+converter, same writer), so the table contents cannot differ. The key is the source parquet's
+path/mtime_ns/size (stamped on each frame by `load_frames` in `df.attrs["source"]`, which rides
+through the column selection / `head()` the build applies) + row count + columns + dtypes + the
+table's data types; a frame that lost its stamp (e.g. exposures merged in the un-persisted
+attribution path) simply gets no cache; a stale/missing/corrupt entry is regenerated; any failure
+falls back to the plain load. Sidecar written last, so no key exists without its file.
+`BARRA_CUBE_ARROW_CACHE=0` disables it. ~790 MB on disk under the gitignored `data/`.
+
+Back-to-back A/B, fresh process each, serial schedule, attribution persisted (see below):
+
+| run | loadavg | session.start | load.bulk | build_cube |
+|---|---|---|---|---|
+| cache off | 21.3 | 12.05 s | **15.65 s** | 42.5 s |
+| cache on | 16.6 | 6.80 s | **8.92 s** | 25.2 s |
+| cache off | 19.3 | 7.45 s | **14.57 s** | 33.9 s |
+| cache on | 15.7 | 5.27 s | **9.32 s** | 21.0 s |
+
+Row counts equal the frames on every run (Exposures 6,004,074 / Positions 11,566,348 /
+SpecificVar 497,305 / SpecificPnL 392,489) and the Soros HistFull `Scenario VaR 99` at 2026-06-30
+is 0.03523562876608036 on all of them. The first build after a rebuild pays the conversion once
+plus one file write (measured 34.8 s bulk at loadavg 34 — the write run — vs 17.9 s on the next
+build in the same conditions).
+
+### Attribution persisted (item 3)
+
+`barra_persist_attribution.py --verify` was run against the MAIN checkout's `data/` ("re-derivation
+is bit-identical"; `exposures.parquet` +FactorPnL, `specific_pnl.parquet` written). Every build
+above shows `prep.wloading_merge 0.00 s` / `prep.attribution_pandas 0.08–0.20 s` (was 2.13 / 1.57 s):
+confirmed skipped. `data/` is shared with the running `flexagg-api.service`, which picks it up on
+its next restart — intended. Regenerate or delete both after any rebuild (unchanged rule).
+
+### Serve-before-load: evaluated, NOT implemented
+
+The model is fully defined before the bulk load, so in principle `/meta`, `/views*` and health
+could answer ~9 s earlier. It was not done because (a) it needs a middleware that gates EVERY
+other route (all ~40 read `S["cube"]`/`S["frames"]`, and `/dims` enumerates cube members — a
+pre-load answer would be a partial member list, i.e. exactly the "partially-loaded answer" that
+must never happen), (b) `build_cube` would have to return before the load, changing the contract
+every notebook, `cube_bench`, and test relies on (a fully loaded cube), and (c) the user-visible
+gain is the UI shell appearing earlier while every lens then waits on 503s — no query completes
+sooner. Not worth the guard surface. Revisit only if start-up matters again after the arrow cache.
+
+### Where the floor is now (round 3)
+
+With attribution persisted and the arrow cache warm, the build is `session.start` (~5.3 s quiet)
++ JVM ingest of ~790 MB of arrow (~7–9 s, the JVM's own datastore commit rate — serial by design
+of the engine) + ~4 s of model definition. Estimated **~17–19 s on a quiet box** vs round 2's
+22.8 s; **to be confirmed by the orchestrator's quiet pass.** The next lever would be the ingest
+rate itself (fewer/wider columns, or ActiveViam-side tuning), which is out of the SDK's reach.
