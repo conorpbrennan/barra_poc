@@ -38,6 +38,12 @@ def _port_owner(port: int) -> str:
     return ""
 
 
+def _session_port(session) -> int:
+    """The session's port from `Session.url` (`Session.port` is deprecated in atoti 0.9.15)."""
+    from urllib.parse import urlparse
+    return int(urlparse(session.url).port)
+
+
 def _alive(port: int) -> bool:
     """True if something accepts connections on `port` — the cheap check that this kernel's JVM
     is still there before its cached session is reused."""
@@ -56,6 +62,10 @@ def _free_port(port: int, tries: int = 20) -> int:
     to find out — not twenty minutes later wondering why the demo feels slow."""
     for candidate in range(port, port + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            # SO_REUSEADDR, as the JVM's own server socket sets it: a port whose only occupant is
+            # a TIME_WAIT left by a dead cube's connections is free, not "held by another cube"
+            # (2026-08-21 — the probe stepped to :9097 for no reason after an interrupted build).
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             try:
                 probe.bind(("0.0.0.0", candidate))
                 if candidate != port:
@@ -85,14 +95,14 @@ def build(port: int = CUBE_PORT, *, force: bool = False):
         h, l, m = cube.hierarchies, cube.levels, cube.measures
     """
     global _BUILT, BUILD_SECONDS
-    if _BUILT is not None and not force and not _alive(_BUILT[0].port):
+    if _BUILT is not None and not force and not _alive(_session_port(_BUILT[0])):
         # Interrupting the kernel (Stop / Kernel -> Interrupt) kills the Atoti JVM but leaves the
         # Python-side session object behind; handing it back again gives every query
         # "ConnectError: [Errno 111] Connection refused" (2026-08-21). Rebuild instead.
-        print(f"this kernel's cube on :{_BUILT[0].port} is gone (JVM died — an interrupt?); rebuilding")
+        print(f"this kernel's cube on :{_session_port(_BUILT[0])} is gone (JVM died — an interrupt?); rebuilding")
         _BUILT = None
     if _BUILT is not None and not force:                            # re-run of the build cell
-        print(f"reusing this kernel's cube on :{_BUILT[0].port} "
+        print(f"reusing this kernel's cube on :{_session_port(_BUILT[0])} "
               f"(built in {BUILD_SECONDS:.1f}s; no rebuild)")
         return _BUILT
     if _BUILT is not None:                       # force=True: let the old one go before rebinding
