@@ -90,7 +90,7 @@ supplied out-of-band by the `flexagg-api.service` systemd unit
 (`Environment=ATOTI_LICENSE=…/ActivePivot.lic.43457`), which disables telemetry; the `.env`
 `ATOTI_LICENSE` path typo (`barra-_poc` → `barra_poc`) was fixed 2026-06-30, so it now resolves
 too. Without a key, `/analysis` returns a clean 502 and nothing else is affected. Model:
-`claude-opus-4-8`. Tests:
+`claude-opus-5`. Tests:
 `test_analysis.py` (unit guards always run; integration needs the backend; the one live LLM
 call is opt-in via `RUN_LLM=1`).
 
@@ -114,7 +114,7 @@ requested book's rows (the fix `/drift` already carried); `before`/`after` per b
 book-scoped and are unchanged.
 
 `POST /whatchanged/analysis` streams a grounded "what changed" read of that diff — the **same plain
-Messages-API, no-tools pattern as `/analysis`** (model `claude-opus-4-8`, adaptive thinking, cached
+Messages-API, no-tools pattern as `/analysis`** (model `claude-opus-5`, adaptive thinking, cached
 `WHATCHANGED_SYSTEM`), leading with the biggest change and flagging factor drift as intentional
 (rotation → benchmark) vs not (loading drift → hedge). UI "📋 What changed (QoQ)" panel
 (`render_whatchanged`): the diff tables + an on-demand commentary button. Tests: `test_whatchanged.py`
@@ -135,7 +135,7 @@ the cube and returns an `{"error": ...}` dict on a bad name (so the model retrie
 die) — that error path is unit-testable with no cube. The tool description enumerates the live
 `DIM_NAMES`/`MEASURE_NAMES` so the model picks valid names; `ASK_SYSTEM` carries the same grounding as
 `ANALYST_SYSTEM` (Market-loading caveat, scenario-set slicing, cite-the-numbers). Streams markdown
-(model `claude-opus-4-8`, adaptive thinking, cached system prompt), echoing each `query_cube` call
+(model `claude-opus-5`, adaptive thinking, cached system prompt), echoing each `query_cube` call
 inline (`> 🔎 query_cube …`) so the grounding is visible. UI "💬 Ask the risk model" panel
 (`render_ask`). Tests: `test_ask.py` (unit tool-schema + allowlist guard always; integ empty-question
 400; live full loop opt-in via `RUN_LLM=1`, asserts a `query_cube` marker appears). Step 10 of the

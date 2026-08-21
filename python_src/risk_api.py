@@ -4216,7 +4216,7 @@ async def analysis(body: AnalysisBody):
     def gen():
         try:
             with client.messages.stream(
-                model="claude-opus-4-8", max_tokens=4000,
+                model="claude-opus-5", max_tokens=4000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": ANALYST_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],   # cached: stable across views
@@ -4369,7 +4369,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
     def gen():
         try:
             with client.messages.stream(
-                model="claude-opus-4-8", max_tokens=3000,
+                model="claude-opus-5", max_tokens=3000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": OVERVIEW_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],
@@ -4453,7 +4453,7 @@ async def trends_analysis(body: TrendsAnalysisBody):
     def gen():
         try:
             with client.messages.stream(
-                model="claude-opus-4-8", max_tokens=3000,
+                model="claude-opus-5", max_tokens=3000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": TRENDS_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],
@@ -4556,7 +4556,7 @@ async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
     def gen():
         try:
             with client.messages.stream(
-                model="claude-opus-4-8", max_tokens=3000,
+                model="claude-opus-5", max_tokens=3000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": PNLATTR_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],
@@ -4722,7 +4722,7 @@ async def whatchanged_analysis(body: WhatChangedBody):
     def gen():
         try:
             with client.messages.stream(
-                model="claude-opus-4-8", max_tokens=4000,
+                model="claude-opus-5", max_tokens=4000,
                 thinking={"type": "adaptive"},
                 system=[{"type": "text", "text": WHATCHANGED_SYSTEM,
                          "cache_control": {"type": "ephemeral"}}],
@@ -4867,7 +4867,7 @@ async def ask(body: AskBody):
         for _ in range(ASK_MAX_ROUNDS):
             try:
                 with client.messages.stream(
-                    model="claude-opus-4-8", max_tokens=4000,
+                    model="claude-opus-5", max_tokens=4000,
                     thinking={"type": "adaptive"},
                     system=[{"type": "text", "text": ASK_SYSTEM,
                              "cache_control": {"type": "ephemeral"}}],   # cached: stable across asks
