@@ -25,13 +25,35 @@ _BUILT: tuple | None = None          # this kernel's session, if it already has 
 BUILD_SECONDS: float | None = None   # wall-clock of the last real build (None until one runs)
 
 
+def _port_owner(port: int) -> str:
+    """Best-effort "pid 12345 (python3.12)" for whoever is listening on `port`; "" if unknown
+    (psutil absent, or the socket belongs to a process this one cannot see)."""
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind="inet"):
+            if conn.status == psutil.CONN_LISTEN and conn.laddr.port == port and conn.pid:
+                return f"pid {conn.pid} ({psutil.Process(conn.pid).name()})"
+    except Exception:
+        pass
+    return ""
+
+
 def _free_port(port: int, tries: int = 20) -> int:
     """First free port at or above `port`. Atoti's server binds every interface, so probe the
-    same way — a loopback-only probe reports 9096 free while another kernel's JVM holds it."""
+    same way — a loopback-only probe reports 9096 free while another kernel's JVM holds it.
+
+    Stepping to the next port keeps the build working, but it also HIDES the reason: some other
+    kernel left a cube running. So say so. An abandoned cube costs multiple GB in a 12g container
+    and slows every query on the box, and the first line of the notebook is where you would want
+    to find out — not twenty minutes later wondering why the demo feels slow."""
     for candidate in range(port, port + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
             try:
                 probe.bind(("0.0.0.0", candidate))
+                if candidate != port:
+                    owner = _port_owner(port)
+                    print(f":{port} is held by another cube{' — ' + owner if owner else ''};"
+                          f" using :{candidate}. Reap it with python_src/reap_cubes.py")
                 return candidate
             except OSError:
                 continue

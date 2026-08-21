@@ -44,6 +44,9 @@ Volume=/home/abrennan/dev/barra_poc/notebooks:/work:rw
 # our ActivePivot/Atoti licence (read-only secret). Setting ATOTI_LICENSE to it ALSO disables
 # all telemetry (Python + JVM) -> the container needs zero egress, enabling a full air-gap.
 Volume=/home/abrennan/dev/barra_poc/ActivePivot.lic.43457:/app/atoti.lic:ro
+# Kernel culling, so an abandoned tab's kernel (and its multi-GB Atoti JVM) does not sit
+# in this 12g container until the next restart. Outside the image: edit + restart, no rebuild.
+Volume=/home/abrennan/dev/barra_poc/docker/jupyter_config:/app/jupyter_config:ro
 
 # Token (rotated) lives in a 0600 file, not in argv. Base URL + allowed origin for the proxy.
 EnvironmentFile=/home/flexnb/.config/flexagg-jupyter.env
@@ -59,6 +62,7 @@ Environment=ATOTI_LICENSE=/app/atoti.lic
 # host in data/_pylibs and appended here, so `import altair` just works in every kernel.
 # Restage after changing them:  cp -r barra/lib/python3.12/site-packages/{altair,narwhals} data/_pylibs/
 Environment=PYTHONPATH=/app/python_src:/app/data/_pylibs
+Environment=JUPYTER_CONFIG_PATH=/app/jupyter_config
 
 # ── hardening ───────────────────────────────────────────────────────────────────────────
 ReadOnly=true
