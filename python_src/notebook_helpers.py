@@ -38,6 +38,14 @@ def _port_owner(port: int) -> str:
     return ""
 
 
+def _alive(port: int) -> bool:
+    """True if something accepts connections on `port` — the cheap check that this kernel's JVM
+    is still there before its cached session is reused."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def _free_port(port: int, tries: int = 20) -> int:
     """First free port at or above `port`. Atoti's server binds every interface, so probe the
     same way — a loopback-only probe reports 9096 free while another kernel's JVM holds it.
@@ -77,6 +85,12 @@ def build(port: int = CUBE_PORT, *, force: bool = False):
         h, l, m = cube.hierarchies, cube.levels, cube.measures
     """
     global _BUILT, BUILD_SECONDS
+    if _BUILT is not None and not force and not _alive(_BUILT[0].port):
+        # Interrupting the kernel (Stop / Kernel -> Interrupt) kills the Atoti JVM but leaves the
+        # Python-side session object behind; handing it back again gives every query
+        # "ConnectError: [Errno 111] Connection refused" (2026-08-21). Rebuild instead.
+        print(f"this kernel's cube on :{_BUILT[0].port} is gone (JVM died — an interrupt?); rebuilding")
+        _BUILT = None
     if _BUILT is not None and not force:                            # re-run of the build cell
         print(f"reusing this kernel's cube on :{_BUILT[0].port} "
               f"(built in {BUILD_SECONDS:.1f}s; no rebuild)")
