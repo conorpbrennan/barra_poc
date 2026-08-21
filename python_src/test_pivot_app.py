@@ -21,6 +21,16 @@ from pathlib import Path
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
 RESULTS = []
 TMP_ROOT = None
+# The manager/book dimension's canonical API name, resolved from the live /dims (see _book_dim in
+# risk_pivot_app.py). Renamed Book -> Manager on 2026-08-14; read, never restated, so this suite
+# passes against either vintage of the backend.
+_BOOK_DIM = "Manager"
+
+
+def _resolve_book_dim() -> str:
+    import requests
+    ds = requests.get(f"{API}/dims", timeout=30).json().get("dimensions") or []
+    return "Manager" if "Manager" in ds else "Book"
 
 
 def test(fn):
@@ -73,7 +83,11 @@ def t_default_mode_and_measures():
     assert not at.exception, list(at.exception)
     assert _ss(at, "pv_mode") == "Pivot"
     assert _ss(at, "pv_measures") == ["Total VaR 99", "Scenario VaR 99", "Specific vol"]
-    assert _ss(at, "pv_rows") == ["Book"]
+    # the manager dimension is exposed as "Manager" since the 2026-08-14 API rename ("Book" is
+    # still accepted as an input alias, but /dims offers only the canonical name — and a
+    # multiselect default that isn't in its options is dropped, which is what used to leave the
+    # pivot with NO rows). Read the name off /dims rather than restating the rename here.
+    assert _ss(at, "pv_rows") == [_BOOK_DIM], _ss(at, "pv_rows")
     # repository hidden in Pivot mode -> no view-load buttons
     assert not [b for b in at.button if str(b.key).startswith("load_")]
 
@@ -560,14 +574,14 @@ def t_builder_columns_and_filters_regenerate_queries():
     at.multiselect(key="pv_qry_meas_0").set_value(["Net exposure"]).run()
     qs = _ss(at, "pv_queries")
     assert qs[0]["rows"] == ["Sector"] and "cols" in qs[0] and "filters" in qs[0], qs[0]
-    # default slicers include Book -> baked into the query's filters
-    assert "Book" in qs[0]["filters"], qs[0]["filters"]
+    # default slicers include the manager dimension -> baked into the query's filters
+    assert _BOOK_DIM in qs[0]["filters"], qs[0]["filters"]
     # add a Column -> regenerates
     at.multiselect(key="pv_qry_cols_0").set_value(["ScenarioSet"]).run()
     assert _ss(at, "pv_queries")[0]["cols"] == ["ScenarioSet"], _ss(at, "pv_queries")[0]
-    # clear the Book slicer -> the query's baked filters regenerate WITHOUT Book
-    at.multiselect(key="slice_Book").set_value([]).run()
-    assert "Book" not in _ss(at, "pv_queries")[0]["filters"], _ss(at, "pv_queries")[0]["filters"]
+    # clear the manager slicer -> the query's baked filters regenerate WITHOUT it
+    at.multiselect(key=f"slice_{_BOOK_DIM}").set_value([]).run()
+    assert _BOOK_DIM not in _ss(at, "pv_queries")[0]["filters"], _ss(at, "pv_queries")[0]["filters"]
 
 
 @test
@@ -618,6 +632,8 @@ def main():
     if not _backend_up():
         print(f"SKIP: backend not reachable at {API} (start risk_api on :8010 to run UI tests)")
         raise SystemExit(0)
+    global _BOOK_DIM
+    _BOOK_DIM = _resolve_book_dim()
     _seed_repo()
     passed = failed = 0
     try:

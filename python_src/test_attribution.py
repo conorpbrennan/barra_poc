@@ -28,6 +28,20 @@ from barra_pnl_attribution import (
 )
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
+
+# A name no precompute can have run for — the state `_book_guard` exists to catch, and (since
+# every loaded manager got its own artifact in the 124-book sweep) the only reliable way to
+# reach it. See t_pnl_attribution_book_guard.
+_UNBUILT = "NoSuchManager"
+
+
+def _books() -> list:
+    """The loaded books, from /meta — never a hardcoded list. Several tests below assert
+    different things on a single-book vs a multi-book cube."""
+    import requests
+    j = requests.get(f"{API}/meta", timeout=60).json()
+    return sorted(m["book"] for m in (j.get("managers") or []))
+
 UNIT, INTEG = [], []
 
 
@@ -355,17 +369,30 @@ def t_linkage_materiality_floor():
 @integ
 def t_cube_measures_foot():
     """Σ Factor contribution over Factor rows == the grand total (additive), and at book level
-    Realized PnL == Factor contribution + Specific PnL."""
+    Realized PnL == Factor contribution + Specific PnL.
+
+    SINGLE-BOOK ONLY. These three measures are baked columns on tables keyed without Book, so on
+    a multi-book cube `_validate_pivot` rejects them outright (BOOK_INDEPENDENT_MEASURES) rather
+    than serve one arbitrary book's numbers under every book's label — see
+    barra_factor_risk_cube.py and t_book_independent_measures_guarded_when_multi_book, which pins
+    that rejection. So on multi-book data the identity is not reachable through /pivot BY DESIGN,
+    and this asserts the rejection instead of asserting nothing."""
     import requests
+    q2 = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
+          "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
+    r2 = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=60)
+    if len(_books()) > 1:
+        assert r2.status_code == 400, r2.text
+        assert "book-independent" in r2.json()["detail"], r2.text
+        print("    (multi-book cube: identity unreachable via /pivot by design — "
+              "guard rejection asserted instead; per-book truth is barra_pnl_attribution.py)")
+        return
     q = {"rows": "Factor", "measures": "Factor contribution", "totals": "true",
          "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
     j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
     s = sum(r["Factor contribution"] for r in j["records"] if r.get("Factor contribution") is not None)
     assert abs(s - j["grand"]["Factor contribution"]) < 1e-9
-    q2 = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
-          "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
-    j2 = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=60).json()
-    r = j2["records"][0]
+    r = r2.json()["records"][0]
     assert abs(r["Realized PnL"] - r["Factor contribution"] - r["Specific PnL"]) < 1e-12, r
 
 
@@ -382,19 +409,30 @@ def t_stress_correlation_mode():
 # ------------------------------------------------------ multi-manager Phase 3: single-book guards
 @integ
 def t_pnl_attribution_book_guard():
-    """pnl_attribution.parquet is single-book (barra_pnl_attribution.py's default run() call).
-    Default book (Soros) is UNCHANGED across all four endpoints; any other book comes back as a
-    clean book_mismatch status (HTTP 200, never a 500) instead of silently showing Soros's PnL
-    under another manager's label."""
+    """All four endpoints: the default book is UNCHANGED, a book with its own
+    `pnl_attribution.<Book>.parquet` is served from it, and a book with NO artifact comes back as
+    a clean book_mismatch status (HTTP 200, never a 500) instead of silently showing Soros's PnL
+    under another manager's label.
+
+    The mismatch branch used to be checked with a real manager (AQR). Every loaded book has its
+    own artifact since the 124-book precompute sweep, so that is now the SERVED branch; `_UNBUILT`
+    is a name no precompute can have run for, which is the state the guard actually exists for."""
+    import pathlib
     import requests
-    eps = {"/pnl_attribution": {}, "/pnl_attribution/residual": {},
-           "/pnl_attribution/linkage": {}, "/pnl_attribution/names": {}}
+    eps = ("/pnl_attribution", "/pnl_attribution/residual",
+           "/pnl_attribution/linkage", "/pnl_attribution/names")
+    data = pathlib.Path(__file__).resolve().parent.parent / "data"
+    built = [b for b in _books()
+             if b != "Soros" and (data / f"pnl_attribution.{b}.parquet").exists()][:2]
     for ep in eps:
         base = requests.get(f"{API}{ep}", timeout=60).json()
         assert "status" not in base or base.get("status") != "book_mismatch", (ep, base)
-        mism = requests.get(f"{API}{ep}", params={"book": "AQR"}, timeout=60).json()
+        for bk in built:
+            own = requests.get(f"{API}{ep}", params={"book": bk}, timeout=120).json()
+            assert own.get("status") != "book_mismatch", (ep, bk, own)
+        mism = requests.get(f"{API}{ep}", params={"book": _UNBUILT}, timeout=60).json()
         assert mism.get("status") == "book_mismatch", (ep, mism)
-        assert mism["requested_book"] == "AQR" and mism["artifact_book"] == "Soros", (ep, mism)
+        assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", (ep, mism)
         assert mism["kind"] == "pnl_attribution", (ep, mism)
 
 
@@ -402,9 +440,14 @@ def t_pnl_attribution_book_guard():
 def t_book_independent_measures_inert_with_one_book():
     """Factor contribution / Specific PnL / Realized PnL are book-independent by a known atoti
     limitation (see barra_factor_risk_cube.py); the /pivot guard added in Phase 3 must be a NO-OP
-    with today's single-book data -- t_cube_measures_foot above already proves these measures are
-    reachable and correct at book level, this just pins that the guard itself doesn't fire."""
+    with SINGLE-book data -- it is conditional on >1 book by construction, and firing it on a
+    single-book cube would be a regression (it would block the one case where those measures are
+    correct). Skips on multi-book data, where the guard is SUPPOSED to fire and
+    t_book_independent_measures_guarded_when_multi_book pins that it does."""
     import requests
+    if len(_books()) > 1:
+        print("    (multi-book cube: the guard is meant to fire here — see the unit test)")
+        return
     q = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
          "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)

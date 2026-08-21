@@ -19,6 +19,25 @@ import pandas as pd
 import barra_universe_drift as ud
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
+
+# The per-book precompute sweep gave every loaded manager its own <stem>.<Book>.parquet, so
+# `_resolve_artifact` serves those directly and only an UNBUILT book reaches `_book_guard`.
+# A name no precompute can have run for is the reliable way to exercise the guard; it is also
+# the real case it exists for (a UI asking for a book whose precompute has not been run).
+_UNBUILT = "NoSuchManager"
+
+
+def _books_with_own_artifact(stem: str, limit: int = 2) -> list:
+    """Up to `limit` loaded books (never the default) that have their own artifact on disk.
+    Empty when only the default book is built — the caller's loop then simply does nothing,
+    which is the correct behaviour on a single-book build."""
+    import pathlib
+    import requests
+    out = pathlib.Path(__file__).resolve().parent.parent / "data"
+    j = requests.get(f"{API}/meta", timeout=60).json()
+    books = sorted(m["book"] for m in (j.get("managers") or []) if m["book"] != "Soros")
+    return [b for b in books if (out / f"{stem}.{b}.parquet").exists()][:limit]
+
 UNIT, INTEG = [], []
 
 
@@ -97,15 +116,31 @@ def t_drift_accepts_split():
 
 @integ
 def t_drift_book_guard():
-    """Multi-manager Phase 3: both the artifact and the live attribution (book_at has no Book
-    filter) are single-book. Default book (Soros) is UNCHANGED; any other book comes back as a
-    clean book_mismatch status."""
+    """Default book (Soros) is UNCHANGED; a book with its own artifact is served from it (and the
+    live attribution below it is scoped to that book); a book with NO artifact comes back as a
+    clean book_mismatch status.
+
+    Two branches, because `_resolve_artifact` has two: a book with its OWN
+    `<stem>.<Book>.parquet` is served from it (every loaded manager has one since the
+    124-book precompute sweep), and a book with NO artifact falls to `_book_guard`, which
+    refuses to serve the legacy file under another manager's label. This test used to assert
+    that ANY non-default book was a mismatch — true when only Soros had an artifact, stale
+    since. `_UNBUILT` is a name no precompute can have run for, which is exactly the state
+    the guard exists to catch.
+    """
     import requests
     base = requests.get(f"{API}/drift", timeout=60).json()
     assert "status" not in base and base["series"], base
-    mism = requests.get(f"{API}/drift", params={"book": "Millennium"}, timeout=60).json()
+    for bk in _books_with_own_artifact("universe_drift"):
+        own = requests.get(f"{API}/drift", params={"book": bk}, timeout=60).json()
+        assert "status" not in own and own["series"], (bk, own)
+        # the live half (book_at -> decompose) must be scoped too: a different book cannot
+        # return the default book's net exposures (the /whatchanged bug, 2026-08-21)
+        assert own["summary"] != base["summary"], bk
+    mism = requests.get(f"{API}/drift", params={"book": _UNBUILT}, timeout=60).json()
     assert mism["status"] == "book_mismatch", mism
-    assert mism["requested_book"] == "Millennium" and mism["artifact_book"] == "Soros", mism
+    assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", mism
+    assert mism["kind"] == "drift" and mism["reason"], mism
 
 
 def main():

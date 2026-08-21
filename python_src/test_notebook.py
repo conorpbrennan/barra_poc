@@ -9,10 +9,31 @@ renamed in the cube. No Jupyter, no HTTP, no pytest (matches the repo's script-s
 """
 from __future__ import annotations
 import datetime as dt
+import json
+import pathlib
+import re
 import pandas as pd
 import notebook_helpers as N
 
-D = dt.date(2024, 12, 31)
+NOTEBOOK = pathlib.Path(__file__).resolve().parent.parent / "notebooks" / "soros_13f_risk.ipynb"
+
+
+def _notebook_D() -> dt.date:
+    """The as-of date READ OUT OF THE NOTEBOOK, not restated here. This file mirrors the
+    notebook's queries by hand, so a duplicated constant is a second thing to keep in sync and
+    the one that rotted: it said 2024-12-31 long after the build's calendar reached 2026-06-30,
+    and `t_latest_cob_is_D` failed as a stale-copy artifact rather than as a real signal about
+    the notebook. Parsed from the source cell so the notebook stays the single source of truth."""
+    nb = json.loads(NOTEBOOK.read_text())
+    for cell in nb.get("cells", []):
+        for line in cell.get("source", []):
+            m = re.match(r"\s*D\s*=\s*dt\.date\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)", line)
+            if m:
+                return dt.date(*(int(g) for g in m.groups()))
+    raise AssertionError(f"no `D = dt.date(...)` line found in {NOTEBOOK}")
+
+
+D = _notebook_D()
 RESULTS = []
 def _test(fn):                       # collect like test_risk_measures.py does
     RESULTS.append(fn)
@@ -21,9 +42,13 @@ def _test(fn):                       # collect like test_risk_measures.py does
 
 @_test
 def t_latest_cob_is_D(cube):
+    """The notebook's `D` must still be the latest COB in the build — its own comment calls it
+    "latest monthly COB in the sample", and every view in the notebook is as-of D. When the
+    builder's END moves, this fails until the notebook is re-pointed (and re-executed)."""
     l, m = cube.levels, cube.measures
-    last = sorted(cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index)[-1]
-    assert pd.Timestamp(last).date() == D, last
+    last = pd.Timestamp(sorted(cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index)[-1]).date()
+    assert last == D, (f"{NOTEBOOK.name} pins D = {D}, but the build's latest COB is {last} — "
+                       f"re-point the notebook's D (and re-run it) or rebuild the frames")
 
 
 @_test
@@ -42,7 +67,7 @@ def t_var_trend_series(cube):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], m["Specific vol"], levels=[l["Date"]],
                     filter=(l["Book"] == "Soros") & (l["ScenarioSet"] == "HistFull"))
-    assert len(df) > 50, len(df)                            # the full monthly 2016-2024 calendar
+    assert len(df) > 50, len(df)                            # the full monthly calendar, 2016 -> D
     assert {"Scenario VaR 99", "Total VaR 99", "Specific vol"} <= set(df.columns)
 
 

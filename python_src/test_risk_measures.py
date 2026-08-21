@@ -3,9 +3,18 @@ test_risk_measures.py — backend (cube) checks for the VaR decomposition measur
 live /pivot API so they exercise exactly what the UI sees.
 
 The defining contrast (Flex Agg convention):
-  * MARGINAL    (component)         is ADDITIVE     -> Σ_member = book VaR exactly.
-  * INCREMENTAL (remove-recompute)  is SUB-ADDITIVE -> Σ_member < book VaR (diversification),
-    and 0 < member-incremental ≤ member-marginal for a long, diversifying book.
+  * MARGINAL    (component)        is ADDITIVE -> Σ_member = book measure exactly.
+  * INCREMENTAL (remove-recompute) answers "how much risk does removing this member release".
+
+Σ_member Incremental < book is a property of a COHERENT (sub-additive) measure, and the suite
+pins it on `Model vol` — a standard deviation — over member dimensions, where it holds on both
+books. It is NOT a property of the VaR pair: a 99% quantile is the textbook example of a measure
+that is not sub-additive, and the remove-recompute re-reads the reduced book at ITS OWN tail day,
+so each member gets a credit for shifting the tail as well as for its own risk. Measured
+2026-08-21 on Soros/HistFull, Σ Incremental vs book: Scenario VaR by Issuer 0.0428 vs 0.0353,
+Total VaR by Issuer 0.0427 vs 0.0358 — both over. The old `t_incremental_total_is_subadditive`
+asserted the textbook line against the quantile measure and had failed ever since it was written;
+see `t_incremental_var_bounds` for what actually holds.
 
 Requires the FastAPI backend on http://127.0.0.1:8010; SKIPS (exit 0) if unreachable. Run:
     BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_risk_measures.py
@@ -84,7 +93,11 @@ def t_incremental_total_row_reconciles_with_marginal():
 
 @test
 def t_incremental_scenario_is_subadditive():
-    """Σ Incremental Scenario VaR 99 < book VaR, and each member's incremental ≤ its marginal."""
+    """Σ Incremental Scenario VaR 99 < book VaR, and each member's incremental ≤ its marginal.
+
+    NB this holds over FACTOR members and is not a general property — the same measure runs OVER
+    the book by Issuer/Position/Sector (see the module docstring). Kept as a regression pin on the
+    factor decomposition, not as evidence that quantile incrementals are sub-additive."""
     d = _pivot("Factor", ["Marginal Scenario VaR 99", "Incremental Scenario VaR 99"])
     recs = d["records"]
     book = d["grand"]["Marginal Scenario VaR 99"]
@@ -98,16 +111,51 @@ def t_incremental_scenario_is_subadditive():
 
 
 @test
-def t_incremental_total_is_subadditive():
-    """Σ Incremental Total VaR 99 < book Total VaR; positive for the largest issuer."""
-    d = _pivot("Issuer", ["Marginal Total VaR 99", "Incremental Total VaR 99"])
-    recs = [r for r in d["records"] if (r.get("Marginal Total VaR 99") or 0) != 0]
-    book = d["grand"]["Marginal Total VaR 99"]
-    inc = _col_sum(recs, "Incremental Total VaR 99")
-    assert inc < book - 1e-6, f"incremental total not sub-additive: Σincr={inc} !< book={book}"
-    top = max(recs, key=lambda r: r.get("Marginal Total VaR 99") or 0)
-    assert top["Incremental Total VaR 99"] > 0, top
-    assert top["Incremental Total VaR 99"] <= top["Marginal Total VaR 99"] + 1e-9, top
+def t_incremental_model_vol_is_subadditive():
+    """Σ Incremental Model vol < book σ over MEMBER dimensions, on the reference book and the
+    largest one — the diversification property, pinned on the measure that actually has it.
+
+    σ = √(x'Fx + w'Δw) is a standard deviation, so it is sub-additive; removing a member releases
+    less than that member's Euler share, and the releases sum to less than the book. Holds by
+    Issuer, Position and Sector, on Soros (181 names) and Vanguard (3,617).
+
+    NB by FACTOR it does NOT, and that is documented, not a defect: `Incremental Model vol` strips
+    the member's own specific variance — right for a name, wrong for a factor, where the whole
+    specific block is then subtracted once per factor. barra_factor_risk_cube.py flags the same
+    fan-out where it defines `Vol ex factor`, which is the factor-correct twin."""
+    for book_ in ("Soros", "Vanguard"):
+        for rows in ("Issuer", "Sector"):
+            d = _pivot(rows, ["Marginal Model vol", "Incremental Model vol"], book=book_)
+            recs = [r for r in d["records"] if (r.get("Marginal Model vol") or 0) != 0]
+            book = d["grand"]["Marginal Model vol"]
+            inc = _col_sum(recs, "Incremental Model vol")
+            ctx = (book_, rows, len(recs))
+            assert inc < book - 1e-9, f"{ctx}: Σincr={inc} !< book={book}"
+            assert all((r.get("Incremental Model vol") or 0) >= 0 for r in recs), ctx
+            top = max(recs, key=lambda r: r.get("Marginal Model vol") or 0)
+            assert 0 < top["Incremental Model vol"] < top["Marginal Model vol"], (ctx, top)
+
+
+@test
+def t_incremental_var_bounds():
+    """What the VaR incrementals DO satisfy: every member releases something, and no member
+    releases more than the whole book.
+
+    Deliberately no assertion on Σ_member vs book. VaR is a quantile and is not sub-additive, and
+    the remove-recompute reads the reduced book at its own tail day, so the sum runs OVER the book
+    on this market-dominated book (measured above). Asserting the violation would be worse than
+    asserting the textbook claim: it would pin today's incoherence as a requirement, and a future
+    switch to a coherent basis (ES, or a common tail day) would then read as a regression."""
+    for meas in ("Scenario VaR 99", "Total VaR 99"):
+        d = _pivot("Issuer", [f"Marginal {meas}", f"Incremental {meas}"])
+        recs = [r for r in d["records"] if (r.get(f"Marginal {meas}") or 0) != 0]
+        book = d["grand"][f"Marginal {meas}"]
+        assert recs and book > 0, (meas, book)
+        for r in recs:
+            v = r.get(f"Incremental {meas}") or 0.0
+            assert v <= book + 1e-9, (meas, r)          # nobody releases more than the book holds
+        top = max(recs, key=lambda r: r.get(f"Marginal {meas}") or 0)
+        assert top[f"Incremental {meas}"] > 0, (meas, top)
 
 
 @test
@@ -257,8 +305,9 @@ def t_day_vector_plan_ties_level_plan():
     the 2,618-member level scan. It must be indistinguishable in output: record-for-record equal
     (same keys, same order, |diff| < 1e-12) to the LEVEL plan (`plan=levels`) -- the fact-joined
     Day level -- on Soros and Vanguard, HistFull and Evt:COVID2020, book path and the
-    day x Sector breakout (which must still foot). Shapes the vector plan does not take (no
-    DaySet, a Day filter, two breakouts) fall through to the level plan and its warning."""
+    day x Sector breakout (which must still foot). Since 2026-08-21 (TODO item 5) it also takes
+    TWO breakouts and a Day/DayDate window, both pinned here against `plan=levels`; the shape it
+    still does not take (no DaySet) falls through to the level plan and its warning."""
     import requests, urllib.parse
     import pandas as pd
     def piv(rows, measures, flt, **extra):
@@ -303,14 +352,35 @@ def t_day_vector_plan_ties_level_plan():
                 for day in (0, len(vr) - 1):
                     tot = sum(r["PnL at day"] for r in vs["records"] if r["Day"] == day)
                     assert abs(tot - vr[day]["PnL at day"]) < 1e-12, (ctx, day, tot, vr[day]["PnL at day"])
-    # non-vector shapes fall through to the level plan
+    # no DaySet is the one Day shape the vector plan still declines: level plan + its warning
     f = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
-    r = piv("Day,DayDate", "PnL at day", f)                        # no DaySet -> level plan + warning
+    r = piv("Day,DayDate", "PnL at day", f)
     assert r.get("plan") == "levels" and r["warning"] and "DaySet" in r["warning"], (r.get("plan"), r["warning"])
-    r = piv("Day,DayDate,Sector,Issuer", "PnL at day", {**f, "DaySet": ["Evt:COVID2020"]})
-    assert r.get("plan") == "levels", r.get("plan")               # two breakouts -> level plan
-    r = piv("Day,DayDate", "PnL at day", {**f, "DaySet": ["Evt:COVID2020"], "Day": [0, 1]})
-    assert r.get("plan") == "levels" and len(r["records"]) == 2, (r.get("plan"), len(r["records"]))
+    # TWO breakouts (2026-08-21): vector, and record-for-record equal to the level plan
+    fd = {**f, "DaySet": ["Evt:COVID2020"]}
+    MEAS2 = "PnL at day,VaR line at day"
+    v2b = piv("Day,DayDate,Sector,Issuer", MEAS2, fd)
+    l2b = piv("Day,DayDate,Sector,Issuer", MEAS2, fd, plan="levels")
+    assert v2b.get("plan") == "vector" and l2b.get("plan") == "levels", (v2b.get("plan"), l2b.get("plan"))
+    assert len(v2b["records"]) == len(l2b["records"]) > 0, (len(v2b["records"]), len(l2b["records"]))
+    k2 = lambda r: (r["Day"], r.get("Country"), r.get("Sector"), r.get("Issuer"))
+    for a, b in zip(sorted(v2b["records"], key=k2), sorted(l2b["records"], key=k2)):
+        same(a, b, "two-breakout")
+    # a Day / DayDate WINDOW (2026-08-21): vector, same rows the level plan returns, and the day
+    # index is NOT re-based (a filtered row keeps its real Day member)
+    for slicer in ({"Day": [0, 1]}, {"DayDate": [piv("Day,DayDate", "PnL at day", fd)["records"][2]["DayDate"]]}):
+        vw = piv("Day,DayDate", MEAS, {**fd, **slicer})
+        lw = piv("Day,DayDate", MEAS, {**fd, **slicer}, plan="levels")
+        assert vw.get("plan") == "vector" and lw.get("plan") == "levels", (slicer, vw.get("plan"))
+        assert len(vw["records"]) == len(lw["records"]) == len(list(slicer.values())[0]), (
+            slicer, len(vw["records"]), len(lw["records"]))
+        for a, b in zip(vw["records"], lw["records"]):
+            same(a, b, f"day-window {slicer}")
+    # ... and the windowed rows are the same cells the unwindowed query returns
+    full = piv("Day,DayDate", MEAS, fd)["records"]
+    win = piv("Day,DayDate", MEAS, {**fd, "Day": [0, 1]})["records"]
+    for a, b in zip(win, full[:2]):
+        same(a, b, "day-window vs full")
 
 
 def main():

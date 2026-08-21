@@ -124,11 +124,24 @@ and `t_book_independent_measures_inert_with_one_book` query the book-independent
 measures through `/pivot`, which the multi-book guard rejects with 400 by design). None of the four
 touches code changed here.
 
-## What was NOT done
+## What was NOT done (all of it done since — round 4, 2026-08-21)
+
+Every line below was picked up on 2026-08-21; see `optimization-log.md` §"Round 4" for the
+mechanisms and the measured after.
 
 - `/pnl_attribution/linkage` (2–8 s) and `/whatchanged` (1.5–3.4 s) — next candidates; both mix
   cube calls with the same per-month frame masks and would take the `_frame_rows_by` treatment.
+  → done (4.3): 1.94 → 0.57 s and 1.50 → 0.91 s. Doing it exposed a book-scoping **bug** in
+  `/whatchanged`'s exposure attribution (4.4).
 - `/trends` `by=Factor` (2–4 s on Vanguard) is one query; nothing API-side to do.
+  → confirmed: the query is 94% of the call (records 3 ms, encode 10 ms), so it was memoized
+  rather than optimized — warm 1.48 → 0.02 s (4.6).
 - Endpoints that fan out to other endpoints serially (`/overview/analysis` assembles ~6 calls
   before the LLM stream) — untouched; every one of its inputs got faster above.
-- The `/span` set-order nondeterminism (see above).
+  → done (4.5), though the prize had shrunk to 1.2× precisely because the inputs got faster.
+- The `/span` set-order nondeterminism (see above). → sorted (4.9).
+
+And one thing this bench did not look for, which round 4 found by accident: `_validate_pivot` ran
+`nunique()` over the 11.6M-row positions column on EVERY guarded query, a flat 0.35 s under every
+pivot the grid issues (4.2). Endpoint-level timing hid it — it was in all the "before" numbers and
+all the "after" ones alike.

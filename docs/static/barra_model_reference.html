@@ -77,7 +77,7 @@ every check.</p>
 <p>This document is the audit trail for every number the model produces: where each input comes
 from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
-1029160). The build carries <strong>11</strong> books in all (AQR, Bridgewater, Citadel, DEShaw, Elliott, Millennium, Point72, Renaissance, Soros, TigerGlobal, TwoSigma); this document covers Soros only, and the risk numbers in §6 are Soros's. The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
+1029160). The build carries <strong>123</strong> books in all (AIMCo, AQR, Acadian, AllianceBernstein, Allspring, Alphadyne, Alyeska, AmericanCentury, Ameriprise, Anchorage, Appaloosa, Ares, Aristotle, Arrowstreet, Artisan, BCI, BMO, BTGPactual, Balyasny, Barings, Baupost, BeachPoint, BlackRock, Blackstone, BostonPartners, Bracebridge, Brandywine, BrevanHoward, Bridgewater, Brigade, Brookfield, CDPQ, CPPIB, CambridgeAssociates, Canyon, Capstone, Caxton, Centiva, Citadel, Citizens, ClearBridge, DEShaw, DavidsonKempner, Diameter, Discovery, Element, Elliott, ExodusPoint, Farallon, FederatedHermes, Fidelity, FidelityCanada, Fortress, FranklinTempleton, Garda, GoldenTree, GoldmanSachs, Graham, Guggenheim, HBK, HOOPP, HSBC, HudsonBay, IMCO, Invesco, JPMorgan, JanusHenderson, Jump, KingStreet, Knighthead, Koch, Lighthouse, Lincoln, LoomisSayles, LordAbbett, MFS, MIOPartners, Macquarie, Magnetar, ManGroup, Mariner, Millennium, Moore, MorganStanley, NeubergerBerman, NorthernTrust, Nuveen, OMERS, OTPP, OakHill, Oaktree, PNC, PSP, Parallax, Pictet, PineBridge, Point72, Prudential, Pzena, RaymondJames, Renaissance, SEI, SVP, Schonfeld, Schwab, Sculptor, SilverPoint, Soros, StateStreet, TCW, TRowePrice, ThirdPoint, TigerGlobal, Tudor, TwoSigma, Vanguard, Verition, VictoryCapital, Virtus, Voloridge, Voya, Walleye, Wellington); this document covers Soros only, and the risk numbers in §6 are Soros's. The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
 splits into 11&nbsp;style factors plus 11&nbsp;GICS industry factors plus a market
 intercept (the systematic block) and a diagonal name-specific block. Every scenario is the same
 calculation, <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub> · Δf<sub>k</sub></span>,
@@ -138,7 +138,7 @@ row, factor returns, is the estimated output from the callout above, listed here
 sit in one place.</p>
 <table>
 <tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>Grain</th><th>What we rely on it for</th><th>Known caveats</th></tr>
-<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK 1029160; one CIK per book, 11 in this build)</td><td>Quarterly, ~45d lag</td>
+<tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK 1029160; one CIK per book, 123 in this build)</td><td>Quarterly, ~45d lag</td>
     <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; ETFs and commodity/crypto trusts dropped (no fundamentals, no sector); shorts and intra-quarter trades invisible; public by construction</td></tr>
 <tr><td>Identity</td><td>OpenFIGI v3 mapping API (CUSIP→FIGI→ticker) + SEC <code>company_tickers.json</code> (ticker→CIK)</td>
     <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
@@ -185,28 +185,28 @@ per-<strong>factor</strong>. That collapse is §3, the substance of the model.</
 <h2>2·b · Estimation universe &amp; its intersection with the 13F filings</h2>
 <p>The factor model is estimated cross-sectionally (§3), so each day it needs a <em>population of
 names</em> to regress over. That is the <strong>estimation universe</strong>. It is built in two
-parts: <strong>the whole 13F book plus a market-index seed</strong>. Across the sample Soros filed <strong>52</strong> quarterly 13F-HR reports holding a median of <strong>166</strong> cash-equity names each (<strong>2,461</strong> distinct CUSIPs in total, options and bond lots dropped), resolving to <strong>980</strong> names here. The universe keeps them <em>all</em>, so the book is always a subset of the universe. The universe is not book-scoped: it spans all <strong>11</strong> books in this build (4796 13F-sourced names between them). This report is written about Soros alone. To make the cross-section a genuine market rather than one manager's holdings, the universe is then <strong>seeded with the S&amp;P 500</strong>: its constituents are unioned in, adding <strong>35</strong> names not already in those books, for a total estimation universe of <strong>4831</strong>.
+parts: <strong>the whole 13F book plus a market-index seed</strong>. Across the sample Soros filed <strong>52</strong> quarterly 13F-HR reports holding a median of <strong>166</strong> cash-equity names each (<strong>2,461</strong> distinct CUSIPs in total, options and bond lots dropped), resolving to <strong>980</strong> names here. The universe keeps them <em>all</em>, so the book is always a subset of the universe. The universe is not book-scoped: it spans all <strong>123</strong> books in this build (5164 13F-sourced names between them). This report is written about Soros alone. To make the cross-section a genuine market rather than one manager's holdings, the universe is then <strong>seeded with the S&amp;P 500</strong>: its constituents are unioned in, adding <strong>33</strong> names not already in those books, for a total estimation universe of <strong>5197</strong>.
 The result is a market cross-section that fully contains the book, which is what a Barra-style
 model needs.</p>
 
 <table>
 <tr><th>Population</th><th class="num">Names</th><th>Definition / role</th></tr>
 <tr><td>13F source population</td><td class="num">2,461</td><td>Distinct cash-equity CUSIPs across all 52 quarterly filings (before identity resolution)</td></tr>
-<tr><td>13F-held names (kept whole)</td><td class="num">4796</td><td>Those CUSIPs resolved to FIGI, all kept so the full book is covered</td></tr>
-<tr><td>+ market-index seed (S&amp;P 500)</td><td class="num">35</td><td>Index constituents not already in the book, unioned in for market breadth</td></tr>
-<tr><td>= estimation universe</td><td class="num">4831</td><td>The names carried in <code>securities</code></td></tr>
-<tr><td>… with usable exposures</td><td class="num">4820</td><td>Of the universe, those with enough price/fundamental data to carry loadings, the regression cross-section</td></tr>
+<tr><td>13F-held names (kept whole)</td><td class="num">5164</td><td>Those CUSIPs resolved to FIGI, all kept so the full book is covered</td></tr>
+<tr><td>+ market-index seed (S&amp;P 500)</td><td class="num">33</td><td>Index constituents not already in the book, unioned in for market breadth</td></tr>
+<tr><td>= estimation universe</td><td class="num">5197</td><td>The names carried in <code>securities</code></td></tr>
+<tr><td>… with usable exposures</td><td class="num">5173</td><td>Of the universe, those with enough price/fundamental data to carry loadings, the regression cross-section</td></tr>
 <tr><td>Held at ≥1 month-end</td><td class="num">980</td><td>Universe names that surface as an actual book weight at some sampled date</td></tr>
 <tr><td>Active book per month-end</td><td class="num">83 <span class="small">(med)</span></td><td>Names in the latest filing ∩ universe on a given date (range 54–183)</td></tr>
 </table>
 
-<p><strong>How the populations nest.</strong> The 4831-name universe is the union of all 11 books' 13F names
-(4796 names) plus the index seed (+35 names not already held). 4820 of them
+<p><strong>How the populations nest.</strong> The 5197-name universe is the union of all 123 books' 13F names
+(5164 names) plus the index seed (+33 names not already held). 5173 of them
 have usable loadings and enter the daily regression. Soros's book is always a strict
 <em>subset</em>: 980 names are held at some point in the sample, and on any one date the
 active book is the names in the latest filing that are also in the universe (median 83,
 range 54–183). The point worth making: the regression that builds the factor returns
-(§3) runs over the full 4820-name market cross-section, not just the names Soros holds.
+(§3) runs over the full 5173-name market cross-section, not just the names Soros holds.
 So the factors describe a market, and names Soros has never held still add breadth. The
 cube prices the full filed 13F book each quarter, and every §6 number reflects that.</p>
 
@@ -457,7 +457,7 @@ Each layer is documented at the relevant line of code.</div>
 
 <table>
 <tr><th>Open item (WARN)</th><th>Detail / assessment</th></tr>
-<tr><td>exposures: >=6 of 11 style loadings per (date, position)</td><td>min 1, 4.5% below 6</td></tr><tr><td>securities: Sector populated</td><td>7% 'Unknown' (known stub)</td></tr><tr><td>size-curve proxy loadings (imputed log-mcap, held book)</td><td>worst book Elliott: 5 held names, 57.2% of weight priced via the estimation log-ADV fit (median across 11 books 11.4%)</td></tr>
+<tr><td>exposures: >=6 of 11 style loadings per (date, position)</td><td>min 1, 4.8% below 6</td></tr><tr><td>securities: Sector populated</td><td>8% 'Unknown' (known stub)</td></tr><tr><td>size-curve proxy loadings (imputed log-mcap, held book)</td><td>worst book MIOPartners: 1 held names, 100.0% of weight priced via the estimation log-ADV fit (median across 123 books 7.1%)</td></tr>
 </table>
 
 <h2>6 · Risk measures &amp; current book snapshot (2026-06-30)</h2>
@@ -493,7 +493,7 @@ Each layer is documented at the relevant line of code.</div>
 
 <table>
 <tr><th>Scenario set</th><th class="num">VaR 99</th><th class="num">Worst loss</th><th class="num">Total VaR 99</th></tr>
-<tr><td>HistFull (full history)</td><td class='num'>0.92%</td><td class='num'>2.04%</td><td class='num'>1.10%</td></tr><tr><td>Evt:COVID2020 (2020-02-01 → 2020-05-31, 82d)</td><td class='num'>0.88%</td><td class='num'>1.33%</td><td class='num'>1.07%</td></tr><tr><td>Evt:Rates2022 (2022-01-01 → 2022-10-31, 209d)</td><td class='num'>1.03%</td><td class='num'>1.08%</td><td class='num'>1.20%</td></tr><tr><td>Evt:Selloff2018 (2018-10-01 → 2018-12-31, 63d)</td><td class='num'>0.81%</td><td class='num'>0.95%</td><td class='num'>1.02%</td></tr><tr><td>Hypo:ValueRotation (Value +2σ, Momentum -2σ)</td><td class='num'>0.10%</td><td class='num'>0.10%</td><td class='num'>0.62%</td></tr><tr><td>Hypo:RiskOff (Beta -2σ, ResidVol +2σ, Momentum +1σ)</td><td class='num'>0.22%</td><td class='num'>0.22%</td><td class='num'>0.65%</td></tr><tr><td>Hypo:MomentumCrash (Momentum -3σ)</td><td class='num'>0.17%</td><td class='num'>0.17%</td><td class='num'>0.64%</td></tr>
+<tr><td>HistFull (full history)</td><td class='num'>0.92%</td><td class='num'>2.04%</td><td class='num'>1.10%</td></tr><tr><td>Evt:COVID2020 (2020-02-01 → 2020-05-31, 82d)</td><td class='num'>0.88%</td><td class='num'>1.33%</td><td class='num'>1.07%</td></tr><tr><td>Evt:Rates2022 (2022-01-01 → 2022-10-31, 209d)</td><td class='num'>1.03%</td><td class='num'>1.08%</td><td class='num'>1.19%</td></tr><tr><td>Evt:Selloff2018 (2018-10-01 → 2018-12-31, 63d)</td><td class='num'>0.81%</td><td class='num'>0.95%</td><td class='num'>1.02%</td></tr><tr><td>Hypo:ValueRotation (Value +2σ, Momentum -2σ)</td><td class='num'>0.10%</td><td class='num'>0.10%</td><td class='num'>0.62%</td></tr><tr><td>Hypo:RiskOff (Beta -2σ, ResidVol +2σ, Momentum +1σ)</td><td class='num'>0.22%</td><td class='num'>0.22%</td><td class='num'>0.65%</td></tr><tr><td>Hypo:MomentumCrash (Momentum -3σ)</td><td class='num'>0.17%</td><td class='num'>0.17%</td><td class='num'>0.63%</td></tr>
 </table>
 <p class="small">Negative VaR on short event windows means the current factor tilts would
 have profited in that window's 1st-percentile day.</p>

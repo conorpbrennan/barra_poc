@@ -19,6 +19,25 @@ import pandas as pd
 import barra_universe_membership as um
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
+
+# The per-book precompute sweep gave every loaded manager its own <stem>.<Book>.parquet, so
+# `_resolve_artifact` serves those directly and only an UNBUILT book reaches `_book_guard`.
+# A name no precompute can have run for is the reliable way to exercise the guard; it is also
+# the real case it exists for (a UI asking for a book whose precompute has not been run).
+_UNBUILT = "NoSuchManager"
+
+
+def _books_with_own_artifact(stem: str, limit: int = 2) -> list:
+    """Up to `limit` loaded books (never the default) that have their own artifact on disk.
+    Empty when only the default book is built — the caller's loop then simply does nothing,
+    which is the correct behaviour on a single-book build."""
+    import pathlib
+    import requests
+    out = pathlib.Path(__file__).resolve().parent.parent / "data"
+    j = requests.get(f"{API}/meta", timeout=60).json()
+    books = sorted(m["book"] for m in (j.get("managers") or []) if m["book"] != "Soros")
+    return [b for b in books if (out / f"{stem}.{b}.parquet").exists()][:limit]
+
 UNIT, INTEG = [], []
 
 
@@ -143,9 +162,12 @@ def t_universe_book_guard():
     import requests
     base = requests.get(f"{API}/universe", timeout=60).json()
     assert "status" not in base and base["series"], base
-    mism = requests.get(f"{API}/universe", params={"book": "TigerGlobal"}, timeout=60).json()
+    for bk in _books_with_own_artifact("universe_membership"):
+        own = requests.get(f"{API}/universe", params={"book": bk}, timeout=60).json()
+        assert "status" not in own and own["series"], (bk, own)
+    mism = requests.get(f"{API}/universe", params={"book": _UNBUILT}, timeout=60).json()
     assert mism["status"] == "book_mismatch", mism
-    assert mism["requested_book"] == "TigerGlobal" and mism["artifact_book"] == "Soros", mism
+    assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", mism
     assert mism["kind"] == "membership", mism
 
 

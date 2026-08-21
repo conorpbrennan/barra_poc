@@ -46,6 +46,7 @@ the filesystem, or any tool; it cannot re-query. Grounding rules live in ANALYST
 """
 from __future__ import annotations
 import os
+import asyncio
 import math
 import json
 import time
@@ -53,7 +54,8 @@ import uuid
 import pathlib
 import inspect
 import datetime as _dt
-from collections import deque
+import weakref
+from collections import deque, OrderedDict
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 
@@ -109,10 +111,10 @@ DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
              # the per-day path (2026-08-15, docs/cube-opt-round2-scenarioday.md): days as facts on
              # the ScenarioDays table. `Day` = the set's day index, `DayDate` = its calendar date (a
              # LEVEL, 1:1 with Day -- read it off the axis, not via a measure), `DaySet` = that
-             # table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+ONE breakout dim,
-             # e.g. Sector) and a DaySet slice. The canonical Day shape is served by the VECTOR plan
-             # (`_day_vector_shape`: the cube's own P&L vector unpacked, ~0.5 s any book); other
-             # shapes fall to the level plan.
+             # table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+ up to TWO
+             # breakout dims, e.g. Sector) and a DaySet slice. That shape -- with or without a
+             # Day/DayDate window -- is served by the VECTOR plan (`_day_vector_shape`: the cube's
+             # own P&L vector unpacked, ~0.5 s any book); anything else falls to the level plan.
              "Day", "DayDate", "DaySet"]
 # The Day-path measures read the DaySet hierarchy, NOT ScenarioSet, so the scenario-context warning
 # below does not cover them; they get their own (see _pivot_result). Members of Day/DayDate are the
@@ -195,9 +197,41 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
 
 
-def _records(df: pd.DataFrame) -> list[dict]:
-    df = df.reset_index()
-    return [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
+def _records(df: pd.DataFrame, reset: bool = True) -> list[dict]:
+    """Tidy JSON-safe records — COLUMN-WISE (api_bench 2026-08-21, TODO item 4).
+
+    This used to be `[{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]`, which
+    materialises one Series per row: on the payloads the Vite grid actually pulls (a by-Position
+    pivot on the largest book, ~5k rows) that per-row construction, not the cube query, was the
+    bulk of the response time. Cleaning per COLUMN is the same work done once per dtype.
+
+    The one behavioural subtlety kept deliberately: `iterrows` coerces each row to a common dtype,
+    so in an ALL-NUMERIC frame containing any float, integer columns came out as floats. Frames
+    with a non-numeric column (every pivot with a string/date level) went to object dtype and kept
+    their ints. `_int_as_float` reproduces exactly that, so payloads stay byte-identical."""
+    if reset:
+        df = df.reset_index()
+    n = len(df)
+    if not n:
+        return []
+    numeric_only = all(pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c])
+                       for c in df.columns)
+    _int_as_float = numeric_only and any(pd.api.types.is_float_dtype(df[c]) for c in df.columns)
+    cols, vals = list(df.columns), []
+    for c in cols:
+        s_ = df[c]
+        if pd.api.types.is_float_dtype(s_):
+            a = s_.to_numpy(dtype=float, copy=False)
+            vals.append([None if v != v else float(v) for v in a])          # v != v == isnan
+        elif pd.api.types.is_integer_dtype(s_) and not pd.api.types.is_bool_dtype(s_):
+            a = s_.to_numpy()
+            vals.append([float(v) for v in a] if _int_as_float else [int(v) for v in a])
+        elif pd.api.types.is_datetime64_any_dtype(s_):
+            d_ = s_.dt.strftime("%Y-%m-%d")
+            vals.append([None if v is None or v != v else v for v in d_.to_numpy(dtype=object)])
+        else:
+            vals.append([_clean(v) for v in s_.to_numpy(dtype=object)])
+    return [dict(zip(cols, row)) for row in zip(*vals)]
 
 
 def _date(date: str):
@@ -300,8 +334,7 @@ def _managers_meta() -> list[dict]:
     cik/n_positions_distinct) come from managers.parquet when present and are None otherwise —
     today's data has no managers.parquet, so this degrades to book-name-only entries, same shape,
     same key set, just null attributes (not a different response shape the UI has to branch on)."""
-    pos = S["frames"].get("positions")
-    books = sorted(pos["Book"].unique().tolist()) if pos is not None and "Book" in pos.columns else []
+    books = _book_names()
     mgr = S["frames"].get("managers")
     by_book = mgr.set_index("Book").to_dict("index") if mgr is not None and len(mgr) else {}
     out = []
@@ -448,12 +481,20 @@ async def trends(set: str = "HistFull",
             # additive breakdown (e.g. Net exposure by Factor) — one query is safe (no P&L vectors).
             # Book sliced for the same reason as /risk: these are weight-dependent measures and
             # the multi-book grand total collapses rather than aggregating into a portfolio.
+            # Memoized on the same argument as the book path below (api_bench 2026-08-21): the
+            # measured cost is the cube query itself (~1.4 s for Date x Factor on the largest
+            # book — the SDK's per-member floor, NOT serialisation: building the records is 3 ms
+            # and encoding the response 10 ms), so a repeat view should not pay it again.
+            ck = ("_trends_memo", set, book, tuple(mlist), by, id(cube))
+            if ck in S:
+                return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             df = (cube.query(*meas, levels=[l["Date"], _lvl(l, by)],
                              filter=set_cond & (l["Book"] == book))
                   .rename(columns=back)
                   .rename_axis(index={"Book": "Manager"})
                   .reset_index().sort_values("Date"))
-            recs = [{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]
+            recs = _records(df, reset=False)
+            S[ck] = recs
         else:
             # book-level over the calendar, DATE-BY-DATE: the scenario/HHI measures pull the full P&L
             # vector per date, and asking for every date in one plan OOMs the cube — so loop, one
@@ -463,7 +504,7 @@ async def trends(set: str = "HistFull",
             # the per-date queries CONCURRENTLY (8 workers; results re-assembled in date order,
             # so records are identical to the serial loop). Measured: Vanguard HistFull default
             # measures 70 s -> see docs/api-bench.md; Soros 5.4 s -> ~1 s.
-            ck = ("_trends_memo", set, book, tuple(mlist), id(cube))
+            ck = ("_trends_memo", set, book, tuple(mlist), by, id(cube))
             if ck in S:
                 return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             dates = sorted({pd.Timestamp(d).date() for d in S["frames"]["specific_var"]["Date"]})
@@ -795,14 +836,37 @@ def _pit_addressing(cube, fdict: dict, axis: list, mlist: list):
 BOOK_INDEPENDENT_MEASURES = {"Factor contribution", "Specific PnL", "Realized PnL"}
 
 
-def _multi_book_cube() -> bool:
-    """True once more than one Book is loaded on the live positions frame. Cheap (reads the
-    frames dict already resident on S; no cube query). Today's production data is single-book
-    (Soros only) -> always False until a multi-manager build actually runs."""
+def _book_names() -> list[str]:
+    """The books on the live positions frame, sorted — MEMOIZED per frame (api_bench 2026-08-21).
+    `unique()`/`nunique()` over an 11.6M-row object column costs ~0.35 s on the 124-book build,
+    and two hot paths ran one per call: `_validate_pivot` (so EVERY /pivot, /analysis and /ask
+    tool round-trip paid it, cache hit or not — it was the fixed floor under every grid query)
+    and `_managers_meta` (so every /meta, the first call each UI page load makes). The frames are
+    loaded once and never change in-process, so this is a constant."""
     # S.get, not S[...]: _validate_pivot calls this, and the pivot-spec unit tests exercise that
     # validator with no cube loaded at all, so "frames" is simply absent there.
     pos = (S.get("frames") or {}).get("positions")
-    return pos is not None and "Book" in pos.columns and pos["Book"].nunique() > 1
+    if pos is None or "Book" not in pos.columns:
+        return []
+    # Keyed by a WEAKREF to the frame, not id(): the unit tests swap short-lived stub frames in
+    # and out of S, and CPython reuses the address of a collected one — an id-keyed memo handed
+    # the next stub the previous stub's books. A weakref that no longer resolves to THIS object
+    # is a miss, so a recycled address can never be a hit.
+    hit = S.get("_book_names_memo")
+    if hit is not None and hit[0]() is pos:
+        return hit[1]
+    names = sorted(pos["Book"].unique().tolist())
+    S["_book_names_memo"] = (weakref.ref(pos), names)
+    return names
+
+
+def _n_books() -> int:
+    return len(_book_names())
+
+
+def _multi_book_cube() -> bool:
+    """True once more than one Book is loaded on the live positions frame."""
+    return _n_books() > 1
 
 
 def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
@@ -832,7 +896,7 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
     if _multi_book_cube():
         unsafe = [x for x in mlist if x in BOOK_INDEPENDENT_MEASURES]
         if unsafe:
-            n_books = int(S["frames"]["positions"]["Book"].nunique())
+            n_books = _n_books()
             raise HTTPException(400,
                 f"{unsafe} are book-independent (baked columns with no Book key — a known atoti "
                 f"0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted per-book "
@@ -860,7 +924,7 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
 # per fact-joined member on atoti 0.9.15, x 2,618 days, x every measure on the axis -- and it
 # parallelises across every core, so on a shared box it runs 5-10x slower than the quiet-box
 # bench). The SAME numbers are already in the cube as ONE cell: `Scenario PnL vector` (per
-# breakout member when there is one) and its `Scenario dates (epoch)` dual -- ~0.15 s on the
+# breakout cell when there are breakouts) and its `Scenario dates (epoch)` dual -- ~0.15 s on the
 # largest book regardless of load. So when a /pivot query is exactly the Day shape, read the
 # vector(s) and RESHAPE them into the identical tidy records (the /backtest, /drawdown and
 # /scenario_pnl precedent: unpacking a cube vector is reshape, not analytics -- every number is
@@ -869,12 +933,24 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
 _DAY_BREAKOUTS = ("Sector", "Issuer", "Position", "Factor", "FactorGroup", "Country")
 
 
+_DAY_VECTOR_MAX_BREAKOUTS = 2
+
+
 def _day_vector_shape(rlist: list, clist: list, mlist: list, fdict: dict):
     """Is (rows, cols, measures, filters) the Day shape the vector plan serves? Returns
-    (with_daydate, breakout_or_None, set_name) or None. Pure (no cube), unit-testable.
-    Shape: rows = Day [, DayDate] [, ONE breakout]; no cols; every measure in DAY_DEP; filters
-    carry exactly one Date, one Manager, and ONE DaySet (plus at most one ScenarioSet, equal to
-    it -- the two hierarchies carry the same names for the 7 real sets)."""
+    (with_daydate, breakouts, set_name, day_filter) or None. Pure (no cube), unit-testable.
+    Shape: rows = Day [, DayDate] [, up to two breakouts]; no cols; every measure in DAY_DEP;
+    filters carry exactly one Date, one Manager, and ONE DaySet (plus at most one ScenarioSet,
+    equal to it -- the two hierarchies carry the same names for the 7 real sets).
+
+    2026-08-21 (TODO item 5) — the two shapes that used to fall through to the level plan and its
+    per-member floor now stay on the vector plan:
+      * a SECOND breakout: the vector query just takes two levels, so the cost follows the output
+        rows instead of the member count;
+      * a Day / DayDate FILTER (a chart zoom): the vector is per-set, so the window is a slice of
+        the records the same query already produced. Cheaper than asking the cube to re-scan.
+    Both are pinned record-for-record against `plan=levels` by
+    test_risk_measures.py::t_day_vector_plan_ties_level_plan."""
     if clist or not rlist or rlist[0] != "Day":
         return None
     if not mlist or any(x not in DAY_DEP for x in mlist):
@@ -883,9 +959,9 @@ def _day_vector_shape(rlist: list, clist: list, mlist: list, fdict: dict):
     with_daydate = bool(rest) and rest[0] == "DayDate"
     if with_daydate:
         rest = rest[1:]
-    if len(rest) > 1 or (rest and rest[0] not in _DAY_BREAKOUTS):
+    if len(rest) > _DAY_VECTOR_MAX_BREAKOUTS or any(x not in _DAY_BREAKOUTS for x in rest):
         return None
-    breakout = rest[0] if rest else None
+    breakouts = list(rest)
     for k in ("Date", "Manager"):
         if len(fdict.get(k) or []) != 1:
             return None
@@ -899,9 +975,8 @@ def _day_vector_shape(rlist: list, clist: list, mlist: list, fdict: dict):
     set_name = (ds or ss)[0]
     if str(set_name).startswith("PIT:"):
         return None                     # PIT sets are their own hierarchy; not a Day-path case
-    if "Day" in fdict or "DayDate" in fdict:
-        return None                     # a day-index filter is a level-plan feature
-    return with_daydate, breakout, str(set_name)
+    day_filter = {k: list(fdict[k]) for k in ("Day", "DayDate") if fdict.get(k)}
+    return with_daydate, breakouts, str(set_name), day_filter
 
 
 def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: dict,
@@ -910,8 +985,11 @@ def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: d
     DayDate ISO date, the breakout's full hierarchy path as the cube emits it, then the measures
     in the caller's order). Book-level markers (`VaR line at day` & co.) come from ONE single-cell
     query and are broadcast to every row, exactly what the cube's lifted markers evaluate to."""
-    with_daydate, breakout, set_name = shape
-    fd = {k: v for k, v in fdict.items() if k not in ("DaySet", "ScenarioSet")}
+    with_daydate, breakouts, set_name, day_filter = shape
+    # the day window is applied to the RECORDS below, not to the cube filter: the P&L vector is
+    # per-set, so a Day/DayDate slicer would only make the cube re-derive the same array.
+    fd = {k: v for k, v in fdict.items()
+          if k not in ("DaySet", "ScenarioSet", "Day", "DayDate")}
     fd["ScenarioSet"] = [set_name]
     filt = _build_filter(l, fd)
     if stress_scenario is not None:
@@ -919,13 +997,14 @@ def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: d
     dv = cube.query(m["Scenario dates (epoch)"], filter=(l["ScenarioSet"] == set_name))
     days = np.asarray(dv.iloc[0, 0], dtype=int) if len(dv) and dv.iloc[0, 0] is not None \
         else np.zeros(0, dtype=int)
-    if breakout is None:
+    if not breakouts:
         pv = cube.query(m["Scenario PnL vector"], filter=filt, **query_kw)
         vecs = [((), np.asarray(pv.iloc[0, 0], dtype=float))] \
             if len(pv) and pv.iloc[0, 0] is not None else []
         path_names: list = []
     else:
-        pv = cube.query(m["Scenario PnL vector"], levels=[_lvl(l, breakout)], filter=filt, **query_kw)
+        pv = cube.query(m["Scenario PnL vector"], levels=[_lvl(l, b) for b in breakouts],
+                        filter=filt, **query_kw)
         path_names = list(pv.index.names)
         vecs = []
         for idx, row in pv.iterrows():
@@ -955,8 +1034,18 @@ def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: d
     day_iso = [(_EPOCH + pd.Timedelta(days=int(days[d]))).date().isoformat() for d in range(n_days)]
     keys = [(tuple(_clean(kv) for kv in key), [float(x) for x in arr[:n_days]]) for key, arr in vecs]
     static = {x: markers.get(x) for x in mlist if x != "PnL at day"}
+    # the day window: Day members are the vector's own indices and DayDate their date dual, so
+    # both slicers are a filter over `range(n_days)`. Day numbering is NOT re-based — a filtered
+    # row keeps the day index the level plan gives it.
+    day_ix = range(n_days)
+    if day_filter.get("Day"):
+        want = {int(v) for v in day_filter["Day"]}
+        day_ix = [d for d in day_ix if d in want]
+    if day_filter.get("DayDate"):
+        want_d = {str(_date(v)) for v in day_filter["DayDate"]}
+        day_ix = [d for d in day_ix if day_iso[d] in want_d]
     out = []
-    for day in range(n_days):
+    for day in day_ix:
         for key, vals in keys:
             rec = {"Day": day}
             if with_daydate:
@@ -970,9 +1059,54 @@ def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: d
     return out
 
 
+# The repeat-view cache (api_bench 2026-08-21, TODO item 1). A pivot on the BASE scenario is a
+# pure function of (axes, measures, slicers, totals, plan) — the frames and the cube never change
+# in-process — but nothing memoized it, so a Date-series of scenario measures (the Trends-style
+# `rows=Date` shape, 2.5 s on Vanguard) re-aggregated on every call including an identical repeat.
+# Bounded LRU: transient hypothetical branches are never cached, and a payload bigger than
+# _PIVOT_CACHE_MAX_RECORDS is served but not retained (the 199k-row Day x Sector shapes).
+# Cold time is unchanged — this buys repeat views, nothing else.
+_PIVOT_CACHE_MAX = int(os.environ.get("BARRA_PIVOT_CACHE", "48"))       # 0 disables
+_PIVOT_CACHE_MAX_RECORDS = 25_000
+
+
+def _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan):
+    return (tuple(rlist), tuple(clist), tuple(mlist),
+            tuple(sorted((k, tuple(str(x) for x in v)) for k, v in fdict.items())),
+            bool(totals), plan, id(S["cube"]))
+
+
 def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
                   scenario: str | None = None, stress_scenario: str | None = None,
                   plan: str | None = None) -> dict:
+    """`_pivot_query` behind the bounded repeat-view LRU above. Callers get a shallow copy, so
+    /ask's record truncation (and anything else that rebinds a top-level key) can't poison the
+    cache. Hypothetical branches (what-if trades / a StressShock scenario) bypass it entirely."""
+    if scenario is not None or stress_scenario is not None or _PIVOT_CACHE_MAX <= 0:
+        return _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan)
+    ck = _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan)
+    cache = S.setdefault("_pivot_cache", OrderedDict())
+    hit = cache.get(ck)
+    if hit is not None:
+        try:
+            cache.move_to_end(ck)          # racy across threadpool workers; a miss is harmless
+        except KeyError:
+            pass
+        return dict(hit)
+    out = _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan)
+    if len(out.get("records") or []) <= _PIVOT_CACHE_MAX_RECORDS:
+        cache[ck] = out
+        while len(cache) > _PIVOT_CACHE_MAX:
+            try:
+                cache.popitem(last=False)
+            except KeyError:
+                break
+    return dict(out)
+
+
+def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
+                 scenario: str | None = None, stress_scenario: str | None = None,
+                 plan: str | None = None) -> dict:
     """The tidy pivot result (records [+ per_row/per_col/grand margins when totals]). Extracted
     from /pivot so /analysis feeds the model the EXACT numbers the view renders. Synchronous —
     call via run_in_threadpool. Assumes _validate_pivot has already run.
@@ -1702,12 +1836,18 @@ async def span(date: str | None = Query(None, description="month; default latest
         def pt(p):
             return {"x": _clean(w.loc[p, fx]) if fx in w else None,
                     "y": _clean(w.loc[p, fy]) if fy in w else None}
-        cloud = [pt(p) for p in cloud_pos if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
+        # sorted(): both position sets are Python `set`s, whose iteration order varies with the
+        # process's string hash seed — the scatter payload was byte-nondeterministic across
+        # restarts for no reason (it is why the round-3 identity gate read 66/68). Sorting costs
+        # nothing at these sizes and makes the response reproducible.
+        cloud = [pt(p) for p in sorted(cloud_pos)
+                 if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
         # NB not `book`: that name is the endpoint's parameter, closed over by _book_guard above.
         # Rebinding it here made Python treat it as local for the whole closure, so the guard call
         # raised UnboundLocalError and /span 500'd for every request.
         held_pts = [{**pt(p), "inside": bool(inside_map.get(p, False)), "issuer": iss.get(p, "")}
-                    for p in held_pos if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
+                    for p in sorted(held_pos)
+                    if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
 
         lat = {"month": sel, "n_held": int(len(gm)), "n_inside": int(gm["inside"].sum()),
                "inside_wt": _us.inside_share(gm["weight"].values, gm["inside"].values)} if len(gm) else {}
@@ -2324,9 +2464,15 @@ async def contributions(date: str | None = None, book: str = "Soros"):
     (`Marginal Model vol` per name == CTR; `Factor variance contribution` per factor == CTV;
     `Model vol` book σ) so this endpoint and the pivot grid can never disagree. The retained
     numpy implementation (_euler_contributions) is recomputed on every call as an independent
-    cross-check and reported in `verification` — the tie-out made permanent."""
+    cross-check and reported in `verification` — the tie-out made permanent.
+
+    Memoized per (date, book) (api_bench 2026-08-21): the payload is a pure function of the two,
+    and its cost is the by-Position cube query (~0.8 s on the widest book), not serialisation."""
     def run():
         d = date or _latest_date()
+        ck = ("_contrib_memo", d, book, id(S["cube"]))
+        if ck in S:
+            return S[ck]
         # numpy reference — the independent implementation, kept as a live cross-check
         L, w, s, R = _book_inputs(d, book)
         if not float(np.abs(w.to_numpy()).sum()):
@@ -2349,6 +2495,8 @@ async def contributions(date: str | None = None, book: str = "Soros"):
         total_var = fac_var + svar
         dfF = (cube.query(m["Net exposure"], m["Factor variance contribution"],
                           levels=[l["Factor"]], filter=flt).reset_index())
+        # (the Position query below is the expensive half on a wide book: ~3.6k members, the
+        #  SDK's per-member floor again — measured, not serialisation; see the memo at the top)
         dfP = (cube.query(m["Marginal Model vol"], levels=[l["Position"]], filter=flt)
                .reset_index())
         factors = sorted(
@@ -2375,7 +2523,7 @@ async def contributions(date: str | None = None, book: str = "Soros"):
             "max_ctr_abs_diff": max((abs(p_["ctr"] - ref_ctr.get(p_["position"], 0.0))
                                      for p_ in positions), default=0.0),
         }
-        return {
+        out = {
             "date": d, "book": book, "source": "cube",
             "vol_1d": vol, "var99_normal": _Z99 * vol,
             "factor_variance": fac_var, "specific_variance": svar,
@@ -2392,6 +2540,8 @@ async def contributions(date: str | None = None, book: str = "Soros"):
                      "factor-return history — distinct from the scenario-VaR views. Served from "
                      "the cube measures; `verification` is the live numpy cross-check."),
         }
+        S[ck] = out
+        return out
     return await run_in_threadpool(run)
 
 
@@ -2638,16 +2788,6 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     # cost. Same rows selected, same arithmetic (see _frame_rows_by).
     pos_by = _frame_rows_by("positions", ("Book", "Date"))
     exp_by = _frame_rows_by("exposures", ("Date",))
-    sr_by = _frame_rows_by("specific_returns", ("Date",))
-    sr_days = np.array(sorted(sr_by), dtype="datetime64[ns]")
-
-    def _sr_window(d0, nxt):
-        # rows of specific_returns with d0 < Date <= nxt (all later dates when nxt is None)
-        lo_i = np.searchsorted(sr_days, np.datetime64(d0), side="right")
-        hi_i = np.searchsorted(sr_days, np.datetime64(nxt), side="right") if nxt is not None else len(sr_days)
-        idx = [sr_by[pd.Timestamp(d)] for d in sr_days[lo_i:hi_i]]
-        return sr.iloc[np.concatenate(idx)] if idx else sr.iloc[:0]
-
     parts = []
     for d0 in d0s:
         nxt = exp_dates[np.searchsorted(exp_dates, np.datetime64(d0)) + 1] \
@@ -2658,7 +2798,7 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
             continue
         frd = frt[(frt["Date"] > d0) & ((frt["Date"] <= nxt) if nxt is not None else True)]
         fsum = frd.groupby("Factor")["Return"].sum()
-        srd = _sr_window(d0, nxt)
+        srd = _sr_rows_between(d0, nxt)
         eps = srd[srd["Position"].isin(w_.index)].groupby("Position")["SpecificReturn"].sum()
         eidx = exp_by.get(d0)
         exp_d = exp.iloc[eidx] if eidx is not None else exp.iloc[:0]
@@ -2803,6 +2943,39 @@ def _frame_rows_by(name: str, keys: tuple) -> dict:
     if ck not in S:
         S[ck] = fr.groupby(list(keys), sort=False).indices
     return S[ck]
+
+
+def _book_date_rows(book: str) -> dict:
+    """{Date: row positions in the positions frame} for ONE book — the (Book, Date) row index
+    projected onto its book. `pos[pos["Book"] == book]` is an 11.6M-row scan on the 124-book
+    build and the endpoints that needed it did one per call (/whatchanged did several)."""
+    fr = S["frames"]["positions"]
+    ck = ("_book_dates", book, id(fr))
+    if ck not in S:
+        S[ck] = {pd.Timestamp(d): idx
+                 for (b, d), idx in _frame_rows_by("positions", ("Book", "Date")).items()
+                 if b == book}
+    return S[ck]
+
+
+def _sr_rows_between(lo, hi) -> pd.DataFrame:
+    """specific_returns rows with lo < Date <= hi, off the cached per-Date row index — the frame
+    is the DAILY residual panel (~13M rows on the 124-book build) and a boolean mask over it is
+    the single most expensive scan in the API. Same rows, same order (dates ascending, and the
+    frame's own row order within a date)."""
+    sr = S["frames"].get("specific_returns")
+    if sr is None:
+        return None
+    by = _frame_rows_by("specific_returns", ("Date",))
+    ck = ("_sr_days", id(sr))
+    if ck not in S:
+        S[ck] = np.array(sorted(by), dtype="datetime64[ns]")
+    days = S[ck]
+    i = np.searchsorted(days, np.datetime64(pd.Timestamp(lo)), side="right")
+    j = (np.searchsorted(days, np.datetime64(pd.Timestamp(hi)), side="right")
+         if hi is not None else len(days))          # hi=None -> every later date
+    idx = [by[pd.Timestamp(d)] for d in days[i:j]]
+    return sr.iloc[np.concatenate(idx)] if idx else sr.iloc[:0]
 
 
 def _pred_month_numpy(d0, book: str, frw: pd.DataFrame):
@@ -3111,12 +3284,17 @@ async def pnl_attribution_linkage(T: str | None = None,
               .pivot_table(index="Date", columns="Source", values="Value", aggfunc="first")
               .sort_index())
         xwin = xe.loc[(xe.index > t0) & (xe.index <= t1)]
-        # ex-ante at T: exposures, factor covariance on history <= T, specific block
+        # ex-ante at T: exposures, factor covariance on history <= T, specific block.
+        # Every frame selection here rides the cached row indices (api_bench 2026-08-21) — the
+        # same treatment /calibration and _name_attr already had; same rows, same arithmetic.
         pos = f["positions"]
-        w_ = pos[(pos["Book"] == book) & (pos["Date"] == t0)].groupby("Position")["Weight"].sum()
+        pos_by = _book_date_rows(book)
+        w_ = (pos.iloc[pos_by[t0]] if t0 in pos_by
+              else pos.iloc[:0]).groupby("Position")["Weight"].sum()
         if w_.empty:
             raise HTTPException(404, f"no {book} positions at {t0.date()}")
-        exp_d = f["exposures"][(f["exposures"]["Date"] == t0)]
+        exp_by = _frame_rows_by("exposures", ("Date",))
+        exp_d = f["exposures"].iloc[exp_by[t0]] if t0 in exp_by else f["exposures"].iloc[:0]
         Lu = exp_d.pivot_table(index="Position", columns="Factor", values="Loading",
                                aggfunc="first")
         frw = f["factor_returns"].pivot(index="Date", columns="Factor", values="Return").dropna(how="any")
@@ -3126,7 +3304,9 @@ async def pnl_attribution_linkage(T: str | None = None,
         x = L.T @ w_
         F = hist[facs].cov().to_numpy()
         Fs = _pnl._stressed_cov(F, vol_mult, rho)
-        sv = f["specific_var"][f["specific_var"]["Date"] == t0].set_index("Position")["SpecificVar"]
+        sv_by = _frame_rows_by("specific_var", ("Date",))
+        sv = (f["specific_var"].iloc[sv_by[t0]] if t0 in sv_by
+              else f["specific_var"].iloc[:0]).set_index("Position")["SpecificVar"]
         svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
         sig = np.sqrt(np.diag(F));  sig_s = np.sqrt(np.diag(Fs))
         xv = x.to_numpy()
@@ -3205,8 +3385,9 @@ async def pnl_attribution_linkage(T: str | None = None,
         # in-window average as-of weight per name (the band froze w at T; the 13F re-anchor /
         # resizes inside the window are the position analogue of exposure migration)
         mwin = [d for d in exp_dates if t0 <= d < t1]
-        wpath = (pos[(pos["Book"] == book) & (pos["Date"].isin(mwin))]
-                 .pivot_table(index="Date", columns="Position", values="Weight", aggfunc="sum")
+        widx = [pos_by[d] for d in mwin if d in pos_by]
+        wrows = pos.iloc[np.concatenate(widx)] if widx else pos.iloc[:0]
+        wpath = (wrows.pivot_table(index="Date", columns="Position", values="Weight", aggfunc="sum")
                  .reindex(mwin).fillna(0.0))
         w_win_avg = wpath.mean() if len(wpath) else pd.Series(dtype=float)
         fsum = fwin.sum()
@@ -3298,10 +3479,9 @@ async def pnl_attribution_linkage(T: str | None = None,
         breach_ids = [q["position"] for q in positions
                       if q.get("driver") and q["driver"]["kind"] in ("specific_move", "mixed")]
         if len(breach_ids) >= 2:
-            srf = f.get("specific_returns")
-            if srf is not None:
-                sub = srf[(srf["Position"].isin(breach_ids))
-                          & (srf["Date"] > t0) & (srf["Date"] <= t1)]
+            srw = _sr_rows_between(t0, t1)      # date-indexed slice, not a mask over ~13M rows
+            if srw is not None:
+                sub = srw[srw["Position"].isin(breach_ids)]
                 panel = sub.pivot_table(index="Date", columns="Position", values="SpecificReturn")
                 st_ = _pnl._pairwise_mean_corr(panel)
                 if st_ is not None:
@@ -4099,55 +4279,77 @@ async def overview_analysis(body: OverviewAnalysisBody):
     d = body.date or _latest_date()
     scen = body.set or _load_limits().get("scenario_set", "HistFull")
 
-    def collect():
-        out: dict = {"as_of": d, "book": body.book, "scenario_set": scen}
+    # The five input blocks are independent of each other and of the reconcile below, and each
+    # is a cube query or a frame pass — so they run CONCURRENTLY (api_bench 2026-08-21, TODO
+    # item 3; every one of them was already fast on its own, this is the assembly). Fragments are
+    # merged in the original order, so the payload the model sees is key-for-key what it was.
+    def _f_limits():
         try:
             lim = _limits_result(d, scen, body.book)
-            out["limits"] = {"status": lim["status"],
-                             "checks": [{k: c[k] for k in ("name", "value", "warn", "limit",
-                                                           "status")} for c in lim["checks"]]}
+            return {"limits": {"status": lim["status"],
+                               "checks": [{k: c[k] for k in ("name", "value", "warn", "limit",
+                                                             "status")} for c in lim["checks"]]}}
         except Exception:
-            out["limits"] = None
+            return {"limits": None}
+
+    def _f_risk():
         try:
             L, w, s, R = _book_inputs(d, body.book)
             risk = _risk_from_weights(w, L, s, R)
-            out["risk"] = {k: risk[k] for k in ("model_vol_1d", "scenario_var_99", "es_975",
-                                                "specific_vol", "top5_ctr_share", "gross", "net",
-                                                "total_var_99")}
             F = np.cov(R, rowvar=False)
             e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
             tv = e["factor_var"] + e["specific_var"]
             order = np.argsort(-np.abs(e["ctv"]))
-            out["variance_split"] = {
-                "factor_share": (e["factor_var"] / tv) if tv > 0 else None,
-                "vol_1d": e["sigma"],
-                "top_ctv": [{"factor": str(L.columns[i]),
-                             "pct_of_variance": float(e["ctv"][i] / tv)} for i in order[:6]],
-            }
+            return {"risk": {k: risk[k] for k in ("model_vol_1d", "scenario_var_99", "es_975",
+                                                  "specific_vol", "top5_ctr_share", "gross", "net",
+                                                  "total_var_99")},
+                    "variance_split": {
+                        "factor_share": (e["factor_var"] / tv) if tv > 0 else None,
+                        "vol_1d": e["sigma"],
+                        "top_ctv": [{"factor": str(L.columns[i]),
+                                     "pct_of_variance": float(e["ctv"][i] / tv)}
+                                    for i in order[:6]]}}
         except Exception:
-            out["risk"] = out.setdefault("variance_split", None)
+            return {"risk": None, "variance_split": None}
+
+    def _f_backtest():
         try:
             bt = _backtest_result(d, "HistFull", body.book, 0.01, 250, "fhs", 0.94)
-            out["calibration_and_backtest"] = (
+            return {"calibration_and_backtest": (
                 {k: bt.get(k) for k in ("kupiec_reject", "rate", "exceptions", "expected",
-                                        "tested")} if bt.get("status") == "ok" else None)
+                                        "tested")} if bt.get("status") == "ok" else None)}
         except Exception:
-            out["calibration_and_backtest"] = None
-        out["pnl_attribution_t12m"] = _attr_headline()
+            return {"calibration_and_backtest": None}
+
+    def _f_dq():
         try:
             checks = barra_dq_checks.run(S["frames"])
             summ = {k: sum(1 for c in checks if c["level"] == k) for k in ("PASS", "WARN", "FAIL")}
-            out["dq"] = {"status": ("fail" if summ["FAIL"] else "warn" if summ["WARN"] else "pass"),
-                         "summary": summ}
+            return {"dq": {"status": ("fail" if summ["FAIL"] else "warn" if summ["WARN"]
+                                      else "pass"), "summary": summ}}
         except Exception:
-            out["dq"] = None
+            return {"dq": None}
+
+    def collect():
+        out: dict = {"as_of": d, "book": body.book, "scenario_set": scen}
+        blocks = [_f_limits, _f_risk, _f_backtest,
+                  lambda: {"pnl_attribution_t12m": _attr_headline()}, _f_dq]
+        with ThreadPoolExecutor(max_workers=len(blocks)) as ex:
+            for frag in ex.map(lambda fn: fn(), blocks):
+                out.update(frag)
         return out
 
-    payload = await run_in_threadpool(collect)
-    # reconcile (risk↔PnL) — reuse the linkage route's computation, trimmed to verdicts + drivers
+    # reconcile (risk↔PnL) — reuse the linkage route's computation, trimmed to verdicts + drivers.
+    # It shares nothing with collect(), so the two run concurrently.
+    lk_task = asyncio.ensure_future(pnl_attribution_linkage(
+        T=None, horizon=3, book=body.book, vol_mult=1.25, rho=0.75, min_weight=0.001))
     try:
-        lk = await pnl_attribution_linkage(T=None, horizon=3, book=body.book,
-                                           vol_mult=1.25, rho=0.75, min_weight=0.001)
+        payload = await run_in_threadpool(collect)
+    except BaseException:
+        lk_task.cancel()                     # never leave the reconcile task orphaned
+        raise
+    try:
+        lk = await lk_task
         def trim(r):
             o = {"name": r["name"], "z": r.get("z"), "verdict": r["verdict"]}
             if r.get("driver"):
@@ -4398,35 +4600,47 @@ Hard rules:
 - Write plainly: direct, short sentences, tight GitHub-flavoured markdown. No preamble."""
 
 
-def _prior_filing_date(bpos: pd.DataFrame, d1: pd.Timestamp):
+def _prior_filing_date(bpos: pd.DataFrame, d1: pd.Timestamp, by: dict | None = None):
     """The latest date strictly before d1 whose held-name set differs from d1's — i.e. the previous
-    distinct 13F book (the positions frame is monthly and flat between quarterly filings)."""
-    dates = sorted(d for d in pd.to_datetime(bpos["Date"].unique()) if d < d1)
+    distinct 13F book (the positions frame is monthly and flat between quarterly filings).
+
+    `by` is an optional {Date: row positions into `bpos`} index (from `_book_date_rows`): without
+    it this re-scanned the whole frame once per candidate date walking backwards."""
+    if by is None:
+        by = {pd.Timestamp(k): v for k, v in bpos.groupby("Date").indices.items()}
+    dates = sorted(d for d in by if d < d1)
     if not dates:
         return None
-    cur = frozenset(bpos[bpos["Date"] == d1]["Position"])
+    col = bpos["Position"]
+
+    def at(d):
+        return frozenset(col.take(by[d]))       # positional take: never materialises the column
+    cur = at(d1)
     for d in reversed(dates):
-        if frozenset(bpos[bpos["Date"] == d]["Position"]) != cur:
+        if at(d) != cur:
             return d
     return dates[0]
 
 
 def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros") -> dict:
     f = S["frames"]; exp, pos, sec = f["exposures"], f["positions"], f["securities"]
-    bpos = pos[pos["Book"] == book]
-    alldates = sorted(pd.to_datetime(bpos["Date"].unique()))
+    # every positions selection below rides the cached per-book row index rather than masking the
+    # 11.6M-row frame (api_bench 2026-08-21): same rows, same order.
+    by = _book_date_rows(book)
+    alldates = sorted(by)
     if not alldates:
         raise HTTPException(404, f"no positions for book {book}")
     d1 = max(d for d in alldates if d <= pd.Timestamp(date)) if date else alldates[-1]
     d0 = (max(d for d in alldates if d <= pd.Timestamp(prev)) if prev
-          else _prior_filing_date(bpos, d1))
+          else _prior_filing_date(pos, d1, by))
     if d0 is None or d0 >= d1:
         raise HTTPException(400, "no prior filing before this date")
 
     issuer = dict(zip(sec["Position"], sec["Issuer"]))
     ticker = dict(zip(sec["Position"], sec["Ticker"]))
-    b0 = bpos[bpos["Date"] == d0].set_index("Position")["Weight"]
-    b1 = bpos[bpos["Date"] == d1].set_index("Position")["Weight"]
+    p0, p1 = pos.iloc[by[d0]], pos.iloc[by[d1]]
+    b0 = p0.set_index("Position")["Weight"]
+    b1 = p1.set_index("Position")["Weight"]
     set0, set1 = set(b0.index), set(b1.index)
 
     def nm(p):
@@ -4440,9 +4654,17 @@ def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros")
                       for p in set0 & set1 if abs(float(b1[p] - b0[p])) > 0.005),
                      key=lambda r: -abs(r["delta"]))
 
-    # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly
-    w0d, l0d = _ud.book_at(exp, pos, d0)
-    w1d, l1d = _ud.book_at(exp, pos, d1)
+    # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly.
+    # book_at has no Book concept of its own, so it must be handed the REQUESTED BOOK's rows: on
+    # the multi-book frames it was reading `pos` whole, and `dict(zip(Position, Weight))` collapsed
+    # all 124 managers' rows to one arbitrary weight per name — every book returned the same
+    # (wrong) net exposure. Same fix /drift already carries. Slicing exposures by date too: the
+    # attribution only ever reads the two dates.
+    exp_by = _frame_rows_by("exposures", ("Date",))
+    e0 = exp.iloc[exp_by[d0]] if d0 in exp_by else exp.iloc[:0]
+    e1 = exp.iloc[exp_by[d1]] if d1 in exp_by else exp.iloc[:0]
+    w0d, l0d = _ud.book_at(e0, p0, d0)
+    w1d, l1d = _ud.book_at(e1, p1, d1)
     attr = _ud.decompose(w0d, l0d, w1d, l1d)
     x0, x1 = _ud.book_exposure(w0d, l0d), _ud.book_exposure(w1d, l1d)
     exposure = [{"factor": fc, "before": _clean(x0[fc]), "after": _clean(x1[fc]),

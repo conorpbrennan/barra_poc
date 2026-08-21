@@ -304,13 +304,18 @@ this build.
 
 ## Known open items (see also CLAUDE.md's cross-reference)
 
-1. **Pre-existing, unrelated test failure**: `test_risk_measures.py::t_incremental_total_is_subadditive`
-   fails against the live, unmodified cube and unmodified `data/*.parquet`
-   (`Σincr=0.04242186115214519 !< book=0.03580909167096196` — a real sub-additivity violation in a risk
-   measure). Confirmed present before any of Phases 1–4 touched anything and unaffected by them (neither
-   the cube nor the data were touched by the parts of this work that could plausibly move this number).
-   Not investigated further here — flagged for whoever owns `barra_factor_risk_cube.py`'s risk measures
-   next.
+1. ~~**Pre-existing, unrelated test failure**: `test_risk_measures.py::t_incremental_total_is_subadditive`~~
+   **RESOLVED 2026-08-21 — and it was not a violation.** The reading above ("a real sub-additivity
+   violation in a risk measure") assumed Σ_member Incremental < book VaR is a property the measure
+   owes. It is not: that holds for a COHERENT measure, and a 99% quantile is the textbook measure
+   that is not one. The remove-recompute also re-reads the reduced book at ITS OWN tail day, so
+   each member is credited for shifting the tail as well as for its own risk. It is not a Soros or
+   a Total-VaR quirk either — measured by Issuer on HistFull, Scenario VaR sums to 0.0428 against a
+   0.0353 book and Total VaR to 0.0427 against 0.0358, and the same happens by Sector and by
+   Position. The old test passed only where it happened to hold (Scenario VaR over FACTOR members).
+   The property is real for `Incremental Model vol` (a standard deviation), where it holds on both
+   Soros and Vanguard and is now pinned; the cube comment that asserted "VaR is sub-additive" is
+   corrected. See `docs/optimization-log.md` §"Round 5".
 2. **`/dims` reports `Book` members as `['N/A', 'Soros']`** on the live, unrestarted service — an extra
    `"N/A"` member alongside the real book. Cause not identified; plausibly an atoti default member
    surfacing for exposure rows with no matching position. Confirmed not caused by anything in this

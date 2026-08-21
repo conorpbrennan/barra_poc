@@ -105,6 +105,14 @@ the what-if math (`_book_inputs` + `_risk_from_weights`, so it's cube-consistent
 factor-return history). `prev` defaults to the previous *distinct* book (`_prior_filing_date` walks
 back past the flat monthly as-of months to the prior quarterly filing).
 
+**Book-scoping fix (2026-08-21).** The factor-exposure attribution handed `_ud.book_at` the WHOLE
+positions frame, which has no Book concept of its own — on the multi-book build its
+`dict(zip(Position, Weight))` collapsed all 124 managers to one arbitrary weight per name, so
+`exposure_attribution` returned the SAME (wrong) net exposures for every book. It now gets the
+requested book's rows (the fix `/drift` already carried); `before`/`after` per book now tie
+`/drift`'s independently-computed `early`/`late` exactly. The position and risk blocks were always
+book-scoped and are unchanged.
+
 `POST /whatchanged/analysis` streams a grounded "what changed" read of that diff — the **same plain
 Messages-API, no-tools pattern as `/analysis`** (model `claude-opus-4-8`, adaptive thinking, cached
 `WHATCHANGED_SYSTEM`), leading with the biggest change and flagging factor drift as intentional
@@ -911,7 +919,20 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   first build after a rebuild writes it) — `load.bulk` ~12 s → 7.4 s quiet-box (build_cube 26.9 → 18.9 s with the persisted attribution); concurrent table
   loads (`BARRA_CUBE_LOAD=threads|async`) buy nothing (the JVM serialises the commits) and
   direct `ParquetLoad` was 2×–50× slower, both rejected; serve-before-load evaluated, not done.
-- **The per-day scenario path is `rows=[Day, DayDate]` (+ ONE breakout dim, e.g. `Sector`) with
+  Round 4 (2026-08-21) closed the last start-up lever by measurement: Exposures has **no unread
+  column to drop** (`Date/Position/Factor` are the key, `Loading` and `FactorPnL` back measures),
+  a droppable 6M-row double column would have been 0.71 s of JVM ingest (~4% of start-up), and
+  dictionary-encoding the string columns halves the arrow file but atoti 0.9.15's `ArrowLoad`
+  rejects dictionary vectors outright. `load.bulk` (7.3 s) is a JVM-ingest floor.
+- **API caches (round 4, 2026-08-21).** `/pivot` results are served from a bounded repeat-view LRU
+  (`BARRA_PIVOT_CACHE`, default 48 entries, 0 disables) — base-scenario pivots only, hypothetical
+  branches always run live, payloads over 25k records are served but not retained. `/contributions`
+  and `/trends?by=` are memoized per argument, like `/trends`'s book path already was. All of them
+  rest on the same fact: the frames and the cube never change in-process. Cold time is unchanged —
+  these buy repeat views. **`_book_names()`** memoizes the positions frame's book list: the
+  `nunique()`/`unique()` behind `_validate_pivot` and `_managers_meta` was an 11.6M-row scan, a
+  flat 0.35 s on EVERY guarded query (`/pivot`, `/analysis`, `/ask`) and every `/meta`.
+- **The per-day scenario path is `rows=[Day, DayDate]` (+ up to TWO breakout dims, e.g. `Sector`) with
   `PnL at day` and a `DaySet` slice** (its own hierarchy — same set names as ScenarioSet, but the
   ScenarioSet warning does not cover it; `DAY_DEP` carries its own; `/dims.day_dependent` for the
   UI). `VaR line at day` / `Worst pnl at day` / `Worst date at day (epoch)` are its chart markers
@@ -919,8 +940,11 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   `_day_vector_records` in `risk_api.py`, round 3): the cube's own `Scenario PnL vector` + dates
   dual (+ one single-cell markers query) unpacked in the API — the `/backtest`/`/drawdown` idiom, an
   API-side reshape of a cube vector, NOT a cube-native level, disclosed as such — **~0.5 s for any
-  book, any set, any load; day×Sector ~0.8 s Soros / ~2 s Vanguard (199k rows)**. Every other Day
-  shape (no DaySet, a Day filter, two breakouts, `plan=levels`) falls to the level plan over the
+  book, any set, any load; day×Sector ~0.8 s Soros / ~2 s Vanguard (199k rows)**. Since 2026-08-21
+  the vector plan also takes a **second breakout** and a **`Day`/`DayDate` window** (a chart zoom —
+  the window is a slice of the records the same per-set vector already produced), both pinned
+  record-for-record against `plan=levels`. Every other Day
+  shape (no DaySet, `plan=levels`) falls to the level plan over the
   day-facts table (`ScenarioDays`, docs/cube-opt-round2-scenarioday.md), which is correct but pays
   the SDK's per-member floor (~0.5–1 s Soros, ~11 s Vanguard HistFull, and 5–10× worse under
   ambient load — the box is shared); the payload's `plan` key says which ran, and
@@ -936,7 +960,9 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".
 - **Precomputes are manager-aware**: all five single-book precompute scripts take a book (CLI
   arg / `run(book=)`) and write `<stem>.<Book>.parquet` (legacy unsuffixed = Soros);
-  `_resolve_artifact` serves a book's own artifact first, else the Phase-3 guard applies.
+  `_resolve_artifact` serves a book's own artifact first, else the Phase-3 guard applies. Every
+  loaded manager now HAS its own artifact for all five kinds, so in practice the guard only fires
+  for an unbuilt book — the `*_book_guard` tests cover both branches (2026-08-21).
   `/limits` thresholds remain Soros-calibrated (disclosed via `calibrated_for`).
 - **The largest manager is Vanguard** ($6.4tn latest-filing MV); `notebooks/
   vanguard_13f_risk.ipynb` is the executed largest-manager notebook run (24g notebook-cube

@@ -161,11 +161,24 @@ def t_hedge_consistent_with_contributions():
 
 @integ
 def t_exposure_profile_shape():
+    """Shape + internal consistency of the cross-section, and the ±3 tail reported honestly.
+
+    NB there is deliberately no upper bound on `beyond3.share`. It used to assert < 0.5, which
+    was a fact about the OLD coverage universe (the S&P 500 estimation seed plus one small book),
+    not an invariant: loadings are z-scored against the ESTIMATION cross-section and coverage
+    names are left uncapped precisely so an off-index name shows its true tilt. The 124-book
+    coverage universe is ~5k names dominated by issues far smaller than the S&P 500, so on Size a
+    MAJORITY sitting below −3 is the design working (measured 0.60, median −3.7), not a fault —
+    it is the endpoint's own `note`. What is invariant is that the reported tail is consistent
+    with the distribution it came from, which is what this pins."""
     import requests
     j = requests.get(f"{API}/exposure_profile", params={"factor": "Size"}, timeout=60).json()
     assert sum(b["n"] for b in j["hist"]) == j["n_names"]
     assert j["held"] and all("ticker" in r for r in j["held"])
-    assert 0 <= j["beyond3"]["share"] < 0.5
+    b3 = j["beyond3"]
+    assert 0 <= b3["share"] <= 1 and 0 <= b3["n"] <= j["n_names"], b3
+    assert abs(b3["share"] - b3["n"] / j["n_names"]) < 1e-12, b3      # share IS n / n_names
+    assert all(abs(r["loading"]) > 3 for r in b3["names"]), b3        # and the tail is the tail
     assert j["quantiles"]["p01"] < j["quantiles"]["p50"] < j["quantiles"]["p99"]
     assert requests.get(f"{API}/exposure_profile",
                         params={"factor": "NotAFactor"}, timeout=30).status_code == 400

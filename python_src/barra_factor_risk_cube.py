@@ -1040,9 +1040,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
 
     # --- INCREMENTAL VaR (Flex Agg sense): REMOVE the current member, recompute the BOOK VaR on
     #     the reduced portfolio, and subtract it from the reference book VaR. Unlike the marginals
-    #     this is NOT additive (VaR is sub-additive) — Σ_member Incremental ≤ book VaR — so it
-    #     deliberately has no "% of" share. It answers "how much VaR does removing this member
-    #     RELEASE", the diversification-aware view a manager uses to decide what to cut.
+    #     this is NOT additive, so it deliberately has no "% of" share. It answers "how much VaR
+    #     does removing this member RELEASE", the diversification-aware view a manager uses to
+    #     decide what to cut.
+    #     This comment used to add "(VaR is sub-additive) — Σ_member Incremental ≤ book VaR".
+    #     That is wrong twice over and test_risk_measures had been failing on it: a 99% quantile
+    #     is the textbook measure that is NOT sub-additive, and the removal re-reads the reduced
+    #     book at ITS OWN tail day (see tail_idx_ex below), so each member is credited for
+    #     shifting the tail as well as for its own risk. Measured 2026-08-21 on Soros/HistFull by
+    #     Issuer: Σ Incremental Scenario VaR 0.0428 vs book 0.0353. The sum-under-book property
+    #     belongs to `Incremental Model vol` (a standard deviation), where it holds and is pinned.
     #     REFERENCE = the additive book VaR (Σ of the marginals = the tail-scenario READ-OFF), NOT
     #     the interpolated quantile F_book/T_book — so the col-TOTAL row reconciles with the Marginal
     #     column total to the last digit (at the grand level the removed book is empty -> VaR_ex=0,

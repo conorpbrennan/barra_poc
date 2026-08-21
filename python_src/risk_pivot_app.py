@@ -1202,13 +1202,26 @@ members = dims.get("members", {})
 
 
 # ----------------------------------------------------------------------------- defaults / seed
+def _book_dim(d: dict | None = None) -> str:
+    """The API's own name for the manager/book dimension.
+
+    It was renamed Book -> Manager at the API surface on 2026-08-14. `Book` stays a permanent
+    INPUT alias, so queries still work — but `/dims` only lists the canonical name, and a
+    multiselect default that isn't in its options is silently dropped. That is what left this
+    app landing with NO row field selected and its graph builder with nothing to plot (six
+    test_pivot_app failures, all one cause). Resolved from the live list so it works against
+    either vintage of the backend rather than hardcoding the new name."""
+    ds = (d if d is not None else dims).get("dimensions") or []
+    return "Manager" if "Manager" in ds else "Book"
+
+
 def _default_members(d: str, opts: list) -> list:
     """The historical default member selection for a slicer dimension.
-    Book -> real book(s), excluding the always-zero N/A bucket; Date -> latest;
+    Manager/Book -> real book(s), excluding the always-zero N/A bucket; Date -> latest;
     ScenarioSet -> a single set (scenario measures need one), preferring HistFull."""
     if not opts:
         return []
-    if d == "Book":
+    if d in ("Manager", "Book"):
         return [s for s in opts if s != "N/A"]
     if d == "Date":
         return [opts[-1]]
@@ -1223,10 +1236,11 @@ def seed_defaults(dims: dict) -> None:
     ss = st.session_state
     if ss.get("pv_seeded"):
         return
-    ss.setdefault("pv_rows", ["Book"])
+    bd = _book_dim(dims)
+    ss.setdefault("pv_rows", [bd])
     ss.setdefault("pv_cols", [])
     ss.setdefault("pv_measures", ["Total VaR 99", "Scenario VaR 99", "Specific vol"])
-    ss.setdefault("pv_slice_dims", ["Book", "Date", "ScenarioSet"])
+    ss.setdefault("pv_slice_dims", [bd, "Date", "ScenarioSet"])
     ss.setdefault("pv_row_tot", False)
     ss.setdefault("pv_col_tot", False)
     ss.setdefault("pv_as_pct", True)
@@ -1546,7 +1560,7 @@ def read_pivot_state():
     """The pivot fields read from session_state — used when the sidebar is showing the
     Repository (the pivot widgets aren't rendered then, so the grid reads their last values)."""
     ss = st.session_state
-    rows = list(ss.get("pv_rows", ["Book"]))
+    rows = list(ss.get("pv_rows", [_book_dim()]))
     cols = [c for c in ss.get("pv_cols", []) if c not in rows]
     slice_dims = list(ss.get("pv_slice_dims", []))
     filters = {d: ss[f"slice_{d}"] for d in slice_dims if ss.get(f"slice_{d}")}
