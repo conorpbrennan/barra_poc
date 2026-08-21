@@ -3,7 +3,7 @@
   "name": "Stress board \u2014 all scenarios",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T02:05:05Z",
-  "updated": "2026-06-16T16:48:52Z",
+  "updated": "2026-08-21T22:27:29Z",
   "state": {
     "cols": [],
     "row_tot": false,
@@ -21,15 +21,15 @@
       "Total VaR 99"
     ],
     "slice_dims": [
-      "Book",
+      "Manager",
       "Date"
     ],
     "filters": {
-      "Book": [
+      "Manager": [
         "Soros"
       ],
       "Date": [
-        "2024-12-31"
+        "2026-06-30"
       ]
     },
     "sort": [
@@ -164,11 +164,11 @@
           "Total VaR 99"
         ],
         "filters": {
-          "Book": [
+          "Manager": [
             "Soros"
           ],
           "Date": [
-            "2024-12-31"
+            "2026-06-30"
           ]
         }
       }

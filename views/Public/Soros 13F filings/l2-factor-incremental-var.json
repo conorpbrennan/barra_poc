@@ -3,20 +3,20 @@
   "name": "L2 \u2014 Factor incremental VaR",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T01:50:44Z",
-  "updated": "2026-06-14T01:50:44Z",
+  "updated": "2026-08-21T22:10:00Z",
   "state": {
     "cols": [],
     "slice_dims": [
-      "Book",
+      "Manager",
       "Date",
       "ScenarioSet"
     ],
     "filters": {
-      "Book": [
+      "Manager": [
         "Soros"
       ],
       "Date": [
-        "2024-12-31"
+        "2026-06-30"
       ],
       "ScenarioSet": [
         "HistFull"

@@ -3,7 +3,7 @@
   "name": "Concentration \u2014 Risk HHI",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-20T19:30:00Z",
-  "updated": "2026-06-20T19:30:00Z",
+  "updated": "2026-08-21T22:10:00Z",
   "state": {
     "rows": [
       "ScenarioSet"
@@ -13,15 +13,15 @@
       "Risk HHI"
     ],
     "slice_dims": [
-      "Book",
+      "Manager",
       "Date"
     ],
     "filters": {
-      "Book": [
+      "Manager": [
         "Soros"
       ],
       "Date": [
-        "2024-12-31"
+        "2026-06-30"
       ]
     },
     "row_tot": false,

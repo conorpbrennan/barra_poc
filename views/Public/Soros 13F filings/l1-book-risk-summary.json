@@ -3,10 +3,10 @@
   "name": "L1 \u2014 Book risk summary",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-13T20:25:09Z",
-  "updated": "2026-06-14T00:44:35Z",
+  "updated": "2026-08-21T22:10:00Z",
   "state": {
     "rows": [
-      "Book"
+      "Manager"
     ],
     "cols": [],
     "measures": [
@@ -15,16 +15,16 @@
       "Specific vol"
     ],
     "slice_dims": [
-      "Book",
+      "Manager",
       "Date",
       "ScenarioSet"
     ],
     "filters": {
-      "Book": [
+      "Manager": [
         "Soros"
       ],
       "Date": [
-        "2024-12-31"
+        "2026-06-30"
       ],
       "ScenarioSet": [
         "HistFull"

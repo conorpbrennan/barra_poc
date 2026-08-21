@@ -187,21 +187,21 @@ if __name__ == "__main__":
     set_chart("var-trend-histfull", "chart",
               [{"name": "VaR trend", "rows": ["Date"], "cols": [],
                 "measures": ["Scenario VaR 99", "Total VaR 99", "Specific vol"],
-                "filters": {"Book": ["Soros"], "ScenarioSet": ["HistFull"]}}],
+                "filters": {"Manager": ["Soros"], "ScenarioSet": ["HistFull"]}}],
               _ref("VaR trend", line_spec(["Scenario VaR 99", "Total VaR 99", "Specific vol"])))
 
     # stress-board: one ScenarioSet pivot query, drawn as grouped bars.
     set_chart("stress-board-all-scenarios", "chart",
               [{"name": "Stress board", "rows": ["ScenarioSet"], "cols": [],
                 "measures": ["Scenario VaR 99", "Scenario worst loss", "Total VaR 99"],
-                "filters": {"Book": ["Soros"], "Date": ["2024-12-31"]}}],
+                "filters": {"Manager": ["Soros"], "Date": ["2026-06-30"]}}],
               _ref("Stress board", bar_spec(["Scenario VaR 99", "Scenario worst loss",
                                              "Total VaR 99"], "ScenarioSet")))
 
     # COVID: TWO structurally-different pivot queries (the only difference is `rows`), each drawn by
     # its own graph. The Day/DayDate levels are the day-facts path (2026-08-15): `PnL at day` reads
     # DaySet, the book-level markers read ScenarioSet, so the filter names the set on BOTH.
-    _covid_filters = {"Book": ["Soros"], "Date": ["2024-12-31"],
+    _covid_filters = {"Manager": ["Soros"], "Date": ["2026-06-30"],
                       "ScenarioSet": ["Evt:COVID2020"], "DaySet": ["Evt:COVID2020"]}
     set_chart("scenario-p-l-covid-2020", "chart",
               [{"name": "Scenario P&L", "rows": ["Day", "DayDate"], "cols": [],

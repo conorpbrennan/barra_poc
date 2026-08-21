@@ -3,7 +3,7 @@
   "name": "L3 \u2014 Sector contributions",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T02:05:05Z",
-  "updated": "2026-06-14T02:05:05Z",
+  "updated": "2026-08-21T22:10:00Z",
   "state": {
     "cols": [],
     "row_tot": false,
@@ -20,16 +20,16 @@
       "% of Total VaR 99"
     ],
     "slice_dims": [
-      "Book",
+      "Manager",
       "Date",
       "ScenarioSet"
     ],
     "filters": {
-      "Book": [
+      "Manager": [
         "Soros"
       ],
       "Date": [
-        "2024-12-31"
+        "2026-06-30"
       ],
       "ScenarioSet": [
         "HistFull"
