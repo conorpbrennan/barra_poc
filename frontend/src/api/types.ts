@@ -408,11 +408,14 @@ export interface PivotQuery {
   name: string; rows: string[]; cols: string[]; measures: string[];
   filters?: Record<string, string[]>;
 }
+// AG Grid column-state sort entry, the shape the Streamlit grid saves (colId = measure name, or
+// "<col member> / <measure>" with a column dim, or a row dim name for the label column).
+export interface SortItem { colId: string; sort: "asc" | "desc"; sortIndex?: number }
 export interface ViewState {
   rows: string[]; cols: string[]; measures: string[];
   slice_dims?: string[]; filters?: Record<string, string[]>;
   row_tot?: boolean; col_tot?: boolean; as_pct?: boolean; hide_empty?: boolean;
-  heat?: boolean; prec?: number; sort?: unknown;
+  heat?: boolean; prec?: number; sort?: SortItem[];
   date_fmt?: string; render?: "grid" | "chart";
   // `chart` is a COMPLETE Vega-Lite spec, or a LIST of them (one per graph); each carries a `source`
   // naming the query in `queries` whose records feed it. Rendered verbatim (charts are not rebuilt).

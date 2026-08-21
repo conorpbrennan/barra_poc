@@ -3,18 +3,27 @@
 // drill); measure columns get value formatters + an optional heatmap (ported from the st_aggrid
 // JsCode formatters). The pinned bottom row is the cube's `grand` corner — the only total, never a
 // client-side sum (VaR is non-additive).
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { AgGridReact } from "ag-grid-react";
-import type { ColDef, ICellRendererParams } from "ag-grid-community";
-import { COL_SEP, type DisplayRow, type PivotConfig } from "./usePivot";
+import type { ColDef, GridReadyEvent, ICellRendererParams, SortChangedEvent } from "ag-grid-community";
+import { COL_SEP, LABEL_COL, TOTAL_COL, sortIdFor, sortKeyFor, type DisplayRow, type PivotConfig } from "./usePivot";
+import type { SortItem } from "../api/types";
 import { pct, num } from "../lib/format";
 
 interface GridRow {
   __row?: DisplayRow;
   __label: string;
   __total?: boolean;
+  __ord: number;           // position in the tree-aware sorted `flat` — what every column sorts on
   [key: string]: unknown;
 }
+
+// Sorting happens in usePivot (siblings within each drill level, by the view's `sort`), so the
+// grid's own sort — whichever column, whichever direction — must just reproduce `flat`'s order:
+// the comparator compares tree positions and lets AG Grid flip the sign for "desc". The header
+// arrow then shows the active sort while the drill indentation stays intact.
+const treeOrder = (_a: unknown, _b: unknown, na: { data?: GridRow }, nb: { data?: GridRow }, desc: boolean) =>
+  ((na.data?.__ord ?? 0) - (nb.data?.__ord ?? 0)) * (desc ? -1 : 1);
 
 export function fmt(v: unknown, cfg: PivotConfig): string {
   if (typeof v !== "number" || Number.isNaN(v)) return "";
@@ -34,7 +43,7 @@ function heatStyle(v: number, min: number, max: number) {
 }
 
 export function PivotGrid({
-  flat, colMembers, measures, cfg, grand, onToggle,
+  flat, colMembers, measures, cfg, grand, onToggle, onSort,
 }: {
   flat: DisplayRow[];
   colMembers: string[];
@@ -42,6 +51,7 @@ export function PivotGrid({
   cfg: PivotConfig;
   grand: Record<string, number | null>;
   onToggle: (r: DisplayRow) => void;
+  onSort?: (sort: SortItem[]) => void;
 }) {
   const { rowData, columnDefs } = useMemo(() => {
     const cols = colMembers.length ? colMembers : [""];
@@ -58,8 +68,8 @@ export function PivotGrid({
       ranges.set(key, { min, max });
     }
 
-    const rows: GridRow[] = flat.map((r) => {
-      const gr: GridRow = { __row: r, __label: r.label };
+    const rows: GridRow[] = flat.map((r, i) => {
+      const gr: GridRow = { __row: r, __label: r.label, __ord: i };
       for (const cm of cols) for (const m of measures) {
         const key = `${cm}${COL_SEP}${m}`;
         gr[key] = r.values[key] ?? null;
@@ -69,7 +79,9 @@ export function PivotGrid({
 
     const labelCol: ColDef<GridRow> = {
       headerName: cfg.rows.join(" › "),
-      field: "__label",
+      field: LABEL_COL,
+      colId: LABEL_COL,
+      comparator: treeOrder,
       pinned: "left",
       width: 230,
       cellRenderer: (p: ICellRendererParams<GridRow>) => {
@@ -93,6 +105,7 @@ export function PivotGrid({
         const key = `${cm}${COL_SEP}${m}`;
         valueCols.push({
           headerName: cm ? `${cm} · ${m}` : m,
+          comparator: treeOrder,
           // measure names contain dots (e.g. "Scenario VaR 97.5"); AG Grid reads a dotted `field` as a
           // nested path and renders blank, so read the literal key via valueGetter (colId keeps identity).
           colId: key,
@@ -115,10 +128,31 @@ export function PivotGrid({
   const pinnedBottomRowData = useMemo(() => {
     if (!cfg.totals || !Object.keys(grand).length) return [];
     const cols = colMembers.length ? colMembers : [""];
-    const tr: GridRow = { __label: "Total (book)", __total: true };
-    for (const m of measures) tr[`${cols[0]}${COL_SEP}${m}`] = grand[m] ?? null;
+    const tr: GridRow = { __label: "Total (book)", __total: true, __ord: -1 };
+    for (const cm of cols) for (const m of measures) {
+      const key = `${cm}${COL_SEP}${m}`;
+      tr[key] = grand[key] ?? (cm === TOTAL_COL ? grand[`${COL_SEP}${m}`] : null) ?? null;
+    }
     return [tr];
   }, [cfg.totals, grand, colMembers, measures]);
+
+  // the view's saved sort -> grid column state (applied on mount; the grid remounts per view)
+  const applySort = useCallback((e: GridReadyEvent<GridRow>) => {
+    const state = cfg.sort.map((s, i) => {
+      const key = sortKeyFor(s.colId, cfg);
+      return key ? { colId: key, sort: s.sort, sortIndex: s.sortIndex ?? i } : null;
+    }).filter((x): x is { colId: string; sort: "asc" | "desc"; sortIndex: number } => !!x);
+    e.api.applyColumnState({ state, defaultState: { sort: null } });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cfg.sort, cfg.rows, cfg.measures]);
+  // a header click -> the view's sort, in Streamlit's colId form, so a save round-trips
+  const captureSort = useCallback((e: SortChangedEvent<GridRow>) => {
+    const next: SortItem[] = e.api.getColumnState()
+      .filter((c) => c.sort)
+      .sort((a, b) => (a.sortIndex ?? 0) - (b.sortIndex ?? 0))
+      .map((c, i) => ({ colId: sortIdFor(c.colId, cfg), sort: c.sort as "asc" | "desc", sortIndex: i }));
+    if (JSON.stringify(next) !== JSON.stringify(cfg.sort)) onSort?.(next);
+  }, [cfg, onSort]);
 
   // Remount the grid when the COLUMN structure changes (loading a different view: new rows/measures/
   // col members). AG Grid can otherwise keep stale columns when both columnDefs and rowData swap at
@@ -133,6 +167,8 @@ export function PivotGrid({
         rowData={rowData}
         columnDefs={columnDefs}
         pinnedBottomRowData={pinnedBottomRowData}
+        onGridReady={applySort}
+        onSortChanged={captureSort}
         defaultColDef={{ sortable: true, resizable: true }}
         suppressCellFocus
         headerHeight={30}

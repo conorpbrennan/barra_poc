@@ -111,6 +111,9 @@ export function Pivot() {
   const [showHypo, setShowHypo] = useState(false);
   // the currently-loaded saved view (name + its description), shown in the bottom description pane
   const [loadedView, setLoadedView] = useState<{ name: string; description?: string } | null>(null);
+  // the loaded view's full saved state: fields Vite has no control for (date_fmt, chart/queries)
+  // ride along on save instead of being dropped by a Vite round-trip
+  const [loadedState, setLoadedState] = useState<ViewState | null>(null);
   // a charted view is self-describing: its named queries + Vega-Lite spec(s), rendered verbatim
   const [chartView, setChartView] = useState<Pick<ViewState, "queries" | "chart"> | null>(null);
 
@@ -118,7 +121,7 @@ export function Pivot() {
   const pivot = usePivot({
     rows: ["Sector"], measures: ["Net exposure", "Scenario VaR 99"],
     filters: { Date: [date], ScenarioSet: [scenario] },
-    totals: true, heat: true, asPct: false, prec: 3,
+    totals: true, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [],
   });
   const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, warning, loading, error } = pivot;
 
@@ -176,22 +179,35 @@ export function Pivot() {
     const next: PivotConfig = {
       ...cfg,
       rows: s.rows ?? cfg.rows, cols: s.cols ?? [], measures: s.measures ?? cfg.measures,
-      filters: s.filters ?? cfg.filters, totals: s.row_tot ?? cfg.totals,
+      filters: s.filters ?? cfg.filters,
+      // Streamlit's names: col_tot = Total ROW (the pinned grand/per_col margin), row_tot = Total
+      // COLUMN (per_row margin, with a column dim). Pre-2026-08-21 Vite saves wrote the pinned
+      // row as row_tot with no col_tot — read that form too.
+      totals: s.col_tot ?? (s.row_tot && !s.cols?.length ? s.row_tot : cfg.totals),
+      rowTot: s.col_tot !== undefined ? (s.row_tot ?? false) : false,
+      hideEmpty: s.hide_empty ?? true,
       heat: s.heat ?? cfg.heat, asPct: s.as_pct ?? cfg.asPct, prec: s.prec ?? cfg.prec,
+      sort: Array.isArray(s.sort) ? s.sort : [],
       whatif: [], shocks: {},   // a saved view is a canonical report — never load it hypothetical
     };
     setCfg(next);
     setMode(s.render === "chart" ? "chart" : "grid");
     reload(next);
     setLoadedView({ name, description: s.description });
+    setLoadedState(s);
     // capture the self-describing chart (queries + spec) so chart mode renders it verbatim
     setChartView(s.render === "chart" && s.chart ? { queries: s.queries, chart: s.chart } : null);
     document.title = `${name} · pivot`;
   };
 
+  // the saved form mirrors Streamlit's read_pivot_state() field for field, so a view written
+  // here loads identically in the Streamlit app (and vice versa)
   const currentState: ViewState = {
+    ...(loadedState ?? {}),
     rows: cfg.rows, cols: cfg.cols, measures: cfg.measures, filters: cfg.filters,
-    row_tot: cfg.totals, as_pct: cfg.asPct, heat: cfg.heat, prec: cfg.prec,
+    slice_dims: Object.keys(cfg.filters),
+    row_tot: cfg.rowTot, col_tot: cfg.totals, as_pct: cfg.asPct, hide_empty: cfg.hideEmpty,
+    heat: cfg.heat, prec: cfg.prec, sort: cfg.sort,
     render: mode, description: loadedView?.description,
   };
 
@@ -218,7 +234,17 @@ export function Pivot() {
             Hypothetical{hypoActive ? " ●" : ""}</button>
           <label className="row small"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
           <label className="row small"><input type="checkbox" checked={cfg.asPct} onChange={(e) => setCfg((c) => ({ ...c, asPct: e.target.checked }))} /> %</label>
-          <label className="row small"><input type="checkbox" checked={cfg.totals} onChange={(e) => setCfg((c) => ({ ...c, totals: e.target.checked }))} /> totals</label>
+          <label className="row small" title="Total row — the cube's grand / per-column margin, pinned at the bottom">
+            <input type="checkbox" checked={cfg.totals} onChange={(e) => { const next = { ...cfg, totals: e.target.checked }; setCfg(next); reload(next); }} /> total row</label>
+          <label className="row small" title="Total column — the cube's per-row margin across the column dim (needs a column field)"
+            style={{ opacity: cfg.cols.length ? 1 : 0.45 }}>
+            <input type="checkbox" checked={cfg.rowTot} disabled={!cfg.cols.length}
+              onChange={(e) => { const next = { ...cfg, rowTot: e.target.checked }; setCfg(next); reload(next); }} /> total column</label>
+          <label className="row small" title="Drop rows / columns that are entirely blank; totals are kept">
+            <input type="checkbox" checked={cfg.hideEmpty} onChange={(e) => setCfg((c) => ({ ...c, hideEmpty: e.target.checked }))} /> hide empty</label>
+          <label className="row small" title="Decimals shown (of the percent when % is on)">
+            decimals <input type="number" min={0} max={6} value={cfg.prec} style={{ width: "3.2rem" }}
+              onChange={(e) => setCfg((c) => ({ ...c, prec: Math.max(0, Math.min(6, Number(e.target.value) || 0)) }))} /></label>
         </div>
       </div>
 
@@ -237,7 +263,8 @@ export function Pivot() {
               {loading && <div className="spin">querying cube…</div>}
               {mode === "grid" ? (
                 <PivotGrid flat={flat} colMembers={colMembers} measures={cfg.measures}
-                  cfg={cfg} grand={grand} onToggle={toggleExpand} />
+                  cfg={cfg} grand={grand} onToggle={toggleExpand}
+                  onSort={(sort) => setCfg((c) => ({ ...c, sort }))} />
               ) : (
                 <Suspense fallback={<div className="spin">loading chart…</div>}>
                   <ChartMode cfg={cfg} savedQueries={chartView?.queries} savedChart={chartView?.chart} />

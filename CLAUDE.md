@@ -757,7 +757,10 @@ of the existing endpoints — the **only** backend change is the saved-views CRU
 (a FastAPI `APIRouter` over `views_repo`, mounted in `risk_api.py`; no cube dependency, tested by
 `test_views_api.py`). Lenses: Overview (hero + sparklines + limits bullet graphs + RAG strip + top
 exposures + QoQ), Pivot (dnd-kit field list → server-side `/pivot` drill in AG Grid as a pure
-renderer, grand-total only since VaR is non-additive; react-vega chart mode; `/views` Repository;
+renderer; totals are the cube's margins only — `grand`/`per_col` as the Total row (view `col_tot`),
+`per_row` as the Total column (`row_tot`, needs a column field) — never a client sum, since VaR is
+non-additive; the view's `sort`/`hide_empty`/`prec` are honoured and written back in Streamlit's
+field-for-field form (2026-08-21), sort applied per drill level so the indentation survives; react-vega chart mode; `/views` Repository;
 on-demand `/analysis`), Trends, Stress, What-if (+ hedge panel), Universe (membership/funnel/span
 + live scatter), Drift, Attribution (Euler + PnL tabs), Changes, Model, Ask, Checks. Global context
 bar (book/date/scenario, §9). **Scope cuts 2026-07-02** (itsjustbeta audit, `itsjustbeta/
