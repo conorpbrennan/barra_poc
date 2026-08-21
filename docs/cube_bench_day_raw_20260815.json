@@ -1,0 +1,228 @@
+{
+ "stages": {
+  "load_frames_s": 0.75,
+  "build_cube_s": 26.54,
+  "jvm_rss_after_build_gb": 6.99,
+  "py_rss_after_build_gb": 1.68,
+  "jvm_rss_after_gb": 6.74
+ },
+ "queries": {
+  "new_day_path": {
+   "cold": {
+    "s": 1.536,
+    "jvm_before_gb": 7.23,
+    "jvm_after_gb": 6.64,
+    "jvm_peak_gb": 7.23,
+    "jvm_delta_gb": -0.6,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 1.219,
+    "jvm_before_gb": 6.64,
+    "jvm_after_gb": 6.65,
+    "jvm_peak_gb": 6.65,
+    "jvm_delta_gb": 0.01,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_no_date": {
+   "cold": {
+    "s": 1.099,
+    "jvm_before_gb": 6.65,
+    "jvm_after_gb": 6.65,
+    "jvm_peak_gb": 6.65,
+    "jvm_delta_gb": 0.0,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 1.083,
+    "jvm_before_gb": 6.65,
+    "jvm_after_gb": 6.67,
+    "jvm_peak_gb": 6.67,
+    "jvm_delta_gb": 0.02,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_date_measure": {
+   "cold": {
+    "s": 1.837,
+    "jvm_before_gb": 6.67,
+    "jvm_after_gb": 6.67,
+    "jvm_peak_gb": 6.67,
+    "jvm_delta_gb": 0.0,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 2.086,
+    "jvm_before_gb": 6.67,
+    "jvm_after_gb": 6.67,
+    "jvm_peak_gb": 6.67,
+    "jvm_delta_gb": 0.0,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "new_day_by_sector": {
+   "cold": {
+    "s": 12.7,
+    "jvm_before_gb": 6.67,
+    "jvm_after_gb": 6.71,
+    "jvm_peak_gb": 7.84,
+    "jvm_delta_gb": 0.04,
+    "rows": 198968,
+    "error": null
+   },
+   "warm": {
+    "s": 12.517,
+    "jvm_before_gb": 6.71,
+    "jvm_after_gb": 7.8,
+    "jvm_peak_gb": 7.8,
+    "jvm_delta_gb": 1.09,
+    "rows": 198968,
+    "error": null
+   }
+  },
+  "new_day_path_covid": {
+   "cold": {
+    "s": 0.089,
+    "jvm_before_gb": 7.8,
+    "jvm_after_gb": 7.8,
+    "jvm_peak_gb": 7.8,
+    "jvm_delta_gb": 0.0,
+    "rows": 82,
+    "error": null
+   },
+   "warm": {
+    "s": 0.048,
+    "jvm_before_gb": 7.8,
+    "jvm_after_gb": 7.8,
+    "jvm_peak_gb": 7.8,
+    "jvm_delta_gb": 0.0,
+    "rows": 82,
+    "error": null
+   }
+  },
+  "new_day_path_small_book": {
+   "cold": {
+    "s": 0.305,
+    "jvm_before_gb": 7.8,
+    "jvm_after_gb": 7.82,
+    "jvm_peak_gb": 7.82,
+    "jvm_delta_gb": 0.02,
+    "rows": 2618,
+    "error": null
+   },
+   "warm": {
+    "s": 0.282,
+    "jvm_before_gb": 7.82,
+    "jvm_after_gb": 7.84,
+    "jvm_peak_gb": 7.84,
+    "jvm_delta_gb": 0.01,
+    "rows": 2618,
+    "error": null
+   }
+  },
+  "pnl_vector_book": {
+   "cold": {
+    "s": 0.141,
+    "jvm_before_gb": 7.84,
+    "jvm_after_gb": 7.84,
+    "jvm_peak_gb": 7.84,
+    "jvm_delta_gb": 0.0,
+    "rows": 1,
+    "error": null
+   },
+   "warm": {
+    "s": 0.02,
+    "jvm_before_gb": 7.84,
+    "jvm_after_gb": 7.84,
+    "jvm_peak_gb": 7.84,
+    "jvm_delta_gb": 0.0,
+    "rows": 1,
+    "error": null
+   }
+  }
+ },
+ "checks": [
+  {
+   "book": "Vanguard",
+   "set": "HistFull",
+   "n_days": 2618,
+   "n_vector": 2618,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "Vanguard",
+   "set": "Evt:COVID2020",
+   "n_days": 82,
+   "n_vector": 82,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "ThirdPoint",
+   "set": "HistFull",
+   "n_days": 2618,
+   "n_vector": 2618,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "book": "ThirdPoint",
+   "set": "Evt:COVID2020",
+   "n_days": 82,
+   "n_vector": 82,
+   "len_match": true,
+   "index_ordered": true,
+   "max_abs_diff": 0.0,
+   "date_max_abs_diff": 0,
+   "pass": true
+  },
+  {
+   "check": "sector_footing",
+   "book": "Vanguard",
+   "set": "HistFull",
+   "days": [
+    0,
+    1,
+    41
+   ],
+   "max_abs_diff": 1.0408340855860843e-17,
+   "pass": true
+  }
+ ],
+ "verdict": {
+  "day_path_cold_lt_2s": true,
+  "day_path_warm_lt_0p5s": false,
+  "day_by_sector_ok": false,
+  "jvm_delta_lt_2g": true,
+  "correctness": true,
+  "ALL": false
+ },
+ "meta": {
+  "book": "Vanguard",
+  "small_book": "ThirdPoint",
+  "date": "2026-06-30",
+  "loadavg": [
+   3.8,
+   3.9,
+   6.3
+  ],
+  "ts": "2026-08-15 02:49:50"
+ }
+}
