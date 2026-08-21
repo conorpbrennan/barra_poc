@@ -16,9 +16,12 @@ interface GridRow {
   [key: string]: unknown;
 }
 
-function fmt(v: unknown, cfg: PivotConfig): string {
+export function fmt(v: unknown, cfg: PivotConfig): string {
   if (typeof v !== "number" || Number.isNaN(v)) return "";
-  return cfg.asPct ? pct(v, cfg.prec - 1) : num(v, cfg.prec);
+  // `prec` is decimals of the DISPLAYED number in both modes, as the notebook's style_grid
+  // ({:.3%} -> 3.576%) and the Streamlit grid do — the old `prec - 1` showed 3.58% against
+  // the notebook's 3.576% for the same cell.
+  return cfg.asPct ? pct(v, cfg.prec) : num(v, cfg.prec);
 }
 
 // faint accent heatmap, scaled within a column's |range|
