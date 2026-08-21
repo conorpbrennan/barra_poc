@@ -78,6 +78,31 @@ def _free_port(port: int, tries: int = 20) -> int:
     raise RuntimeError(f"no free port in {port}..{port + tries - 1} for the notebook cube")
 
 
+def _build_cube_interrupt_safe(port: int):
+    """Start the cube with SIGINT IGNORED in this process while the JVM is spawned.
+
+    JupyterLab's Interrupt (the Stop button) sends SIGINT to the kernel's whole PROCESS GROUP,
+    and the Atoti JVM is a child in that group — so every interrupt, even of an unrelated slow
+    cell, shut the cube down (2026-08-21: three cubes lost to Stop presses in one session).
+    HotSpot keeps an INHERITED ignored SIGINT ignored (it installs no handler for a signal that
+    was SIG_IGN at start), so a JVM spawned while the kernel ignores SIGINT is immune to
+    Interrupt for its whole life; the kernel's own handler is restored right after, so Stop
+    still interrupts Python cells. Restart Kernel still tears the cube down (SIGTERM/SIGKILL).
+    Measured: a group SIGINT kills a default-spawned JVM and leaves an ignore-spawned one up.
+    Falls back to a plain start outside the main thread (signal handlers are main-thread only)."""
+    try:
+        import signal, threading
+        if threading.current_thread() is not threading.main_thread():
+            raise RuntimeError("not main thread")
+        prev = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except Exception:
+        return build_cube(load_frames(), port=port)
+    try:
+        return build_cube(load_frames(), port=port)
+    finally:
+        signal.signal(signal.SIGINT, prev)
+
+
 def build(port: int = CUBE_PORT, *, force: bool = False):
     """Build the factor-risk cube from the six parquet frames and return (session, cube).
 
@@ -109,7 +134,7 @@ def build(port: int = CUBE_PORT, *, force: bool = False):
         _BUILT = None
     port = _free_port(port)
     t0 = time.perf_counter()
-    session, cube = build_cube(load_frames(), port=port)
+    session, cube = _build_cube_interrupt_safe(port)
     # The notebook container is jailed to 2 CPUs, and on the 11-book frames the scenario-vector
     # queries (e.g. an Evt window's Scenario PnL) can exceed ActivePivot's 30s default query time
     # limit there — the host API cube on all cores never hits it. Raised for this session only.
