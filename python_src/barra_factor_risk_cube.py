@@ -90,6 +90,16 @@ def _arrow_cache_key(table, df: pd.DataFrame) -> dict | None:
             "dtypes": [str(t) for t in df.dtypes], "data_types": dict(table._data_types)}
 
 
+def _unlink_quiet(p: pathlib.Path) -> None:
+    """Best-effort delete. Cache housekeeping must never raise — an unlink that throws inside the
+    write-failure handler escapes it and kills the build, which is exactly how a read-only
+    /app/data took the notebook container down on 2026-08-21."""
+    try:
+        p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def _load_one(table, df: pd.DataFrame) -> str:
     """Load one frame into its table; returns how ("arrow-cache" | "arrow-cache-write" | "pandas").
     Cache path: read the JSON sidecar, compare the key, `ArrowLoad` the file. Miss: convert with
@@ -107,7 +117,10 @@ def _load_one(table, df: pd.DataFrame) -> str:
         from atoti.data_load._arrow_load import ArrowLoad
     except Exception:                                   # private atoti API moved: no cache
         table.load(df); return "pandas"
-    _ARROW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        _ARROW_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:                                     # read-only mount and no cache dir
+        table.load(df); return "pandas"
     arrow_path = _ARROW_CACHE_DIR / f"{table.name}.arrow"
     meta_path = _ARROW_CACHE_DIR / f"{table.name}.json"
     try:
@@ -117,10 +130,11 @@ def _load_one(table, df: pd.DataFrame) -> str:
             return "arrow-cache"
     except Exception as e:                              # unreadable/corrupt cache: rebuild it
         print(f"[cube] arrow cache for {table.name} unusable ({e!r}); regenerating", flush=True)
+    if not os.access(_ARROW_CACHE_DIR, os.W_OK):        # e.g. the container's read-only /app/data:
+        table.load(df); return "pandas"                 # read the cache, never try to write it
     try:
         for p in (arrow_path, meta_path):
-            if p.exists():
-                p.unlink()
+            _unlink_quiet(p)
         arrow = pandas_to_arrow(df, data_types=table._data_types)
         tmp = arrow_path.with_suffix(".arrow.tmp")
         write_arrow_to_file(arrow, tmp)
@@ -132,8 +146,7 @@ def _load_one(table, df: pd.DataFrame) -> str:
     except Exception as e:
         print(f"[cube] arrow cache write for {table.name} failed ({e!r}); plain load", flush=True)
         for p in (arrow_path, meta_path, arrow_path.with_suffix(".arrow.tmp")):
-            if p.exists():
-                p.unlink()
+            _unlink_quiet(p)                            # MUST NOT raise: this is the handler
         table.load(df)
         return "pandas"
 
@@ -286,7 +299,10 @@ def load_frames(folder: pathlib.Path = OUT) -> dict[str, pd.DataFrame]:
         # its mtime/size at read time. `attrs` ride along through column selection / head();
         # a frame that lost them (any other construction) simply gets no cache -- never a wrong one.
         st = (folder / f"{n}.parquet").stat()
-        df.attrs["source"] = {"path": str(folder / f"{n}.parquet"), "mtime_ns": st.st_mtime_ns,
+        # NAME, not the absolute path: the notebook container bind-mounts this folder at
+        # /app/data, so a path-keyed entry never matches there — it would miss the cache the host
+        # wrote and then try to rewrite a read-only mount. mtime_ns + size identify the file.
+        df.attrs["source"] = {"name": f"{n}.parquet", "mtime_ns": st.st_mtime_ns,
                               "size": st.st_size}
     return frames
 

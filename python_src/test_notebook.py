@@ -142,6 +142,18 @@ def t_day_frames_coerce_daydate(cube, book, D, NOTEBOOK):
                      f"any altair chart over these frames will fail to serialise")
 
 
+@_test
+def t_build_is_idempotent(cube, book, D, NOTEBOOK):
+    """Re-running the notebook's build cell must NOT try to bind a second session on a port this
+    kernel already owns. Closing a JupyterLab tab leaves the kernel (and its JVM) running, so
+    reopening the notebook reattaches to the warm kernel and `Run All` re-executes that cell —
+    which raised "Address already in use" on :9096 twice on 2026-08-21, once mid-demo-prep.
+    `N.build()` now returns this kernel's existing session instead."""
+    again_session, again_cube = N.build()
+    assert again_cube is cube, "build() returned a different cube — the session cache is not held"
+    assert again_session.port, "reused session reports no port"
+
+
 def main():
     print("building cube (once) ...")
     _session, cube = N.build()

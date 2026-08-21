@@ -11,6 +11,9 @@ Run the notebook (and anything importing this) with `PYTHONPATH=python_src` so t
 below resolve — never prefix imports with `python_src`.
 """
 from __future__ import annotations
+import atexit
+import socket
+import time
 import pandas as pd
 from barra_factor_risk_cube import load_frames, build_cube
 
@@ -18,22 +21,79 @@ from barra_factor_risk_cube import load_frames, build_cube
 # own session takes :9096. (We do not expose this web app — the notebook is the only surface.)
 CUBE_PORT = 9096
 
+_BUILT: tuple | None = None          # this kernel's session, if it already has one
+BUILD_SECONDS: float | None = None   # wall-clock of the last real build (None until one runs)
 
-def build(port: int = CUBE_PORT):
+
+def _free_port(port: int, tries: int = 20) -> int:
+    """First free port at or above `port`. Atoti's server binds every interface, so probe the
+    same way — a loopback-only probe reports 9096 free while another kernel's JVM holds it."""
+    for candidate in range(port, port + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind(("0.0.0.0", candidate))
+                return candidate
+            except OSError:
+                continue
+    raise RuntimeError(f"no free port in {port}..{port + tries - 1} for the notebook cube")
+
+
+def build(port: int = CUBE_PORT, *, force: bool = False):
     """Build the factor-risk cube from the six parquet frames and return (session, cube).
 
-    One call per kernel — the build is the slow step (~1–2 min on a warm tmp/ cache); every view
-    cell then queries the same live cube instantly. Grab the query handles right after:
+    Safe to call more than once. The build is the slow step (~1–2 min on a warm tmp/ cache), so
+    the first call in a kernel does it and every later call hands back the SAME live session —
+    re-running the build cell is then instant instead of raising "Address already in use" against
+    the session this kernel already started. Pass `force=True` for a genuinely fresh build (e.g.
+    after re-running a builder), which drops the cached session first.
+
+    A port held by a DIFFERENT kernel — the usual case, since closing a JupyterLab tab leaves its
+    kernel and its JVM running — no longer fails either: the next free port is used instead. The
+    notebook is the only surface on this session, so which port it lands on does not matter.
 
         session, cube = build()
         h, l, m = cube.hierarchies, cube.levels, cube.measures
     """
+    global _BUILT, BUILD_SECONDS
+    if _BUILT is not None and not force:                            # re-run of the build cell
+        print(f"reusing this kernel's cube on :{_BUILT[0].port} "
+              f"(built in {BUILD_SECONDS:.1f}s; no rebuild)")
+        return _BUILT
+    if _BUILT is not None:                       # force=True: let the old one go before rebinding
+        _BUILT = None
+    port = _free_port(port)
+    t0 = time.perf_counter()
     session, cube = build_cube(load_frames(), port=port)
     # The notebook container is jailed to 2 CPUs, and on the 11-book frames the scenario-vector
     # queries (e.g. an Evt window's Scenario PnL) can exceed ActivePivot's 30s default query time
     # limit there — the host API cube on all cores never hits it. Raised for this session only.
     cube.shared_context["queriesTimeLimit"] = 180
+    BUILD_SECONDS = time.perf_counter() - t0
+    # Worth printing: this is the one slow step, and the number is the fastest way to tell a
+    # healthy build (~20s: arrow cache hit) from a degraded one (~24s: cache miss, rewriting) or
+    # a loaded box (queries after it will be slow too). Set BARRA_CUBE_TIMINGS=1 for the stages.
+    print(f"cube load: {BUILD_SECONDS:.1f}s on :{port}")
+    _BUILT = (session, cube)
+    atexit.register(_close)     # deterministic teardown; see _close
     return session, cube
+
+
+def _close() -> None:
+    """Close the cached session at interpreter exit. Holding the session in a module global (so
+    the build cell is re-runnable) keeps it alive into interpreter finalisation, where atoti's own
+    `Session.__del__` tears down a subprocess against already-finalising buffers and Python aborts
+    with `_enter_buffered_busy: could not acquire lock ... at interpreter shutdown`. Harmless in a
+    kernel, but in a script it fires AFTER the exit code is set and replaces it with SIGABRT —
+    which would turn a green `test_notebook.py` into a failed command. Closing first avoids it."""
+    global _BUILT
+    if _BUILT is None:
+        return
+    session, _cube = _BUILT
+    _BUILT = None
+    try:
+        session.close()
+    except Exception:           # teardown is best-effort: never mask a real exit status
+        pass
 
 
 # Anchor colours of matplotlib's "Blues" (ColorBrewer), so the pure-python ramp below matches the
