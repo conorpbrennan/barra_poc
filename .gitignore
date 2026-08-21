@@ -29,3 +29,6 @@ screenshots/
 
 # editor/tool transient files
 *.tmp.*
+
+# ActiveViam demo deck
+docs/demo.html
