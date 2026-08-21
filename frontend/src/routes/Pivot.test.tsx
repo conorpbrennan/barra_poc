@@ -109,6 +109,17 @@ describe("Pivot — loading a saved view", () => {
     expect(screen.queryByText("Financials")).not.toBeInTheDocument();
   });
 
+  it("prefills the Repository save form with the opened view's name, folder and description", async () => {
+    renderPivot();
+    await waitFor(() => expect(screen.getByText("Financials")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Views"));
+    await waitFor(() => expect(screen.getByText("Concentration — Risk HHI")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Concentration — Risk HHI"));
+    // the save form now names THIS view, so a tweak + Save overwrites it instead of an unnamed copy
+    await waitFor(() => expect(screen.getByPlaceholderText("view name")).toHaveValue("Concentration — Risk HHI"));
+    expect(screen.getByDisplayValue("Public")).toBeInTheDocument();
+  });
+
   it("updates the Fields section (R/C/F/M) to the loaded view", async () => {
     renderPivot();
     await waitFor(() => expect(screen.getByText("Financials")).toBeInTheDocument());

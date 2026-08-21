@@ -31,9 +31,22 @@ export function Repository({
   }
 
   async function open(file: string) {
-    try { const doc = await loadView(file); onLoad(doc.state, doc.name); }
+    try {
+      const doc = await loadView(file);
+      onLoad(doc.state, doc.name);
+      // Prefill the save form with the opened view's identity so "tweak, then Save" overwrites
+      // THIS view (same name + folder) rather than writing an unnamed copy into Public.
+      setName(doc.name); setFolder(doc.path || "Public"); setDescription(doc.state.description ?? "");
+    }
     catch (e) { setErr((e as Error).message); }
   }
+  // every folder in the tree, depth-first ("Public", "Public/Soros 13F filings", …) — a view
+  // opened from a sub-folder must be able to save back into it
+  const folderPaths = (tree: ViewTree, prefix: string): string[] =>
+    [prefix, ...Object.entries(tree.folders).flatMap(([f, sub]) => folderPaths(sub, `${prefix}/${f}`))];
+  const folders = Object.entries(sections).flatMap(([sec, tree]) => folderPaths(tree, sec));
+  if (!folders.length) folders.push("Public", "Private");
+  if (folder && !folders.includes(folder)) folders.push(folder);
   async function remove(file: string) {
     try { await deleteView(file); await refresh(); }
     catch (e) { setErr((e as Error).message); }
@@ -51,8 +64,7 @@ export function Repository({
             border: "1px solid var(--line)", borderRadius: 2, padding: "0.25rem", resize: "vertical" }} />
         <div className="row">
           <select value={folder} onChange={(e) => setFolder(e.target.value)} style={{ flex: 1 }}>
-            <option value="Public">Public</option>
-            <option value="Private">Private</option>
+            {folders.map((f) => <option key={f} value={f}>{f}</option>)}
           </select>
           <button className="primary" onClick={save} disabled={busy}>Save</button>
         </div>
