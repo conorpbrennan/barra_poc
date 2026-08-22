@@ -41,8 +41,8 @@ def derive(frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]
     if "FactorPnL" in exposures.columns:
         exposures = exposures.drop(columns="FactorPnL")
 
-    w = (positions[["Date", "Position", "Book", "Weight"]]
-         .sort_values(["Date", "Position", "Book"])
+    w = (positions[["Date", "Position", "Manager", "Weight"]]
+         .sort_values(["Date", "Position", "Manager"])
          .drop_duplicates(subset=["Date", "Position"], keep="first")
          [["Date", "Position", "Weight"]])
     exposures = exposures.merge(w, on=["Date", "Position"], how="left")

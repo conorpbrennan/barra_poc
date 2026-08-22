@@ -253,7 +253,7 @@ def compute_attribution(frames: dict[str, pd.DataFrame], book: str = "Soros") ->
     sec = frames["securities"]
     tick = dict(zip(sec["Position"], sec.get("Ticker", sec["Position"])))
 
-    pos = pos[pos["Book"] == book]
+    pos = pos[pos["Manager"] == book]
     held_ever = sorted(pos["Position"].unique())
     fr_w = fr.pivot(index="Date", columns="Factor", values="Return").sort_index()
     sr_held = sr[sr["Position"].isin(held_ever)]

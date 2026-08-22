@@ -1459,9 +1459,9 @@ def _pull_manager_positions(mgr: dict) -> tuple[pd.DataFrame, dict]:
     stitched = stitch_multi_cik(dfs)
     kept, etp_disc = filter_etps(stitched)
     kept = kept.copy()
-    kept["Book"] = mgr["book"]
+    kept["Manager"] = mgr["book"]
     stats = {
-        "Book": mgr["book"],
+        "Manager": mgr["book"],
         "CIK": ",".join(str(c) for c in ciks),
         "EntityName": mgr["name"],
         "FirmType": mgr["type"],
@@ -1504,7 +1504,7 @@ def build_frames(out_dir=None):
               f"{stats['dropped_value_share_latest']:.1%} of latest filing value", flush=True)
     pos13f = (pd.concat(pos_frames, ignore_index=True) if pos_frames else
              pd.DataFrame(columns=["report_date", "filing_date", "issuer", "cusip", "value",
-                                   "shares", "sshType", "putCall", "Book"]))
+                                   "shares", "sshType", "putCall", "Manager"]))
     xw = crosswalk_cusips(pos13f["cusip"].tolist())
     t2c = ticker_to_cik()
     # The estimation universe = all 13F-held names (the book's opportunity set, kept whole so the
@@ -1594,21 +1594,21 @@ def build_frames(out_dir=None):
     # then an inner join takes only names in *that* filing — positions exited in a newer filing
     # expire instead of persisting forever. Weight is normalised PER (Book, filing_date) so each
     # manager's own filing sums to 1.0 independent of every other manager. The as-of join is done
-    # PER BOOK (a plain loop, not merge_asof(..., by="Book")) because each manager has its own filing
+    # PER BOOK (a plain loop, not merge_asof(..., by="Manager")) because each manager has its own filing
     # calendar -- a single global calendar (the old one-shot merge_asof) would silently assign one
     # manager's filing dates to another once there's more than one book.
     p = pos13f.merge(sec[["cusip", "figi"]], on="cusip", how="inner")
-    p = (p.groupby(["Book", "filing_date", "figi"], as_index=False)["value"].sum()
+    p = (p.groupby(["Manager", "filing_date", "figi"], as_index=False)["value"].sum()
            .rename(columns={"figi": "Position", "value": "MV"}))   # collapse multi-lot/multi-CUSIP rows
-    p["Weight"] = p.groupby(["Book", "filing_date"])["MV"].transform(lambda v: v / v.sum())
+    p["Weight"] = p.groupby(["Manager", "filing_date"])["MV"].transform(lambda v: v / v.sum())
     pos_parts = []
-    for book, pb in p.groupby("Book"):
+    for book, pb in p.groupby("Manager"):
         filings_b = pd.DataFrame({"filing_date": np.sort(pb["filing_date"].unique())})
         cal_b = pd.merge_asof(pd.DataFrame({"Date": cal}), filings_b,
                               left_on="Date", right_on="filing_date", direction="backward")
         pos_parts.append(cal_b.dropna(subset=["filing_date"]).merge(pb, on="filing_date"))
     positions = (pd.concat(pos_parts, ignore_index=True) if pos_parts else
-                pd.DataFrame(columns=["Date", "filing_date", "Book", "Position", "MV", "Weight"]))
+                pd.DataFrame(columns=["Date", "filing_date", "Manager", "Position", "MV", "Weight"]))
     # --- ADV (avg daily $ volume) for days-to-liquidate (Step 11) ----------
     # Per (Date, Position): trailing-63-day mean dollar volume from the cached prices, sampled at each
     # month-end. Carried on the positions frame (held names only) so the API can read days-to-liquidate
@@ -1626,7 +1626,7 @@ def build_frames(out_dir=None):
                 adv_rows.append({"Date": D, "Position": P, "ADV": float(dv.iloc[i - 1])})
     adv = pd.DataFrame(adv_rows) if adv_rows else pd.DataFrame(columns=["Date", "Position", "ADV"])
     positions = positions.merge(adv, on=["Date", "Position"], how="left")
-    positions = positions[["Date", "Book", "Position", "Weight", "MV", "ADV"]]
+    positions = positions[["Date", "Manager", "Position", "Weight", "MV", "ADV"]]
 
     # --- dimensions --------------------------------------------------------
     securities = sec.rename(columns={"figi": "Position", "ticker": "Ticker",
@@ -1651,8 +1651,8 @@ def build_frames(out_dir=None):
     # here), and the Task C ETP-drop disclosure. Optional by contract like specific_returns: nothing
     # else in this builder reads it back, so its absence never breaks anything downstream.
     managers_df = pd.DataFrame(mgr_stats)
-    n_pos_by_book = positions.groupby("Book")["Position"].nunique().rename("n_positions_distinct")
-    managers_df = managers_df.merge(n_pos_by_book, left_on="Book", right_index=True, how="left")
+    n_pos_by_book = positions.groupby("Manager")["Position"].nunique().rename("n_positions_distinct")
+    managers_df = managers_df.merge(n_pos_by_book, left_on="Manager", right_index=True, how="left")
     managers_df["n_positions_distinct"] = managers_df["n_positions_distinct"].fillna(0).astype(int)
 
     return (exposures, positions, securities, factor_meta, factor_returns, specific_var,

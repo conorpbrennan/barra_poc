@@ -14,7 +14,7 @@ import pandas as pd
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 KEYS = {
     "exposures":      ["Date", "Position", "Factor"],
-    "positions":      ["Date", "Book", "Position"],
+    "positions":      ["Date", "Manager", "Position"],
     "securities":     ["Position"],
     "factor_meta":    ["Factor"],
     "factor_returns": ["Date", "Factor"],
@@ -64,7 +64,7 @@ def run(frames: dict | None = None) -> list[dict]:
     # Per (Book, Date), not per Date: weights are normalised WITHIN a book, so once the
     # multi-manager build put 11 books in the frame a per-Date sum totals 11.0 and this check
     # FAILed on every date -- a false alarm on correct data.
-    _wkeys = ["Book", "Date"] if "Book" in pos.columns else ["Date"]
+    _wkeys = ["Manager", "Date"] if "Manager" in pos.columns else ["Date"]
     wsum = pos.groupby(_wkeys)["Weight"].sum()
     bad = wsum[(wsum - 1.0).abs() > 1e-6]
     _label = "per (book, date)" if len(_wkeys) == 2 else "per date"
@@ -205,12 +205,12 @@ def run(frames: dict | None = None) -> list[dict]:
         # Weight share is only meaningful WITHIN a book (weights normalise per book), so score
         # each book and report the worst. Summing across books gave 178.7% — a share above 100%,
         # which is how this surfaced.
-        if "Book" in last.columns and last["Book"].nunique() > 1:
+        if "Manager" in last.columns and last["Manager"].nunique() > 1:
             per = (last.assign(_p=last["Position"].isin(prox))
-                       .groupby("Book").apply(lambda g: g.loc[g["_p"], "Weight"].sum(),
+                       .groupby("Manager").apply(lambda g: g.loc[g["_p"], "Weight"].sum(),
                                               include_groups=False))
             w = float(per.max()); worst = str(per.idxmax())
-            n = int(last.loc[last["Book"] == worst, "Position"].isin(prox).sum())
+            n = int(last.loc[last["Manager"] == worst, "Position"].isin(prox).sum())
             # Phrasing note: keep the literal "% of weight" — test_dq.py parses the share out of
             # this string with r"([\d.]+)% of weight".
             detail = (f"worst book {worst}: {n} held names, {w:.1%} of weight priced via the "

@@ -106,7 +106,7 @@ def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
     # and total to 11.0 per month. `book=None` keeps the any-book union as an explicit escape
     # hatch; no caller uses it.
     if book is not None:
-        pos = pos[pos["Book"] == book]
+        pos = pos[pos["Manager"] == book]
         if pos.empty:
             raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
     exp = exp[exp["Factor"].isin(STYLE)]

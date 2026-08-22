@@ -141,8 +141,8 @@ def build_frames():
     positions = (p.sort_values("filing_date").groupby("Position", group_keys=False)
                    .apply(lambda g: pd.merge_asof(cal, g, left_on="Date", right_on="filing_date",
                                                   direction="backward").assign(Position=g.name))
-                   .dropna(subset=["Weight"]).assign(Book="Soros")
-                 )[["Date", "Book", "Position", "Weight", "value"]].rename(columns={"value": "MV"})
+                   .dropna(subset=["Weight"]).assign(Manager="Soros")
+                 )[["Date", "Manager", "Position", "Weight", "value"]].rename(columns={"value": "MV"})
 
     securities = (sec.rename(columns={"figi": "Position", "ticker": "Ticker", "cusip": "CUSIP",
                                       "title": "Issuer", "cik": "CIK"})

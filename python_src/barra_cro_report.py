@@ -67,11 +67,11 @@ def build() -> None:
     # 2026-06-30 under Soros's name, and specific vol 1.20% against the true 0.26%.
     # The universe frames (securities/exposures) are NOT book-scoped -- they span every book in the
     # build -- so the §4 prose needs the pre-filter book count to describe them honestly.
-    all_books = (sorted(positions["Book"].unique().tolist())
-                 if "Book" in positions.columns else [REPORT_BOOK])
+    all_books = (sorted(positions["Manager"].unique().tolist())
+                 if "Manager" in positions.columns else [REPORT_BOOK])
     n_books = len(all_books)
-    if "Book" in positions.columns and positions["Book"].nunique() > 1:
-        positions = positions[positions["Book"] == REPORT_BOOK]
+    if "Manager" in positions.columns and positions["Manager"].nunique() > 1:
+        positions = positions[positions["Manager"] == REPORT_BOOK]
         if positions.empty:
             raise SystemExit(f"no positions for REPORT_BOOK={REPORT_BOOK!r}")
 

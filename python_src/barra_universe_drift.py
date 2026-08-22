@@ -110,7 +110,7 @@ def run(write: bool = True, book: str = "Soros") -> dict:
     # would sum across every book at once (x_Market ~= 11, not 1). `book=None` keeps the old
     # any-book union as an explicit escape hatch; no caller uses it.
     if book is not None:
-        pos = pos[pos["Book"] == book]
+        pos = pos[pos["Manager"] == book]
         if pos.empty:
             raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
     months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))

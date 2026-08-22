@@ -171,7 +171,7 @@ def _held_positions(pos: pd.DataFrame, book: str | None) -> set:
     to catch a cross-book regression (see `run`'s `book` docstring): with >1 book present, calling
     this with `book=None` mixes every manager's holdings into one set, which is exactly the bug
     Phase 3 fixed `run`'s default away from."""
-    p = pos if book is None else pos[pos["Book"] == book]
+    p = pos if book is None else pos[pos["Manager"] == book]
     return {(pd.Timestamp(d), pp) for d, pp in zip(p["Date"], p["Position"])}
 
 
