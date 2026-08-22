@@ -51,7 +51,7 @@ def _residual_betas(resid_panel: pd.DataFrame, f: pd.Series,
     resid_panel: Date x Position specific returns; f: the factor's daily return series;
     weights: latest-portfolio weights (only weighted names are tested).
     Returns per-name betas/t-stats plus the portfolio-level aggregates. NB the returned key is
-    still `book_beta` (test_descriptor_audit.py reads it by that name)."""
+    still `portfolio_beta` (test_descriptor_audit.py reads it by that name)."""
     rows = []
     x_all = f.dropna()
     for p in resid_panel.columns:
@@ -71,13 +71,13 @@ def _residual_betas(resid_panel: pd.DataFrame, f: pd.Series,
         rows.append({"position": p, "weight": w, "beta": b,
                      "t": b / se if se > 0 else np.nan, "n": len(ix)})
     if not rows:
-        return {"names": [], "book_beta": None, "wavg_beta": None,
+        return {"names": [], "portfolio_beta": None, "wavg_beta": None,
                 "share_sig": None, "n_names": 0, "weight_tested": 0.0}
     df = pd.DataFrame(rows)
     wsum = float(df["weight"].sum())
     return {
         "names": df.sort_values("weight", ascending=False).to_dict("records"),
-        "book_beta": float((df["weight"] * df["beta"]).sum()),   # Sum(w*b): unmodeled exposure
+        "portfolio_beta": float((df["weight"] * df["beta"]).sum()),   # Sum(w*b): unmodeled exposure
         "wavg_beta": float(np.average(df["beta"], weights=df["weight"])),
         "share_sig": float((df["t"].abs() > 2).mean()),
         "n_names": int(len(df)), "weight_tested": wsum,
@@ -126,12 +126,12 @@ def run(window_start: str = "2025-06-30", corr_thresh: float = 0.6) -> None:
     summary = []
     for f_ in factors:
         r = _residual_betas(panel, w12[f_], held)
-        if r["book_beta"] is None:
+        if r["portfolio_beta"] is None:
             continue
-        flag = ("HIDDEN BETA" if abs(r["book_beta"]) >= 0.10 and r["share_sig"] >= 0.4 else
-                "watch" if abs(r["book_beta"]) >= 0.05 else "ok")
+        flag = ("HIDDEN BETA" if abs(r["portfolio_beta"]) >= 0.10 and r["share_sig"] >= 0.4 else
+                "watch" if abs(r["portfolio_beta"]) >= 0.05 else "ok")
         summary.append((f_, r, flag))
-        print(f"   {f_:<10} {r['book_beta']:>+9.3f} {r['wavg_beta']:>+8.2f} "
+        print(f"   {f_:<10} {r['portfolio_beta']:>+9.3f} {r['wavg_beta']:>+8.2f} "
               f"{r['share_sig']:>6.0%}  {flag}")
     for f_, r, flag in summary:
         if flag != "HIDDEN BETA":

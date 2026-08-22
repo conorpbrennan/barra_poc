@@ -19,9 +19,9 @@ import type { PivotQuery } from "../api/types";
 // COVID chart views author since 2026-08-15; the legacy ScenarioDay path is not used here.
 const QUERIES: PivotQuery[] = [
   { name: "Scenario P&L", rows: ["Day", "DayDate"], cols: [], measures: ["PnL at day"],
-    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
+    filters: { Manager: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
   { name: "Scenario P&L by Sector", rows: ["Day", "DayDate", "Sector"], cols: [], measures: ["PnL at day"],
-    filters: { Book: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
+    filters: { Manager: ["Soros"], ScenarioSet: ["Evt:COVID2020"], DaySet: ["Evt:COVID2020"] } },
 ];
 const CHART: VegaSpec[] = [
   { source: "Scenario P&L", mark: "line", data: { name: "x" } },

@@ -6,7 +6,7 @@
 // The reconcile drawers' bar decomposition is served by /pnl_attribution/drill (2026-08-22) —
 // computed live from the frames for the requested manager, NOT the /pivot cube measures: Factor
 // contribution / Specific PnL / Realized PnL are baked columns carrying ONE arbitrary manager's
-// weight per name once >1 manager is loaded (CLAUDE.md "book-independent attribution limitation"),
+// weight per name once >1 manager is loaded (CLAUDE.md "manager-independent attribution limitation"),
 // so _validate_pivot rejects them outright on the multi-manager build. The "open in Pivot →" deep
 // links still target that cube trio (for the single-manager case where it's correct and drillable
 // further), so they're hidden whenever /dims doesn't offer the trio (pruned on multi-manager).
@@ -644,7 +644,7 @@ function PnlTab() {
                 const vr = cv("Specific vol");
                 const l1 = cv("Lag-1"); const l2 = cv("Lag-2");
                 const r2 = cv("Residual-vs-factor");
-                const bb = cv("Bias stat — book"); const bs = cv("Bias stat — specific");
+                const bb = cv("Bias stat — portfolio"); const bs = cv("Bias stat — specific");
                 const topL = r.factor_regression.loadings[0];
                 const sig = irSignificance(ir, r.n_months);
                 return (

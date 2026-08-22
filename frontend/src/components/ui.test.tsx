@@ -11,7 +11,7 @@ import type { ManagerMismatch } from "../api/types";
 
 const MISMATCH: ManagerMismatch = {
   status: "manager_mismatch", kind: "funnel", requested_manager: "TigerGlobal",
-  artifact_manager: "Soros", basis: "inferred from the live positions frame (exactly one Book present)",
+  artifact_manager: "Soros", basis: "inferred from the live positions frame (exactly one Manager present)",
   reason: "the funnel artifact was computed for the 'Soros' manager, not 'TigerGlobal' — serving it "
     + "under another manager's label would be silently wrong data, not just stale data",
 };

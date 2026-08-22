@@ -26,10 +26,10 @@ import { AppProvider } from "../context/AppContext";
 import { ContextBar } from "../shell/ContextBar";
 
 const DIMS = {
-  dimensions: ["Date", "Book", "Sector", "ScenarioSet"],
+  dimensions: ["Date", "Manager", "Sector", "ScenarioSet"],
   measures: ["Net exposure", "Scenario VaR 99", "Risk HHI"],
   scenario_dependent: ["Scenario VaR 99", "Risk HHI"],
-  members: { Date: ["2024-12-31"], ScenarioSet: ["HistFull"], Sector: [], Book: ["Soros"] },
+  members: { Date: ["2024-12-31"], ScenarioSet: ["HistFull"], Sector: [], Manager: ["Soros"] },
   dates: ["2024-12-31"], scenario_sets: ["HistFull"],
 };
 const META = { dates: ["2024-12-31"], scenario_sets: ["HistFull", "Evt:COVID2020"], factors: [], ts_measures: [], by_levels: [] };
@@ -38,7 +38,7 @@ const META = { dates: ["2024-12-31"], scenario_sets: ["HistFull", "Evt:COVID2020
 const HHI_VIEW = {
   schema_version: 1, name: "Concentration — Risk HHI", path: "Public", created: "", updated: "",
   state: { rows: ["ScenarioSet"], cols: [], measures: ["Risk HHI"],
-           filters: { Book: ["Soros"], Date: ["2024-12-31"] }, row_tot: false, render: "grid" },
+           filters: { Manager: ["Soros"], Date: ["2024-12-31"] }, row_tot: false, render: "grid" },
 };
 
 function pivotRows(rowsParam: string) {
@@ -141,8 +141,8 @@ describe("Pivot — loading a saved view", () => {
     await waitFor(() => expect(screen.getByText("Concentration — Risk HHI")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Concentration — Risk HHI"));
 
-    // the loaded view's FILTERS replace the defaults: Book=Soros in, ScenarioSet=HistFull out
-    await waitFor(() => expect(screen.getByText("Book=Soros")).toBeInTheDocument());
+    // the loaded view's FILTERS replace the defaults: Manager=Soros in, ScenarioSet=HistFull out
+    await waitFor(() => expect(screen.getByText("Manager=Soros")).toBeInTheDocument());
     expect(screen.getByText("Date=2024-12-31")).toBeInTheDocument();
     expect(screen.queryByText("ScenarioSet=HistFull")).not.toBeInTheDocument();
   });

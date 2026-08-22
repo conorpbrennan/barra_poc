@@ -59,10 +59,10 @@ def _backend_up():
 
 # ----------------------------------------------------------------------------- UNIT
 @unit
-def t_book_exposure():
+def t_portfolio_exposure():
     w = {"A": 0.5, "B": 0.5}
     L = {"A": {"Size": 2.0}, "B": {"Size": -1.0}}
-    assert abs(ud.book_exposure(w, L, ["Size"])["Size"] - 0.5) < 1e-9
+    assert abs(ud.portfolio_exposure(w, L, ["Size"])["Size"] - 0.5) < 1e-9
 
 
 @unit
@@ -73,8 +73,8 @@ def t_decompose_sources_sum_to_delta():
     w1 = {"A": 0.7, "C": 0.3}
     l1 = {"A": {"Size": 1.0}, "C": {"Size": -3.0}}
     a = ud.decompose(w0, l0, w1, l1, ["Size"])["Size"]
-    x0 = ud.book_exposure(w0, l0, ["Size"])["Size"]
-    x1 = ud.book_exposure(w1, l1, ["Size"])["Size"]
+    x0 = ud.portfolio_exposure(w0, l0, ["Size"])["Size"]
+    x1 = ud.portfolio_exposure(w1, l1, ["Size"])["Size"]
     assert abs(a["delta"] - (x1 - x0)) < 1e-9, a
     assert abs((a["entered"] + a["exited"] + a["reweighted"] + a["loading_drift"]) - a["delta"]) < 1e-9
     # C entered with -3 loading at weight .3 -> -0.9
@@ -134,7 +134,7 @@ def t_drift_manager_guard():
     for mgr in _managers_with_own_artifact("universe_drift"):
         own = requests.get(f"{API}/drift", params={"manager": mgr}, timeout=60).json()
         assert "status" not in own and own["series"], (mgr, own)
-        # the live half (book_at -> decompose) must be scoped too: a different manager cannot
+        # the live half (portfolio_at -> decompose) must be scoped too: a different manager cannot
         # return the default manager's net exposures (the /whatchanged bug, 2026-08-21)
         assert own["summary"] != base["summary"], mgr
     mism = requests.get(f"{API}/drift", params={"manager": _UNBUILT}, timeout=60).json()

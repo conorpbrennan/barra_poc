@@ -266,7 +266,7 @@ with tab_val:
     st.subheader("Cube vs Excel / pandas reconciliation")
     v = get("/validation")
     st.markdown("<div class='cap'>3-position sub-portfolio: " +
-                ", ".join(f"{b['ticker'].upper()} {b['weight']*100:.1f}%" for b in v["book"]) +
+                ", ".join(f"{b['ticker'].upper()} {b['weight']*100:.1f}%" for b in v["holdings"]) +
                 f" · as of {v['as_of']}</div>", unsafe_allow_html=True)
     rows = []
     for x in v["rows"]:

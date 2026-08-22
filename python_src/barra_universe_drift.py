@@ -53,7 +53,7 @@ SOURCES = ["entered", "exited", "reweighted", "loading_drift"]
 
 
 # --------------------------------------------------------------------------- pure attribution (unit-tested)
-def book_exposure(weights: dict, loadings: dict, factors=STYLE) -> dict:
+def portfolio_exposure(weights: dict, loadings: dict, factors=STYLE) -> dict:
     """Net portfolio exposure per factor: x_k = Σ_i w_i · L_ik."""
     return {f: float(sum(weights[p] * loadings.get(p, {}).get(f, 0.0) for p in weights))
             for f in factors}
@@ -90,7 +90,7 @@ def _wide_loadings(exp: pd.DataFrame, D: pd.Timestamp) -> pd.DataFrame:
             .pivot_table(index="Position", columns="Factor", values="Loading").reindex(columns=STYLE))
 
 
-def book_at(exp: pd.DataFrame, pos: pd.DataFrame, D: pd.Timestamp):
+def portfolio_at(exp: pd.DataFrame, pos: pd.DataFrame, D: pd.Timestamp):
     """(weights dict, loadings dict) for the portfolio held at month-end D."""
     held = pos[pos["Date"] == D][["Position", "Weight"]]
     w = dict(zip(held["Position"], held["Weight"]))
@@ -117,10 +117,10 @@ def run(write: bool = True, manager: str = "Soros") -> dict:
 
     rows = []
     for D in months:
-        w, L = book_at(exp, pos, D)
+        w, L = portfolio_at(exp, pos, D)
         if not w:
             continue
-        x = book_exposure(w, L)
+        x = portfolio_exposure(w, L)
         for f, v in x.items():
             rows.append({"month": D, "factor": f, "net_exposure": v})
     detail = pd.DataFrame(rows)
@@ -141,7 +141,7 @@ def run(write: bool = True, manager: str = "Soros") -> dict:
     pre = months[months < pd.Timestamp("2021-01-01")]
     t0 = pre[-1] if len(pre) else months[0]
     t1 = months[-1]
-    w0, l0 = book_at(exp, pos, t0); w1, l1 = book_at(exp, pos, t1)
+    w0, l0 = portfolio_at(exp, pos, t0); w1, l1 = portfolio_at(exp, pos, t1)
     attr = decompose(w0, l0, w1, l1)
     print(f"\n[drift] attribution {t0.date()} -> {t1.date()} (top movers):")
     for f, _ in summ.head(4).iterrows():

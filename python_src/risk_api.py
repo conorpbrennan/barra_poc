@@ -663,7 +663,7 @@ async def validation(manager: str | None = None, book: str | None = None):
                          "cube_var99": rec["Scenario VaR 99"], "ref_var99": rv,
                          "cube_worst": rec["Scenario worst loss"], "ref_worst": rw})
         return {"as_of": str(pd.Timestamp(last).date()),
-                "book": [{"ticker": t, "weight": _clean(w)} for t, w in zip(top3["Ticker"], top3["Weight"])],
+                "holdings": [{"ticker": t, "weight": _clean(w)} for t, w in zip(top3["Ticker"], top3["Weight"])],
                 "rows": rows}
     return await run_in_threadpool(run)
 
@@ -2035,7 +2035,7 @@ async def span(date: str | None = Query(None, description="month; default latest
 @app.get("/drift")
 async def drift(split: str = Query("2021-01-01", description="pre/post boundary for the drift"),
                 manager: str | None = Query(None, description="both the artifact and the live "
-                                  "attribution below (book_at has no Manager filter) are "
+                                  "attribution below (portfolio_at has no Manager filter) are "
                                   "single-manager"),
                 book: str | None = Query(None)):
     """Style-drift attribution: per-factor net-exposure trend, the pre/post-`split` drift ranked by
@@ -2054,7 +2054,7 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
         sp = pd.Timestamp(split)
 
         exp, pos = S["frames"]["exposures"], S["frames"]["positions"]
-        # The live attribution below (book_at → decompose) has no Manager concept of its own; with
+        # The live attribution below (portfolio_at → decompose) has no Manager concept of its own; with
         # the multi-manager frames the requested manager must be filtered HERE or x_k sums across
         # every manager at once (the same bug barra_universe_drift.run fixed for the artifact side).
         if "Manager" in pos.columns:
@@ -2067,10 +2067,10 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
         pre = months[months < sp]
         t0 = pre[-1] if len(pre) else months[0]
         t1 = months[-1]
-        w0, l0 = _ud.book_at(exp, pos, t0)
-        w1, l1 = _ud.book_at(exp, pos, t1)
+        w0, l0 = _ud.portfolio_at(exp, pos, t0)
+        w1, l1 = _ud.portfolio_at(exp, pos, t1)
         attr = _ud.decompose(w0, l0, w1, l1)
-        x0, x1 = _ud.book_exposure(w0, l0), _ud.book_exposure(w1, l1)   # exposure at t0 / t1
+        x0, x1 = _ud.portfolio_exposure(w0, l0), _ud.portfolio_exposure(w1, l1)   # exposure at t0 / t1
 
         srecs = [{"month": str(m.date()),
                   **{f: _clean(series.loc[m, f]) for f in series.columns}} for m in series.index]
@@ -5181,7 +5181,7 @@ def _whatchanged_result(date: str | None, prev: str | None, manager: str = "Soro
                      key=lambda r: -abs(r["delta"]))
 
     # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly.
-    # book_at has no Manager concept of its own, so it must be handed the REQUESTED MANAGER's
+    # portfolio_at has no Manager concept of its own, so it must be handed the REQUESTED MANAGER's
     # rows: on the multi-manager frames it was reading `pos` whole, and
     # `dict(zip(Position, Weight))` collapsed all 124 managers' rows to one arbitrary weight per
     # name — every manager returned the same (wrong) net exposure. Same fix /drift already
@@ -5189,10 +5189,10 @@ def _whatchanged_result(date: str | None, prev: str | None, manager: str = "Soro
     exp_by = _frame_rows_by("exposures", ("Date",))
     e0 = exp.iloc[exp_by[d0]] if d0 in exp_by else exp.iloc[:0]
     e1 = exp.iloc[exp_by[d1]] if d1 in exp_by else exp.iloc[:0]
-    w0d, l0d = _ud.book_at(e0, p0, d0)
-    w1d, l1d = _ud.book_at(e1, p1, d1)
+    w0d, l0d = _ud.portfolio_at(e0, p0, d0)
+    w1d, l1d = _ud.portfolio_at(e1, p1, d1)
     attr = _ud.decompose(w0d, l0d, w1d, l1d)
-    x0, x1 = _ud.book_exposure(w0d, l0d), _ud.book_exposure(w1d, l1d)
+    x0, x1 = _ud.portfolio_exposure(w0d, l0d), _ud.portfolio_exposure(w1d, l1d)
     exposure = [{"factor": fc, "before": _clean(x0[fc]), "after": _clean(x1[fc]),
                  "delta": _clean(attr[fc]["delta"]),
                  **{f"src_{k}": _clean(attr[fc][k]) for k in _ud.SOURCES}}

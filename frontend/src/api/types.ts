@@ -429,7 +429,7 @@ export interface PnlNamesResult {
 // ---- live per-manager reconcile drill (/pnl_attribution/drill, 2026-08-22) ----
 // The Vite reconcile drawers' replacement for the baked (manager-independent) Factor contribution
 // cube measure — computed live from the frames for the REQUESTED manager, so it works on any
-// loaded manager (see CLAUDE.md "book-independent attribution limitation").
+// loaded manager (see CLAUDE.md "manager-independent attribution limitation").
 export interface PnlDrillFactorBar { factor: string; contribution: number; loading_at_T: number | null }
 export interface PnlDrillPositionResult {
   manager: string; T: string; to: string; position: string; ticker: string;

@@ -1,6 +1,6 @@
 // Multi-manager Phase 3/4: with >1 manager loaded, /pivot rejects the three
 // manager-independent attribution measures (Factor contribution / Specific PnL / Realized PnL —
-// baked columns with no Book key, risk_api.py's _validate_pivot) with HTTP 400 and a specific
+// baked columns with no Manager key, risk_api.py's _validate_pivot) with HTTP 400 and a specific
 // explanatory message.
 // This proves the Vite Pivot lens surfaces that EXACT backend message (not a generic "request
 // failed") — usePivot's reload() already threads ApiError.message straight into the `error` state
@@ -24,10 +24,10 @@ import { Pivot } from "./Pivot";
 import { AppProvider } from "../context/AppContext";
 
 const DIMS = {
-  dimensions: ["Date", "Book", "Sector", "Factor", "ScenarioSet"],
+  dimensions: ["Date", "Manager", "Sector", "Factor", "ScenarioSet"],
   measures: ["Net exposure", "Scenario VaR 99", "Factor contribution"],
   scenario_dependent: ["Scenario VaR 99"],
-  members: { Date: ["2024-12-31"], ScenarioSet: ["HistFull"], Sector: [], Factor: [], Book: ["Soros", "TigerGlobal"] },
+  members: { Date: ["2024-12-31"], ScenarioSet: ["HistFull"], Sector: [], Factor: [], Manager: ["Soros", "TigerGlobal"] },
   dates: ["2024-12-31"], scenario_sets: ["HistFull"],
 };
 const META = {
@@ -39,16 +39,16 @@ const META = {
 };
 
 const REJECTION_MSG =
-  "['Factor contribution'] are book-independent (baked columns with no Book key — a known atoti "
-  + "0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted per-book with 2 books "
-  + "loaded: they would silently read one arbitrary book's numbers under every book's label. Use "
-  + "barra_pnl_attribution.py's book= precompute for correct per-book attribution instead.";
+  "['Factor contribution'] are manager-independent (baked columns with no Manager key — a known atoti "
+  + "0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted per-manager with 2 managers "
+  + "loaded: they would silently read one arbitrary manager's numbers under every manager's label. Use "
+  + "barra_pnl_attribution.py's manager= precompute for correct per-manager attribution instead.";
 
 // the saved view a user picks that happens to select a manager-independent measure
 const REJECTED_VIEW = {
   schema_version: 1, name: "Factor contribution by name", path: "Public", created: "", updated: "",
   state: { rows: ["Factor"], cols: [], measures: ["Factor contribution"],
-           filters: { Book: ["Soros"], Date: ["2024-12-31"] }, row_tot: false, render: "grid" },
+           filters: { Manager: ["Soros"], Date: ["2024-12-31"] }, row_tot: false, render: "grid" },
 };
 
 beforeEach(() => {

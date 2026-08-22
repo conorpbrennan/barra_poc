@@ -20,7 +20,7 @@ const META = {
 };
 const MISMATCH = {
   status: "manager_mismatch", kind: "drift", requested_manager: "TigerGlobal", artifact_manager: "Soros",
-  basis: "inferred from the live positions frame (exactly one Book present)",
+  basis: "inferred from the live positions frame (exactly one Manager present)",
   reason: "the drift artifact was computed for the 'Soros' manager, not 'TigerGlobal' — serving it "
     + "under another manager's label would be silently wrong data, not just stale data",
 };

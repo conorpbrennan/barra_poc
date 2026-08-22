@@ -105,7 +105,7 @@ the what-if math (`_manager_inputs` + `_risk_from_weights`, so it's cube-consist
 factor-return history). `prev` defaults to the previous *distinct* filing (`_prior_filing_date` walks
 back past the flat monthly as-of months to the prior quarterly filing).
 
-**Manager-scoping fix (2026-08-21).** The factor-exposure attribution handed `_ud.book_at` the WHOLE
+**Manager-scoping fix (2026-08-21).** The factor-exposure attribution handed `_ud.portfolio_at` the WHOLE
 positions frame, which has no Manager concept of its own — on the multi-manager build its
 `dict(zip(Position, Weight))` collapsed all 124 managers to one arbitrary weight per name, so
 `exposure_attribution` returned the SAME (wrong) net exposures for every manager. It now gets the

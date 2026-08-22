@@ -994,7 +994,7 @@ def _reconcile_svg(lk: dict) -> str:
     Portfolio total; each row read against its OWN start-of-period band, so position = the surprise z.
     Base band ±2σ (fixed width), stressed band scaled by that row's stressed/base ratio; the dot is
     the realized contribution, coloured within / stress-regime / investigate."""
-    rows = [r for r in lk["rows"]] + ["sep", lk["book_total"]]
+    rows = [r for r in lk["rows"]] + ["sep", lk["manager_total"]]
     px, cx, zx = 60.0, 420, 700           # px per σ, zero line, z-label column
     y, rh = 40, 34
     dotc = {"within": "#33332f", "stress": "#b07d2b", "investigate": "#a8322a"}
@@ -1010,7 +1010,7 @@ def _reconcile_svg(lk: dict) -> str:
         z = r["z"] or 0.0
         dx = cx + max(-4.5, min(4.5, z)) * px
         c = dotc.get(r["verdict"], "#33332f")
-        w = "font-weight=\"600\" " if r.get("kind") == "book" else ""
+        w = "font-weight=\"600\" " if r.get("kind") == "manager" else ""
         body.append(f'<rect x="{cx - half_s:.0f}" y="{y}" width="{2 * half_s:.0f}" height="16" fill="#ece9e0"/>')
         body.append(f'<rect x="{cx - 2 * px:.0f}" y="{y}" width="{4 * px:.0f}" height="16" fill="#d9d5ca"/>')
         body.append(f'<text x="132" y="{y + 12}" text-anchor="end" font-size="13" {w}fill="#2a2a26">{r["name"]}</text>')

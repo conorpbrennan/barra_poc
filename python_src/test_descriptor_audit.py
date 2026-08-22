@@ -52,7 +52,7 @@ def t_residual_betas_recovers_planted_beta():
     assert abs(by["HID"]["beta"] - 1.5) < 0.1 and abs(by["HID"]["t"]) > 2
     assert abs(by["CLEAN"]["beta"]) < 0.5 and abs(by["CLEAN"]["t"]) < 2
     expect = 0.10 * by["HID"]["beta"] + 0.20 * by["CLEAN"]["beta"]
-    assert abs(r["book_beta"] - expect) < 1e-12
+    assert abs(r["portfolio_beta"] - expect) < 1e-12
     assert r["n_names"] == 2 and abs(r["weight_tested"] - 0.30) < 1e-12
 
 
@@ -66,7 +66,7 @@ def t_residual_betas_gates():
         "UNHELD": pd.Series(np.random.default_rng(5).normal(size=200), index=idx),
     })
     r = _residual_betas(panel, f, pd.Series({"SHORT": 0.1}), min_obs=120)
-    assert r["n_names"] == 0 and r["book_beta"] is None
+    assert r["n_names"] == 0 and r["portfolio_beta"] is None
 
 
 @t
