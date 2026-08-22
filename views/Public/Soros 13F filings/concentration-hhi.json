@@ -37,7 +37,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Risk concentration \u2014 the Herfindahl index of each name's share of book Total VaR \u2014 across every scenario set on the latest filing. 1/HHI \u2248 the effective number of independent risk bets. The historical/event sets read diversified (Market dominates, HHI \u2248 0.03); the Hypo:* style-shock sets zero Market and collapse risk onto the few names carrying those tilts, so HHI jumps to ~0.18\u20130.21.",
+    "description": "Risk concentration \u2014 the Herfindahl index of each name's share of the portfolio's Total VaR \u2014 across every scenario set on the latest filing. 1/HHI \u2248 the effective number of independent risk bets. The historical/event sets read diversified (Market dominates, HHI \u2248 0.03); the Hypo:* style-shock sets zero Market and collapse risk onto the few names carrying those tilts, so HHI jumps to ~0.18\u20130.21.",
     "units": "dollar"
   }
 }

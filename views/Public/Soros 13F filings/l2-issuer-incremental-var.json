@@ -43,7 +43,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Per issuer: marginal Total VaR (additive share) vs incremental Total VaR (the risk released by exiting the name). The pre-trade 'what would trimming this name save' lens \u2014 diversification-aware, so it does not sum to the book total.",
+    "description": "Per issuer: marginal Total VaR (additive share) vs incremental Total VaR (the risk released by exiting the name). The pre-trade 'what would trimming this name save' lens \u2014 diversification-aware, so it does not sum to the portfolio total.",
     "units": "dollar",
     "render": "grid"
   }

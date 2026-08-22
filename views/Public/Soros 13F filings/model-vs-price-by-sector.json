@@ -46,7 +46,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Each GICS sector's additive contribution to Total VaR 99 (model) alongside Price VaR 99 (raw historical stock returns, no model) \u2014 where the two disagree by sector. Both families are additive (Euler tail-day contributions), so each column sums to its own book total.",
+    "description": "Each GICS sector's additive contribution to Total VaR 99 (model) alongside Price VaR 99 (raw historical stock returns, no model) \u2014 where the two disagree by sector. Both families are additive (Euler tail-day contributions), so each column sums to its own portfolio total.",
     "units": "dollar"
   }
 }

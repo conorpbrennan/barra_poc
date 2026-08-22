@@ -306,7 +306,7 @@ hand-rolled 9-slot waterfall SVG (5 level bars in ink/grey + 4 delta bars in the
 colour, direct-labelled, no legend), the steps table, a coverage note + day-by-day sparkline, a
 per-name Marginal-Total-vs-Marginal-Price scatter (dot size = weight, colour = `likely_driver`)
 beside the top-12 disagreement table, the verification diffs, a `HowToRead` disclosure, and the
-CHRIS_VOICE `StreamPanel`. Saved views in `Public/Soros 13F filings`: `Model vs Price — book`
+CHRIS_VOICE `StreamPanel`. Saved views in `Public/Soros 13F filings`: `Model vs Price — portfolio`
 (by Position) and `— by sector`, both slicing BOTH `ScenarioSet` and `PriceSet` to `HistFull` (the
 two families are independent switch hierarchies). Both demo notebooks gained 4 cells (headline +
 T0/T1/T4 from the cube, the full bridge table with T2/T3 computed inline in numpy from

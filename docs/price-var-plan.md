@@ -122,7 +122,7 @@ T1 and T4 come from the cube. Per-name version of the same table for the top dis
 - Vite lens **Model vs Price**: the headline pair, the bridge waterfall (five bars, four labelled
   steps), the per-name scatter (Marginal Total VaR vs Marginal Price VaR, dot size = weight,
   coloured by the dominant bridge term), the coverage-by-day sparkline, the risk-manager read.
-- Pivot: Price measures in the picker; saved views `Model vs Price — book`, `— by sector`.
+- Pivot: Price measures in the picker; saved views `Model vs Price — portfolio`, `— by sector`.
 - Notebooks: headline pair, bridge table, top disagreements, in both demo notebooks.
 
 ## Tests

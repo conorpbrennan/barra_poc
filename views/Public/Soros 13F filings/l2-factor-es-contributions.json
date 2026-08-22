@@ -42,7 +42,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Each factor's additive contribution to book Expected Shortfall (ES 97.5) and its % share. Like the VaR contribution but on the coherent tail-mean (Basel FRTB's VaR replacement) \u2014 the deep-tail view.",
+    "description": "Each factor's additive contribution to portfolio's Expected Shortfall (ES 97.5) and its % share. Like the VaR contribution but on the coherent tail-mean (Basel FRTB's VaR replacement) \u2014 the deep-tail view.",
     "units": "dollar"
   }
 }

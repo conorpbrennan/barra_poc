@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "Model vs Price \u2014 book",
+  "name": "Model vs Price — portfolio",
   "path": "Public/Soros 13F filings",
   "created": "2026-08-22T00:00:00Z",
   "updated": "2026-08-22T13:38:17Z",
@@ -47,7 +47,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Model (Total VaR 99, factor + Gaussian specific) vs Price (historical sim on raw stock returns, no model) risk contribution per name. Needs BOTH ScenarioSet and PriceSet sliced to the same set \u2014 the two families are independent switch hierarchies. See the Model vs Price lens for the full bridge (/var_bridge).",
+    "description": "Model (Total VaR 99, factor + Gaussian specific) vs Price (historical sim on raw stock returns, no model) risk contribution per name. Needs BOTH ScenarioSet and PriceSet sliced to the same set — the two families are independent switch hierarchies. See the Model vs Price lens for the full bridge (/var_bridge).",
     "units": "dollar",
     "render": "grid"
   }

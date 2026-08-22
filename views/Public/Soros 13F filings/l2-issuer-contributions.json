@@ -43,7 +43,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Each issuer's additive contribution to book Total VaR 99 and its % share \u2014 the single-name concentration of the tail. Which holdings carry the book's risk.",
+    "description": "Each issuer's additive contribution to the portfolio's Total VaR 99 and its % share \u2014 the single-name concentration of the tail. Which holdings carry the portfolio's risk.",
     "units": "dollar",
     "render": "grid"
   }
