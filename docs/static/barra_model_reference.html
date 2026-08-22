@@ -438,10 +438,10 @@ The model recovers the COVID crash from estimation alone, with no factor data bo
 downloaded.</p>
 
 <h2>5 · Data quality, controls &amp; the shares-outstanding incident</h2>
-<p>A 34-check DQ suite runs after every rebuild: key uniqueness, referential
+<p>A 36-check DQ suite runs after every rebuild: key uniqueness, referential
 integrity across all six frames, weight normalisation, calendar continuity, value ranges,
-and cross-frame coverage. Current status: <strong class="ok">31 pass</strong>,
-<strong class="warn">3 warn</strong>, 0 fail.</p>
+and cross-frame coverage. Current status: <strong class="ok">32 pass</strong>,
+<strong class="warn">4 warn</strong>, 0 fail.</p>
 
 <div class="note"><strong>Incident, root-caused and defended.</strong> During validation the
 Value/EarnYield factor returns hit ±10<sup>6</sup> on 21 of 73 regression dates. The cause:
@@ -457,7 +457,7 @@ Each layer is documented at the relevant line of code.</div>
 
 <table>
 <tr><th>Open item (WARN)</th><th>Detail / assessment</th></tr>
-<tr><td>exposures: >=6 of 11 style loadings per (date, position)</td><td>min 1, 4.8% below 6</td></tr><tr><td>securities: Sector populated</td><td>8% 'Unknown' (known stub)</td></tr><tr><td>size-curve proxy loadings (imputed log-mcap, held book)</td><td>worst book MIOPartners: 1 held names, 100.0% of weight priced via the estimation log-ADV fit (median across 123 books 7.1%)</td></tr>
+<tr><td>exposures: >=6 of 11 style loadings per (date, position)</td><td>min 1, 4.8% below 6</td></tr><tr><td>securities: Sector populated</td><td>8% 'Unknown' (known stub)</td></tr><tr><td>size-curve proxy loadings (imputed log-mcap, held book)</td><td>worst book MIOPartners: 1 held names, 100.0% of weight priced via the estimation log-ADV fit (median across 123 books 7.1%)</td></tr><tr><td>stock_returns: |daily return| <= 50%</td><td>6799/10769200 rows, max |r| 1.34e+04</td></tr>
 </table>
 
 <h2>6 · Risk measures &amp; current book snapshot (2026-06-30)</h2>
