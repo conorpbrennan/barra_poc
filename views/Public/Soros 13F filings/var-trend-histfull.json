@@ -3,7 +3,7 @@
   "name": "VaR trend (HistFull)",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T02:05:05Z",
-  "updated": "2026-08-21T22:27:29Z",
+  "updated": "2026-08-22T12:11:09Z",
   "state": {
     "cols": [],
     "row_tot": false,
@@ -173,6 +173,7 @@
         }
       }
     ],
-    "description": "Scenario VaR 99, Total VaR 99 and Specific vol over the whole 2016\u20132026 calendar under HistFull \u2014 how the book's risk has evolved through time. Chart view."
+    "description": "Scenario VaR 99, Total VaR 99 and Specific vol over the whole 2016\u20132026 calendar under HistFull \u2014 how the book's risk has evolved through time. Chart view.",
+    "units": "dollar"
   }
 }

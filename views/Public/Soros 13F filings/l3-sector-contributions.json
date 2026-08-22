@@ -3,7 +3,7 @@
   "name": "L3 \u2014 Sector contributions",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T02:05:05Z",
-  "updated": "2026-08-21T22:10:00Z",
+  "updated": "2026-08-22T12:11:09Z",
   "state": {
     "cols": [],
     "row_tot": false,
@@ -42,6 +42,7 @@
         "sortIndex": 0
       }
     ],
-    "description": "Each GICS sector's additive contribution to book Total VaR 99 and % share \u2014 where the tail sits by sector. (Sector is a free SIC\u2192GICS proxy; a few names fall back to 'Unknown'.)"
+    "description": "Each GICS sector's additive contribution to book Total VaR 99 and % share \u2014 where the tail sits by sector. (Sector is a free SIC\u2192GICS proxy; a few names fall back to 'Unknown'.)",
+    "units": "dollar"
   }
 }
