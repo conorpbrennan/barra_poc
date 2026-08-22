@@ -81,11 +81,11 @@ def _backend_up():
 
 @integ
 def t_calibration_shape():
-    """Rolling bias series for book + specific, band = sqrt(2/window), b > 0 throughout."""
+    """Rolling bias series for manager + specific, band = sqrt(2/window), b > 0 throughout."""
     import math
     import requests
     j = requests.get(f"{API}/calibration", params={"window": 24}, timeout=120).json()
-    for k in ("book", "specific"):
+    for k in ("manager", "specific"):
         s = j["series"][k]
         assert len(s["bias"]) > 12, (k, len(s["bias"]))
         assert abs(s["band"] - math.sqrt(2 / 24)) < 1e-9
@@ -102,7 +102,7 @@ def t_calibration_pit_served_from_cube():
     v = j.get("pit_verification") or {}
     assert "error" not in v, v
     assert v.get("months_from_cube", 0) >= 90, v          # ~105 of 108 months carry a PIT set
-    assert v["book"] < 5e-10 and v["specific"] < 5e-10 and v["factor"] < 5e-10, v
+    assert v["manager"] < 5e-10 and v["specific"] < 5e-10 and v["factor"] < 5e-10, v
 
 
 @integ
@@ -111,7 +111,7 @@ def t_calibration_window_shrinks_series():
     import requests
     a = requests.get(f"{API}/calibration", params={"window": 12}, timeout=120).json()
     b = requests.get(f"{API}/calibration", params={"window": 36}, timeout=120).json()
-    assert len(a["series"]["book"]["bias"]) > len(b["series"]["book"]["bias"])
+    assert len(a["series"]["manager"]["bias"]) > len(b["series"]["manager"]["bias"])
 
 
 @integ
@@ -164,11 +164,12 @@ def t_exposure_profile_shape():
     """Shape + internal consistency of the cross-section, and the ±3 tail reported honestly.
 
     NB there is deliberately no upper bound on `beyond3.share`. It used to assert < 0.5, which
-    was a fact about the OLD coverage universe (the S&P 500 estimation seed plus one small book),
-    not an invariant: loadings are z-scored against the ESTIMATION cross-section and coverage
-    names are left uncapped precisely so an off-index name shows its true tilt. The 124-book
-    coverage universe is ~5k names dominated by issues far smaller than the S&P 500, so on Size a
-    MAJORITY sitting below −3 is the design working (measured 0.60, median −3.7), not a fault —
+    was a fact about the OLD coverage universe (the S&P 500 estimation seed plus one small
+    manager's portfolio), not an invariant: loadings are z-scored against the ESTIMATION cross-section
+    and coverage names are left uncapped precisely so an off-index name shows its true tilt. The
+    124-manager coverage universe is ~5k names dominated by issues far smaller than the S&P 500,
+    so on Size a MAJORITY sitting below −3 is the design working (measured 0.60, median −3.7), not
+    a fault —
     it is the endpoint's own `note`. What is invariant is that the reported tail is consistent
     with the distribution it came from, which is what this pins."""
     import requests

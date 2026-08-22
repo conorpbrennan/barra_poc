@@ -9,7 +9,7 @@ two INDEPENDENT numpy implementations of the same sigma:
   * /contributions vol_1d      — _euler_contributions: sqrt(x'Fx + w'dw), F = np.cov(history)
   * /whatif before.model_vol_1d — _risk_from_weights: same sigma, separate code path
   * the in-cube identity Model vol^2 = Scenario PnL vol^2 + Specific variance
-  * slicing behaviour: sector cells positive, sub-additive vs the book (diversification)
+  * slicing behaviour: sector cells positive, sub-additive vs the manager total (diversification)
   * scenario-set semantics: Evt window vol differs from HistFull; length-1 Hypo is degenerate
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_model_vol.py
@@ -49,7 +49,7 @@ def _pivot(rows="", measures="", filters=None):
     return r.json()
 
 
-def _book_cell(measures, scen="HistFull"):
+def _manager_cell(measures, scen="HistFull"):
     j = _pivot(rows="ScenarioSet", measures=measures,
                filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": [scen]})
     assert j["records"], j
@@ -59,10 +59,10 @@ def _book_cell(measures, scen="HistFull"):
 # --------------------------------------------------------------------------- INTEG
 @integ
 def t_model_vol_ties_to_contributions():
-    """Cube Model vol (book, HistFull) == /contributions vol_1d — same sigma, independent
+    """Cube Model vol (manager, HistFull) == /contributions vol_1d — same sigma, independent
     implementations (atoti array std vs numpy cov). Float-precision tolerance."""
     import requests
-    cube = float(_book_cell("Model vol")["Model vol"])
+    cube = float(_manager_cell("Model vol")["Model vol"])
     c = requests.get(f"{API}/contributions", params={"date": DATE}, timeout=60).json()
     assert abs(cube - c["vol_1d"]) < 5e-10, (cube, c["vol_1d"])
 
@@ -71,15 +71,15 @@ def t_model_vol_ties_to_contributions():
 def t_model_vol_ties_to_whatif():
     """Cube Model vol == /whatif before.model_vol_1d (_risk_from_weights, third code path)."""
     import requests
-    cube = float(_book_cell("Model vol")["Model vol"])
+    cube = float(_manager_cell("Model vol")["Model vol"])
     w = requests.post(f"{API}/whatif", json={"trades": []}, timeout=120).json()
     assert abs(cube - w["before"]["model_vol_1d"]) < 5e-10, (cube, w["before"]["model_vol_1d"])
 
 
 @integ
 def t_model_vol_identity_in_cube():
-    """In-cube identity: Model vol^2 == Scenario PnL vol^2 + Specific variance, book level."""
-    r = _book_cell("Model vol,Scenario PnL vol,Specific variance")
+    """In-cube identity: Model vol^2 == Scenario PnL vol^2 + Specific variance, manager level."""
+    r = _manager_cell("Model vol,Scenario PnL vol,Specific variance")
     mv, sv, spv = float(r["Model vol"]), float(r["Scenario PnL vol"]), float(r["Specific variance"])
     assert abs(mv * mv - (sv * sv + spv)) < 1e-14, r
     assert mv > sv > 0                                    # specific adds something
@@ -87,25 +87,25 @@ def t_model_vol_identity_in_cube():
 
 @integ
 def t_model_vol_drills_and_is_subadditive():
-    """Per-sector Model vol: every cell positive, and the book vol <= the sum of sector vols
+    """Per-sector Model vol: every cell positive, and the manager's vol <= the sum of sector vols
     (diversification — vol is sub-additive, unlike the additive marginal measures)."""
     j = _pivot(rows="Sector", measures="Model vol",
                filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     vols = [float(r["Model vol"]) for r in j["records"] if r.get("Model vol") is not None]
     assert len(vols) >= 5, f"expected sector drill, got {len(vols)} cells"
     assert all(v > 0 for v in vols)
-    book = float(_book_cell("Model vol")["Model vol"])
-    assert book <= sum(vols) + 1e-12, (book, sum(vols))
+    total = float(_manager_cell("Model vol")["Model vol"])
+    assert total <= sum(vols) + 1e-12, (total, sum(vols))
 
 
 @integ
 def t_model_vol_scenario_set_semantics():
     """Evt window vol is a different (regime) number from HistFull; the length-1 Hypo sets are
     degenerate (sample std undefined) and must read blank/NaN rather than a fake number."""
-    hist = float(_book_cell("Model vol")["Model vol"])
-    evt = _book_cell("Model vol", scen="Evt:COVID2020").get("Model vol")
+    hist = float(_manager_cell("Model vol")["Model vol"])
+    evt = _manager_cell("Model vol", scen="Evt:COVID2020").get("Model vol")
     assert evt is not None and abs(float(evt) - hist) > 1e-6, (evt, hist)
-    hypo = _book_cell("Model vol,Scenario n", scen="Hypo:MomentumCrash")
+    hypo = _manager_cell("Model vol,Scenario n", scen="Hypo:MomentumCrash")
     assert int(hypo["Scenario n"]) == 1
     v = hypo.get("Model vol")
     ok_degenerate = v is None or (isinstance(v, float) and (v != v))   # None or NaN
@@ -122,22 +122,22 @@ def t_model_vol_on_trends():
     recs = [r for r in j["records"] if r.get("Model vol") is not None]
     assert len(recs) > 24, f"expected a long monthly series, got {len(recs)}"
     assert all(r["Model vol"] > 0 for r in recs)
-    cube = float(_book_cell("Model vol")["Model vol"])
+    cube = float(_manager_cell("Model vol")["Model vol"])
     assert abs(recs[-1]["Model vol"] - cube) < 1e-12, (recs[-1], cube)
 
 
 @integ
 def t_marginal_model_vol_is_euler():
-    """Marginal Model vol is the Euler decomposition: sector marginals sum EXACTLY to the book
-    Model vol, and '% of Model vol' sums to 100%."""
+    """Marginal Model vol is the Euler decomposition: sector marginals sum EXACTLY to the
+    manager's Model vol, and '% of Model vol' sums to 100%."""
     j = _pivot(rows="Sector", measures="Marginal Model vol,% of Model vol",
                filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     marg = [float(r["Marginal Model vol"]) for r in j["records"]
             if r.get("Marginal Model vol") is not None]
     shares = [float(r["% of Model vol"]) for r in j["records"]
               if r.get("% of Model vol") is not None]
-    book = float(_book_cell("Model vol")["Model vol"])
-    assert abs(sum(marg) - book) < 1e-12, (sum(marg), book)
+    total = float(_manager_cell("Model vol")["Model vol"])
+    assert abs(sum(marg) - total) < 1e-12, (sum(marg), total)
     assert abs(sum(shares) - 1.0) < 1e-12, sum(shares)
 
 
@@ -175,8 +175,8 @@ def t_incremental_model_vol_ties_to_whatif():
     delta = w["before"]["model_vol_1d"] - w["after"]["model_vol_1d"]
     assert abs(cube[top["position"]] - delta) < 5e-10, (cube[top["position"]], delta)
     # sub-additivity sanity: releasing the top name frees LESS than its Euler contribution
-    # would suggest is impossible — incremental positive, and below the book vol
-    assert 0 < cube[top["position"]] < float(_book_cell("Model vol")["Model vol"])
+    # would suggest is impossible — incremental positive, and below the manager's vol
+    assert 0 < cube[top["position"]] < float(_manager_cell("Model vol")["Model vol"])
 
 
 @integ
@@ -222,7 +222,7 @@ def t_top5_risk_share_cube():
     '% of Total VaR 99' name shares from a by-Position pivot (validates the flat-hierarchy
     ranking wiring), sits in (0, 1], and reads via /limits."""
     import requests
-    top5 = float(_book_cell("Top-5 risk share")["Top-5 risk share"])
+    top5 = float(_manager_cell("Top-5 risk share")["Top-5 risk share"])
     assert 0 < top5 <= 1, top5
     j = _pivot(rows="Position", measures="% of Total VaR 99",
                filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
@@ -237,12 +237,12 @@ def t_top5_risk_share_cube():
 @integ
 def t_gross_net_weight_measures():
     """Gross/Net weight measures: the in-cube identity Net weight == Net exposure at
-    Factor=Market (unit Market loading makes x_Market = Σw), Gross >= |Net|, the 13F book is
+    Factor=Market (unit Market loading makes x_Market = Σw), Gross >= |Net|, the 13F portfolio is
     fully invested up to disclosed coverage (net == /whatif priced_weight — held names with no
     loadings, e.g. a TSX-only entrant, are reported in `unpriced`, never silently absorbed),
     and /whatif serves them from the cube with the numpy weights inside the tight bound."""
     import requests
-    r = _book_cell("Net weight,Gross weight")
+    r = _manager_cell("Net weight,Gross weight")
     net, gross = float(r["Net weight"]), float(r["Gross weight"])
     assert gross >= abs(net) - 1e-12, (net, gross)
     j = _pivot(rows="Factor", measures="Net exposure",
@@ -260,11 +260,11 @@ def t_gross_net_weight_measures():
 @integ
 def t_exceedance_rate_cube():
     """Exceedance rate 2s: recomputed in numpy from the /scenario_pnl path it must match at
-    1e-12; the equity book reads fat (above the ~4.6% normal expectation is typical but not
+    1e-12; the equity portfolio reads fat (above the ~4.6% normal expectation is typical but not
     forced — assert a sane range); degenerate (blank) on the length-1 Hypo sets; drills by
     sector with every cell in [0, 1]."""
     import requests
-    r = _book_cell("Exceedance rate 2s,Scenario PnL vol,Scenario n")
+    r = _manager_cell("Exceedance rate 2s,Scenario PnL vol,Scenario n")
     rate = float(r["Exceedance rate 2s"])
     assert 0.005 < rate < 0.20, rate
     sp = requests.get(f"{API}/scenario_pnl",
@@ -274,7 +274,7 @@ def t_exceedance_rate_cube():
     sd = statistics.stdev(pnl)
     ref = sum(1 for v in pnl if v < -2 * sd or v > 2 * sd) / len(pnl)
     assert abs(rate - ref) < 1e-12, (rate, ref)
-    hypo = _book_cell("Exceedance rate 2s", scen="Hypo:MomentumCrash").get("Exceedance rate 2s")
+    hypo = _manager_cell("Exceedance rate 2s", scen="Hypo:MomentumCrash").get("Exceedance rate 2s")
     assert hypo is None or (isinstance(hypo, float) and hypo != hypo), hypo
     j = _pivot(rows="Sector", measures="Exceedance rate 2s",
                filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
@@ -294,8 +294,8 @@ def t_pit_sets_identities():
     meta = requests.get(f"{API}/meta", timeout=30).json()
     assert meta["pit_sets"] and not any(s.startswith("PIT:") for s in meta["scenario_sets"])
     last_pit = meta["pit_sets"][-1]
-    a = _book_cell("Model vol")
-    b = _book_cell("Model vol", scen=last_pit)
+    a = _manager_cell("Model vol")
+    b = _manager_cell("Model vol", scen=last_pit)
     assert abs(float(a["Model vol"]) - float(b["Model vol"])) < 1e-15, (a, b)
     # earlier month: PIT vol must differ from the anachronistic full-history read
     t_mid = "2019-12-31"
@@ -307,7 +307,7 @@ def t_pit_sets_identities():
     hv = float(hist_mid["records"][0]["Model vol"])
     pv = float(pit_mid["records"][0]["Model vol"])
     assert abs(hv - pv) > 1e-5, (hv, pv)      # 2019 PIT vol excludes COVID/2022 — must differ
-    # per-factor PIT vol ties numpy: std of the HistFull daily book path ≤ t at the factor level
+    # per-factor PIT vol ties numpy: std of the HistFull daily manager path ≤ t at the factor level
     sp = requests.get(f"{API}/scenario_pnl",
                       params={"date": t_mid, "set": "HistFull",
                               "filters": json.dumps({"Factor": ["Momentum"]})}, timeout=60).json()

@@ -68,13 +68,13 @@ def t_euler_ctv_sums_to_factor_variance():
 
 @unit
 def t_euler_negative_ctv_for_hedge():
-    """An exposure negatively co-varying with the book carries a negative CTV."""
+    """An exposure negatively co-varying with the portfolio carries a negative CTV."""
     import risk_api
     F = np.array([[1.0, -0.3], [-0.3, 1.0]]) * 1e-4
     Lv = np.array([[1.0, 0.05], [1.0, 0.1]])
     w = np.array([0.5, 0.5])                          # x = (1.0, 0.075): tiny f1 vs big f0
     e = risk_api._euler_contributions(w, Lv, F, np.zeros(2))
-    assert e["ctv"][1] < 0, e["ctv"]                  # f1's covariance with the book is negative
+    assert e["ctv"][1] < 0, e["ctv"]              # f1's covariance with the portfolio is negative
     assert abs(float(np.sum(e["ctv"])) - e["factor_var"]) < 1e-18
 
 

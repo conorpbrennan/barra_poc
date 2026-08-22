@@ -4,7 +4,7 @@ test_limits.py — checks for the desk-limit RAG monitoring (Step 1).
   * UNIT  — always run, no backend: _rag traffic-light logic, and limits.json parses with the
             expected shape.
   * INTEG — need the live backend on :8010; SKIP if down. /limits returns a configured RAG status
-            with well-formed checks, and the book Scenario VaR 99 limit is evaluated.
+            with well-formed checks, and the manager's Scenario VaR 99 limit is evaluated.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_limits.py
 """
@@ -56,20 +56,20 @@ def t_rag_no_warn_is_optional():
 
 @unit
 def t_limits_json_shape():
-    """The shipped limits.json parses and has book + concentration limits with numeric caps."""
+    """The shipped limits.json parses and has manager + concentration limits with numeric caps."""
     import risk_api
     cfg = risk_api._load_limits()
     assert cfg, "limits.json missing or empty"
-    assert "Scenario VaR 99" in cfg.get("book", {}), cfg.get("book")
-    for spec in cfg["book"].values():
+    assert "Scenario VaR 99" in cfg.get("manager", {}), cfg.get("manager")
+    for spec in cfg["manager"].values():
         assert isinstance(spec.get("limit"), (int, float)), spec
     assert "single_name_weight" in cfg.get("concentration", {}), cfg.get("concentration")
 
 
 @unit
 def t_limits_json_carries_calibrated_for():
-    """Multi-manager Phase 3: limits.json discloses which book its thresholds were tuned for --
-    additive field, doesn't restructure the flat limit set into per-book sets."""
+    """Multi-manager Phase 3: limits.json discloses which manager its thresholds were tuned for --
+    additive field, doesn't restructure the flat limit set into per-manager sets."""
     import risk_api
     cfg = risk_api._load_limits()
     assert cfg.get("calibrated_for") == "Soros", cfg.get("calibrated_for")
@@ -94,7 +94,7 @@ def t_limits_endpoint_configured():
 
 
 @integ
-def t_limits_evaluates_book_var():
+def t_limits_evaluates_manager_var():
     """The Scenario VaR 99 limit (the limit metric since the 2026-07-03 vol-reference
     decision) is present and (when data exists) carries a numeric value + headroom."""
     import requests
@@ -108,29 +108,29 @@ def t_limits_evaluates_book_var():
 
 @integ
 def t_limits_calibration_disclosure():
-    """Multi-manager Phase 3: /limits discloses which book the thresholds were calibrated for,
-    additive to the pre-existing response shape (date/set/book/status/checks unchanged).
-    Requesting the calibrated book (default Soros) carries no cross-book flag; any other book
-    is flagged with a non-empty human-readable note, and status/checks still compute normally
-    (this is a DISCLOSURE, not a refusal -- /limits still evaluates the numbers, just against
-    another book's thresholds, which the RAG verdict now says out loud)."""
+    """Multi-manager Phase 3: /limits discloses which manager the thresholds were calibrated for,
+    additive to the pre-existing response shape (date/set/manager/status/checks unchanged).
+    Requesting the calibrated manager (default Soros) carries no cross-manager flag; any other
+    manager is flagged with a non-empty human-readable note, and status/checks still compute
+    normally (this is a DISCLOSURE, not a refusal -- /limits still evaluates the numbers, just
+    against another manager's thresholds, which the RAG verdict now says out loud)."""
     import requests
     base = requests.get(f"{API}/limits", timeout=30).json()
     assert base["calibrated_for"] == "Soros", base
-    assert base["cross_book_thresholds"] is False, base
+    assert base["cross_manager_thresholds"] is False, base
     assert base["calibration_note"] is None, base
-    other = requests.get(f"{API}/limits", params={"book": "Bridgewater"}, timeout=30).json()
+    other = requests.get(f"{API}/limits", params={"manager": "Bridgewater"}, timeout=30).json()
     assert other["calibrated_for"] == "Soros", other
-    assert other["cross_book_thresholds"] is True, other
+    assert other["cross_manager_thresholds"] is True, other
     assert other["calibration_note"] and "Bridgewater" in other["calibration_note"], other
     # shape is still backward compatible -- every pre-Phase-3 field is present
-    for k in ("date", "set", "book", "status", "configured", "checks", "breaches"):
+    for k in ("date", "set", "manager", "status", "configured", "checks", "breaches"):
         assert k in other, (k, other)
 
 
 @integ
 def t_limits_set_override():
-    """`set` overrides the scenario set every book limit reads against — including Top-5 risk
+    """`set` overrides the scenario set every manager's limit reads against — including Top-5 risk
     share (a cube measure since 2026-07-04, set-DEPENDENT like the old Risk HHI): a Hypo set
     zeroes the Market move, so risk collapses onto the style-tilt names and concentration
     reads far higher than the historical set."""

@@ -2,7 +2,7 @@
 test_whatchanged.py — checks for the "what changed" QoQ diff + commentary (Step 9; risk_api.py
 /whatchanged + /whatchanged/analysis).
 
-  UNIT  — always run, no backend, no tokens: _prior_filing_date picks the previous distinct 13F book.
+  UNIT  — always run, no backend, no tokens: _prior_filing_date picks the previous distinct 13F filing.
   INTEG — need the live backend on :8010; SKIP if down: /whatchanged returns from<to, the position
           in/out/resized split, a factor-exposure attribution whose four sources reconcile to Δ, and a
           before/after/delta risk block; an explicit ?prev= is honoured.
@@ -43,7 +43,7 @@ def _backend_up():
 def t_prior_filing_date():
     import pandas as pd
     import risk_api
-    # monthly as-of book: {A,B} held Mar & Apr (same filing), {A,C} from Jun (new filing)
+    # monthly as-of holdings: {A,B} held Mar & Apr (same filing), {A,C} from Jun (new filing)
     rows = ([{"Manager": "Soros", "Date": pd.Timestamp("2024-03-31"), "Position": p} for p in "AB"]
             + [{"Manager": "Soros", "Date": pd.Timestamp("2024-04-30"), "Position": p} for p in "AB"]
             + [{"Manager": "Soros", "Date": pd.Timestamp("2024-06-30"), "Position": p} for p in "AC"])

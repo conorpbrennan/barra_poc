@@ -77,7 +77,7 @@ def t_higher_participation_fewer_days():
     import requests
     slow = requests.get(f"{API}/liquidity", params={"participation": 0.1, "horizon": 5}, timeout=60).json()
     fast = requests.get(f"{API}/liquidity", params={"participation": 0.4, "horizon": 5}, timeout=60).json()
-    # trading a bigger share of ADV each day -> more of the book exits within the horizon
+    # trading a bigger share of ADV each day -> more of the portfolio exits within the horizon
     assert fast["pct_weight_within_horizon"] >= slow["pct_weight_within_horizon"], \
         (fast["pct_weight_within_horizon"], slow["pct_weight_within_horizon"])
 

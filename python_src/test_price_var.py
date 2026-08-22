@@ -5,9 +5,9 @@ test_price_var.py — the Price VaR family + /var_bridge (docs/price-var-plan.md
     * /dims exposes PriceSet + price_dependent.
     * /pivot: Price VaR 99 with no PriceSet context carries the warning; sliced to HistFull it
       returns a sane number, close in magnitude to Total VaR 99.
-    * Euler: Σ Marginal Price VaR 99 (by Position) == Price VaR 99 (book, additive read-off).
+    * Euler: Σ Marginal Price VaR 99 (by Position) == Price VaR 99 (manager, additive read-off).
     * `%` sums to 1: Σ % of Price VaR 99 (by Position) == 1.
-    * Units context: /pivot?units=dollar on Price VaR 99 == Price VaR 99 (weight) × Book MV.
+    * Units context: /pivot?units=dollar on Price VaR 99 == Price VaR 99 (weight) × Manager MV.
     * Set semantics: an Evt:* PriceSet reads a DIFFERENT number from HistFull (a real window).
     * /var_bridge: the four terms sum to T4 - T0 exactly; verification diff is tiny; coverage is a
       fraction in [0, 1]; a Hypo:* set 400s (no Price mirror).
@@ -61,7 +61,7 @@ def _pivot(rows="", measures="", filters=None):
     return r.json()
 
 
-def _book_cell(measures, price_set="HistFull"):
+def _manager_cell(measures, price_set="HistFull"):
     j = _pivot(rows="PriceSet", measures=measures,
               filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": [price_set]})
     assert j["records"], j
@@ -97,10 +97,10 @@ def t_price_var_needs_priceset_context():
 def t_price_var_sane_vs_total_var():
     if not _has_price_family():
         return
-    price = _book_cell("Price VaR 99")
-    total = _book_cell("Total VaR 99")     # ScenarioSet-dependent — but Book/Date suffice, PriceSet ignored
+    price = _manager_cell("Price VaR 99")
+    total = _manager_cell("Total VaR 99")     # ScenarioSet-dependent — but Manager/Date suffice, PriceSet ignored
     p99 = float(price["Price VaR 99"])
-    assert 0 < p99 < 0.5, p99             # a sane daily-VaR-scale number (fraction of book)
+    assert 0 < p99 < 0.5, p99             # a sane daily-VaR-scale number (fraction of the portfolio)
     t99 = float(total.get("Total VaR 99") or 0)
     if t99:
         assert 0.2 < p99 / t99 < 5, (p99, t99)   # same order of magnitude, not a wildly different unit
@@ -113,8 +113,8 @@ def t_price_var_euler_sums():
     j = _pivot(rows="Position", measures="Marginal Price VaR 99",
               filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]}, )
     total = sum(float(r["Marginal Price VaR 99"]) for r in j["records"] if r.get("Marginal Price VaR 99") is not None)
-    book = float(_book_cell("Price VaR 99")["Price VaR 99"])
-    assert abs(total - book) < 5e-4, (total, book)      # additive read-off vs interpolated quantile
+    total_ = float(_manager_cell("Price VaR 99")["Price VaR 99"])
+    assert abs(total - total_) < 5e-4, (total, total_)  # additive read-off vs interpolated quantile
 
 
 @integ
@@ -129,12 +129,12 @@ def t_price_var_pct_sums_to_one():
 
 @integ
 def t_price_var_dollar_units():
-    """Units context (2026-08-22): units=dollar slices the SAME measure name to Book MV × base —
-    there is no more "Price VaR 99 $" measure name to ask for."""
+    """Units context (2026-08-22): units=dollar slices the SAME measure name to Manager MV × base
+    — there is no more "Price VaR 99 $" measure name to ask for."""
     if not _has_price_family():
         return
-    base_cell = _book_cell("Price VaR 99,Book MV")
-    var99, mv = float(base_cell["Price VaR 99"]), float(base_cell["Book MV"])
+    base_cell = _manager_cell("Price VaR 99,Manager MV")
+    var99, mv = float(base_cell["Price VaR 99"]), float(base_cell["Manager MV"])
     import requests
     q = {"rows": "PriceSet", "measures": "Price VaR 99", "units": "dollar",
          "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]})}
@@ -151,10 +151,10 @@ def t_price_var_dollar_units():
 def t_price_var_set_semantics():
     if not _has_price_family():
         return
-    hist = float(_book_cell("Price VaR 99", "HistFull")["Price VaR 99"])
+    hist = float(_manager_cell("Price VaR 99", "HistFull")["Price VaR 99"])
     j = _pivot(rows="PriceSet", measures="Price VaR 99",
               filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["Evt:COVID2020"]})
-    if not j["records"]:      # the event window may not exist on every book's calendar
+    if not j["records"]:      # the event window may not exist on every manager's calendar
         return
     covid = float(j["records"][0]["Price VaR 99"])
     assert abs(hist - covid) > 1e-6, (hist, covid)   # a real, different window
@@ -165,10 +165,10 @@ def t_var_bridge_terms_sum_and_verification():
     import requests
     if not _has_price_family():
         return
-    r = requests.get(f"{API}/var_bridge", params={"date": DATE, "book": "Soros", "set": "HistFull"}, timeout=120)
+    r = requests.get(f"{API}/var_bridge", params={"date": DATE, "manager": "Soros", "set": "HistFull"}, timeout=120)
     r.raise_for_status()
     j = r.json()
-    for k in ("date", "book", "set", "alpha", "steps", "terms", "coverage", "disagreements", "verification"):
+    for k in ("date", "manager", "set", "alpha", "steps", "terms", "coverage", "disagreements", "verification"):
         assert k in j, (k, j.keys())
     t0 = next(s["value"] for s in j["steps"] if s["step"] == "T0")
     t4 = next(s["value"] for s in j["steps"] if s["step"] == "T4")
@@ -184,7 +184,7 @@ def t_var_bridge_rejects_hypo_set():
     import requests
     if not _has_price_family():
         return
-    r = requests.get(f"{API}/var_bridge", params={"date": DATE, "book": "Soros", "set": "Hypo:MomentumCrash"},
+    r = requests.get(f"{API}/var_bridge", params={"date": DATE, "manager": "Soros", "set": "Hypo:MomentumCrash"},
                      timeout=60)
     assert r.status_code == 400, (r.status_code, r.text)
 
@@ -203,7 +203,7 @@ def t_ask_tool_allowlist_carries_price_when_built():
 @live
 def t_var_bridge_analysis_streams_markdown():
     import requests
-    r = requests.post(f"{API}/var_bridge/analysis", json={"date": DATE, "book": "Soros", "set": "HistFull"},
+    r = requests.post(f"{API}/var_bridge/analysis", json={"date": DATE, "manager": "Soros", "set": "HistFull"},
                       timeout=120)
     r.raise_for_status()
     text = r.text

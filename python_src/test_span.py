@@ -6,7 +6,7 @@ barra_universe_span.py).
           centre/box, the per-factor extreme flag, and the weight-inside share.
   INTEG — need the live backend on :8010 AND the built artifact; SKIP if down: /span returns a
           per-month inside-share series in [0,1], a latest verdict, a detail list with D²/inside/extreme,
-          a 2D scatter (cloud + book), and rejects a non-style factor pair.
+          a 2D scatter (cloud + manager), and rejects a non-style factor pair.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_span.py
 """
@@ -19,23 +19,23 @@ import barra_universe_span as us
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
 
-# The per-book precompute sweep gave every loaded manager its own <stem>.<Book>.parquet, so
-# `_resolve_artifact` serves those directly and only an UNBUILT book reaches `_book_guard`.
+# The per-manager precompute sweep gave every loaded manager its own <stem>.<Manager>.parquet, so
+# `_resolve_artifact` serves those directly and only an UNBUILT manager reaches `_manager_guard`.
 # A name no precompute can have run for is the reliable way to exercise the guard; it is also
-# the real case it exists for (a UI asking for a book whose precompute has not been run).
+# the real case it exists for (a UI asking for a manager whose precompute has not been run).
 _UNBUILT = "NoSuchManager"
 
 
-def _books_with_own_artifact(stem: str, limit: int = 2) -> list:
-    """Up to `limit` loaded books (never the default) that have their own artifact on disk.
-    Empty when only the default book is built — the caller's loop then simply does nothing,
-    which is the correct behaviour on a single-book build."""
+def _managers_with_own_artifact(stem: str, limit: int = 2) -> list:
+    """Up to `limit` loaded managers (never the default) that have their own artifact on disk.
+    Empty when only the default manager is built — the caller's loop then simply does nothing,
+    which is the correct behaviour on a single-manager build."""
     import pathlib
     import requests
     out = pathlib.Path(__file__).resolve().parent.parent / "data"
     j = requests.get(f"{API}/meta", timeout=60).json()
-    books = sorted(m["book"] for m in (j.get("managers") or []) if m["book"] != "Soros")
-    return [b for b in books if (out / f"{stem}.{b}.parquet").exists()][:limit]
+    managers = sorted(m["manager"] for m in (j.get("managers") or []) if m["manager"] != "Soros")
+    return [mgr for mgr in managers if (out / f"{stem}.{mgr}.parquet").exists()][:limit]
 
 UNIT, INTEG = [], []
 
@@ -111,27 +111,27 @@ def t_span_detail_and_scatter():
 
 
 @integ
-def t_span_book_guard():
-    """Default book (Soros) is UNCHANGED; a book with its own artifact is served from it; a book
-    with NO artifact comes back as a clean book_mismatch status.
+def t_span_manager_guard():
+    """Default manager (Soros) is UNCHANGED; a manager with its own artifact is served from it; a
+    manager with NO artifact comes back as a clean manager_mismatch status.
 
-    Two branches, because `_resolve_artifact` has two: a book with its OWN
-    `<stem>.<Book>.parquet` is served from it (every loaded manager has one since the
-    124-book precompute sweep), and a book with NO artifact falls to `_book_guard`, which
-    refuses to serve the legacy file under another manager's label. This test used to assert
-    that ANY non-default book was a mismatch — true when only Soros had an artifact, stale
-    since. `_UNBUILT` is a name no precompute can have run for, which is exactly the state
+    Two branches, because `_resolve_artifact` has two: a manager with its OWN
+    `<stem>.<Manager>.parquet` is served from it (every loaded manager has one since the
+    124-manager precompute sweep), and a manager with NO artifact falls to `_manager_guard`,
+    which refuses to serve the legacy file under another manager's label. This test used to
+    assert that ANY non-default manager was a mismatch — true when only Soros had an artifact,
+    stale since. `_UNBUILT` is a name no precompute can have run for, which is exactly the state
     the guard exists to catch.
     """
     import requests
     base = requests.get(f"{API}/span", timeout=60).json()
     assert "status" not in base and base["series"], base
-    for bk in _books_with_own_artifact("universe_span"):
-        own = requests.get(f"{API}/span", params={"book": bk}, timeout=60).json()
-        assert "status" not in own and own["series"], (bk, own)
-    mism = requests.get(f"{API}/span", params={"book": _UNBUILT}, timeout=60).json()
-    assert mism["status"] == "book_mismatch", mism
-    assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", mism
+    for mgr in _managers_with_own_artifact("universe_span"):
+        own = requests.get(f"{API}/span", params={"manager": mgr}, timeout=60).json()
+        assert "status" not in own and own["series"], (mgr, own)
+    mism = requests.get(f"{API}/span", params={"manager": _UNBUILT}, timeout=60).json()
+    assert mism["status"] == "manager_mismatch", mism
+    assert mism["requested_manager"] == _UNBUILT and mism["artifact_manager"] == "Soros", mism
     assert mism["kind"] == "span" and mism["reason"], mism
 
 

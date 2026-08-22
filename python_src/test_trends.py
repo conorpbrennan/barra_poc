@@ -1,7 +1,7 @@
 """
 test_trends.py — checks for the time-series / trend endpoint (Step 4).
 
-  * INTEG — need the live backend on :8010; SKIP if down. /trends returns book measures over the
+  * INTEG — need the live backend on :8010; SKIP if down. /trends returns manager measures over the
             whole calendar (date-by-date, no OOM), the factor-breakdown mode works, and bad inputs
             are rejected.
 
@@ -29,8 +29,8 @@ def _backend_up():
 
 
 @integ
-def t_trends_book_series_over_calendar():
-    """Default /trends returns a multi-year book series with VaR/ES/HHI on each date."""
+def t_trends_manager_series_over_calendar():
+    """Default /trends returns a multi-year manager series with VaR/ES/HHI on each date."""
     import requests
     j = requests.get(f"{API}/trends", timeout=120).json()
     recs = j["records"]

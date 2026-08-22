@@ -18,7 +18,7 @@ import pandas as pd
 import notebook_helpers as N
 
 _NB_DIR = pathlib.Path(__file__).resolve().parent.parent / "notebooks"
-NOTEBOOKS = {                        # Manager in the cube -> the notebook that reads that book
+NOTEBOOKS = {                        # Manager in the cube -> the notebook that reads that manager
     "Soros":    _NB_DIR / "soros_13f_risk.ipynb",
     "Vanguard": _NB_DIR / "vanguard_13f_risk.ipynb",
 }
@@ -46,7 +46,7 @@ def _test(fn):                       # collect like test_risk_measures.py does
 
 
 @_test
-def t_latest_cob_is_D(cube, book, D, NOTEBOOK):
+def t_latest_cob_is_D(cube, manager, D, NOTEBOOK):
     """The notebook's `D` must still be the latest COB in the build — its own comment calls it
     "latest monthly COB in the sample", and every view in the notebook is as-of D. When the
     builder's END moves, this fails until the notebook is re-pointed (and re-executed)."""
@@ -57,54 +57,54 @@ def t_latest_cob_is_D(cube, book, D, NOTEBOOK):
 
 
 @_test
-def t_l1_book_summary(cube, book, D, NOTEBOOK):
+def t_l1_manager_summary(cube, manager, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Total VaR 99"], m["Scenario VaR 99"], m["Specific vol"], levels=[l["Manager"]],
-                    filter=(l["Manager"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "HistFull"))
+                    filter=(l["Manager"] == manager) & (l["Date"] == D) & (l["ScenarioSet"] == "HistFull"))
     assert len(df) == 1, len(df)
-    row = df.iloc[0].astype(float)                          # long-equity book: ~3.5% daily 99% VaR,
+    row = df.iloc[0].astype(float)                          # long-equity portfolio: ~3.5% daily 99% VaR,
     assert 0.02 < row["Total VaR 99"] < 0.06, row["Total VaR 99"]
     assert row["Scenario VaR 99"] > row["Specific vol"]     # factor tail dominates the specific tail
 
 
 @_test
-def t_var_trend_series(cube, book, D, NOTEBOOK):
+def t_var_trend_series(cube, manager, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], m["Specific vol"], levels=[l["Date"]],
-                    filter=(l["Manager"] == book) & (l["ScenarioSet"] == "HistFull"))
+                    filter=(l["Manager"] == manager) & (l["ScenarioSet"] == "HistFull"))
     assert len(df) > 50, len(df)                            # the full monthly calendar, 2016 -> D
     assert {"Scenario VaR 99", "Total VaR 99", "Specific vol"} <= set(df.columns)
 
 
 @_test
-def t_stress_board_all_sets(cube, book, D, NOTEBOOK):
+def t_stress_board_all_sets(cube, manager, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], m["Total VaR 99"],
-                    levels=[l["ScenarioSet"]], filter=(l["Manager"] == book) & (l["Date"] == D))
+                    levels=[l["ScenarioSet"]], filter=(l["Manager"] == manager) & (l["Date"] == D))
     assert {"HistFull", "Evt:COVID2020"} <= set(df.index), set(df.index)
 
 
 @_test
-def t_covid_path_unpacks_vector(cube, book, D, NOTEBOOK):
+def t_covid_path_unpacks_vector(cube, manager, D, NOTEBOOK):
     """The Day/DayDate levels read the COVID P&L vector as a per-day series (the graph-1 query):
-    `PnL at day` sliced by DaySet, the calendar date off the DayDate LEVEL, the book VaR marker
+    `PnL at day` sliced by DaySet, the calendar date off the DayDate LEVEL, the portfolio VaR marker
     (lifted, reads ScenarioSet) constant along the rows."""
     l, m = cube.levels, cube.measures
-    covid = ((l["Manager"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
+    covid = ((l["Manager"] == manager) & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
              & (l["DaySet"] == "Evt:COVID2020"))
     df = cube.query(m["PnL at day"], m["VaR line at day"],
                     levels=[l["Day"], l["DayDate"]], filter=covid).reset_index()
     assert 60 < len(df) < 120, len(df)                      # ~80 trading days, << HistFull's length
     dates = pd.to_datetime(df["DayDate"])
     assert dates.dt.year.eq(2020).all()
-    assert df["VaR line at day"].astype(float).nunique() == 1   # one book-level rule
+    assert df["VaR line at day"].astype(float).nunique() == 1   # one manager-level rule
 
 
 @_test
-def t_covid_sector_rank_is_monotonic(cube, book, D, NOTEBOOK):
-    """The graph-2 loss-curve ordering computed in the DataFrame is monotonic in book-total P&L."""
+def t_covid_sector_rank_is_monotonic(cube, manager, D, NOTEBOOK):
+    """The graph-2 loss-curve ordering computed in the DataFrame is monotonic in manager-total P&L."""
     l, m = cube.levels, cube.measures
-    covid = (l["Manager"] == book) & (l["Date"] == D) & (l["DaySet"] == "Evt:COVID2020")
+    covid = (l["Manager"] == manager) & (l["Date"] == D) & (l["DaySet"] == "Evt:COVID2020")
     sector = cube.query(m["PnL at day"],
                         levels=[l["Day"], l["DayDate"], l["Sector"]], filter=covid).reset_index()
     sector["PnL at day"] = sector["PnL at day"].astype(float)
@@ -115,7 +115,7 @@ def t_covid_sector_rank_is_monotonic(cube, book, D, NOTEBOOK):
 
 
 @_test
-def t_day_frames_coerce_daydate(cube, book, D, NOTEBOOK):
+def t_day_frames_coerce_daydate(cube, manager, D, NOTEBOOK):
     """Altair serialises EVERY column of the DataFrame it is handed, not just the encoded ones —
     and `datetime.date` is not JSON-serialisable. The Day/DayDate query returns DayDate as real
     `date` objects, so a notebook that derives a `date` column but leaves the raw DayDate column
@@ -143,7 +143,7 @@ def t_day_frames_coerce_daydate(cube, book, D, NOTEBOOK):
 
 
 @_test
-def t_build_is_idempotent(cube, book, D, NOTEBOOK):
+def t_build_is_idempotent(cube, manager, D, NOTEBOOK):
     """Re-running the notebook's build cell must NOT try to bind a second session on a port this
     kernel already owns. Closing a JupyterLab tab leaves the kernel (and its JVM) running, so
     reopening the notebook reattaches to the warm kernel and `Run All` re-executes that cell —
@@ -158,15 +158,15 @@ def main():
     print("building cube (once) ...")
     _session, cube = N.build()
     passed = failed = 0
-    for book, notebook in NOTEBOOKS.items():
+    for manager, notebook in NOTEBOOKS.items():
         if not notebook.exists():
-            print(f"SKIP  {book}: {notebook.name} not present")
+            print(f"SKIP  {manager}: {notebook.name} not present")
             continue
         D = _notebook_D(notebook)
-        print(f"\n-- {book}  ({notebook.name}, D = {D})")
+        print(f"\n-- {manager}  ({notebook.name}, D = {D})")
         for fn in RESULTS:
             try:
-                fn(cube, book, D, notebook)
+                fn(cube, manager, D, notebook)
                 print(f"PASS  {fn.__name__}")
                 passed += 1
             except Exception as e:

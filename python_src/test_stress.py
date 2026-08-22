@@ -102,25 +102,25 @@ def t_meta_serves_hypo_shocks():
 
 @integ
 def t_meta_serves_managers():
-    """Multi-manager Phase 3: /meta serves the available books/managers -- Phase 4's UI context
-    bar's single source. Today's data has no managers.parquet, so entries are book-name-only
+    """Multi-manager Phase 3: /meta serves the available managers -- Phase 4's UI context
+    bar's single source. Today's data has no managers.parquet, so entries are manager-name-only
     (entity attributes null) but the shape is identical to a build that HAS the frame."""
     import requests
     j = requests.get(f"{API}/meta", timeout=30).json()
     mgrs = j.get("managers")
     assert mgrs and isinstance(mgrs, list), mgrs
-    books = {m["book"] for m in mgrs}
+    names = {m["manager"] for m in mgrs}
     # Asserted against the cube's own Manager members rather than a hardcoded {"Soros"}: production
-    # was single-book when this test was written and is 11-book since the multi-manager build, so
-    # a literal expectation just goes stale again on the next scope change. ("N/A" is atoti's
-    # default member for exposure rows no book holds — not a manager.)
+    # was single-manager when this test was written and is 11-manager since the multi-manager
+    # build, so a literal expectation just goes stale again on the next scope change. ("N/A" is
+    # atoti's default member for exposure rows no manager holds — not a manager.)
     dims = requests.get(f"{API}/dims", timeout=60).json()
     # the cube's level is named Manager (physically renamed from Book on 2026-08-22; the API
     # surface has said "Manager" since 2026-08-14)
-    assert books == {b for b in dims["members"]["Manager"] if b != "N/A"}, \
-        (books, dims["members"]["Manager"])
+    assert names == {b for b in dims["members"]["Manager"] if b != "N/A"}, \
+        (names, dims["members"]["Manager"])
     for m in mgrs:
-        for k in ("book", "entity_name", "firm_type", "cik", "n_positions_distinct"):
+        for k in ("manager", "entity_name", "firm_type", "cik", "n_positions_distinct"):
             assert k in m, (k, m)
     # entity attributes are populated exactly when managers.parquet is present; both shapes are
     # legal, so assert the invariant (same keys either way), not one build's contents.
@@ -130,8 +130,8 @@ def t_meta_serves_managers():
 @unit
 def t_managers_meta_degrades_without_managers_frame():
     """UNIT (no backend): _managers_meta reads straight off S['frames'] -- with a positions frame
-    but no 'managers' key (today's production shape) every entry is book-name-only, same key set
-    as the with-managers case, never a different response shape the UI has to branch on."""
+    but no 'managers' key (today's production shape) every entry is manager-name-only, same key
+    set as the with-managers case, never a different response shape the UI has to branch on."""
     import risk_api
     import pandas as pd
     saved = risk_api.S.get("frames")
@@ -141,7 +141,7 @@ def t_managers_meta_degrades_without_managers_frame():
     })}   # no "managers" key at all
     try:
         out = risk_api._managers_meta()
-        assert {m["book"] for m in out} == {"Soros", "TigerGlobal"}, out
+        assert {m["manager"] for m in out} == {"Soros", "TigerGlobal"}, out
         for m in out:
             assert m["entity_name"] is None and m["firm_type"] is None and m["cik"] is None, m
     finally:
@@ -153,9 +153,10 @@ def t_managers_meta_degrades_without_managers_frame():
 
 @unit
 def t_managers_meta_uses_managers_frame_when_present():
-    """UNIT: with a managers frame present, entity attributes are pulled in per book; a book in
-    `positions` but ABSENT from `managers` (a partial/stale managers.parquet) still gets a row,
-    just with null attributes -- holdings, not the managers frame, drive which books are listed."""
+    """UNIT: with a managers frame present, entity attributes are pulled in per manager; a manager
+    in `positions` but ABSENT from `managers` (a partial/stale managers.parquet) still gets a row,
+    just with null attributes -- holdings, not the managers frame, drive which managers are
+    listed."""
     import risk_api
     import pandas as pd
     saved = risk_api.S.get("frames")
@@ -170,7 +171,7 @@ def t_managers_meta_uses_managers_frame_when_present():
         }),
     }
     try:
-        out = {m["book"]: m for m in risk_api._managers_meta()}
+        out = {m["manager"]: m for m in risk_api._managers_meta()}
         assert out["Soros"]["entity_name"] == "SOROS FUND MANAGEMENT LLC", out["Soros"]
         assert out["Soros"]["cik"] == 1029160, out["Soros"]
         assert out["Elliott"]["entity_name"] is None, out["Elliott"]   # held, not in managers frame

@@ -21,23 +21,23 @@ import barra_universe_funnel as uf
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
 
-# The per-book precompute sweep gave every loaded manager its own <stem>.<Book>.parquet, so
-# `_resolve_artifact` serves those directly and only an UNBUILT book reaches `_book_guard`.
+# The per-manager precompute sweep gave every loaded manager its own <stem>.<Manager>.parquet, so
+# `_resolve_artifact` serves those directly and only an UNBUILT manager reaches `_manager_guard`.
 # A name no precompute can have run for is the reliable way to exercise the guard; it is also
-# the real case it exists for (a UI asking for a book whose precompute has not been run).
+# the real case it exists for (a UI asking for a manager whose precompute has not been run).
 _UNBUILT = "NoSuchManager"
 
 
-def _books_with_own_artifact(stem: str, limit: int = 2) -> list:
-    """Up to `limit` loaded books (never the default) that have their own artifact on disk.
-    Empty when only the default book is built — the caller's loop then simply does nothing,
-    which is the correct behaviour on a single-book build."""
+def _managers_with_own_artifact(stem: str, limit: int = 2) -> list:
+    """Up to `limit` loaded managers (never the default) that have their own artifact on disk.
+    Empty when only the default manager is built — the caller's loop then simply does nothing,
+    which is the correct behaviour on a single-manager build."""
     import pathlib
     import requests
     out = pathlib.Path(__file__).resolve().parent.parent / "data"
     j = requests.get(f"{API}/meta", timeout=60).json()
-    books = sorted(m["book"] for m in (j.get("managers") or []) if m["book"] != "Soros")
-    return [b for b in books if (out / f"{stem}.{b}.parquet").exists()][:limit]
+    managers = sorted(m["manager"] for m in (j.get("managers") or []) if m["manager"] != "Soros")
+    return [mgr for mgr in managers if (out / f"{stem}.{mgr}.parquet").exists()][:limit]
 
 UNIT, INTEG = [], []
 CFG = {"min_mcap": 1e8, "min_hist_days": 252, "min_adv": 1e6, "min_trade_freq": 0.9,
@@ -102,11 +102,11 @@ def t_buffer_hysteresis():
 
 
 @unit
-def t_held_positions_scoped_to_one_book():
+def t_held_positions_scoped_to_one_manager():
     """Multi-manager Phase 3: `_held_positions` (which `run()`'s held_map now delegates to) must
-    only count the REQUESTED book's holdings, not every manager's. Regression guard for the
-    pre-fix bug where `held_map` had no Manager filter at all -- with >1 book that silently meant
-    'held by ANY manager'."""
+    only count the REQUESTED manager's holdings, not every manager's. Regression guard for the
+    pre-fix bug where `held_map` had no Manager filter at all -- with >1 manager that silently
+    meant 'held by ANY manager'."""
     pos = pd.DataFrame({
         "Date": pd.to_datetime(["2024-01-31", "2024-01-31", "2024-01-31", "2024-02-29"]),
         "Manager": ["Soros", "Soros", "Bridgewater", "Soros"],
@@ -119,22 +119,22 @@ def t_held_positions_scoped_to_one_book():
                           (pd.Timestamp("2024-02-29"), "AAA")}, soros_held
     assert bw_held == {(pd.Timestamp("2024-01-31"), "CCC")}, bw_held
     assert ("CCC" in {p for _, p in soros_held}) is False      # Soros never sees Bridgewater's name
-    assert any_held == soros_held | bw_held                    # None = the old (buggy) any-book union
+    assert any_held == soros_held | bw_held                 # None = the old (buggy) any-manager union
     assert any_held != soros_held                               # proves the two really differ
 
 
 @unit
-def t_run_book_param_default_matches_single_book_behaviour():
-    """`run`'s new `book="Soros"` default must reproduce the OLD unfiltered behaviour exactly on
-    single-book data (today's production positions.parquet has only ever held "Soros") — i.e. the
-    Phase-3 fix is a no-op for today's data, only a no-op-that-becomes-necessary once a second book
-    exists."""
-    pos_single_book = pd.DataFrame({
+def t_run_manager_param_default_matches_single_manager_behaviour():
+    """`run`'s new `manager="Soros"` default must reproduce the OLD unfiltered behaviour exactly on
+    single-manager data (today's production positions.parquet has only ever held "Soros") — i.e.
+    the Phase-3 fix is a no-op for today's data, only a no-op-that-becomes-necessary once a second
+    manager exists."""
+    pos_single_manager = pd.DataFrame({
         "Date": pd.to_datetime(["2024-01-31", "2024-02-29"]),
         "Manager": ["Soros", "Soros"],
         "Position": ["AAA", "BBB"],
     })
-    assert uf._held_positions(pos_single_book, "Soros") == uf._held_positions(pos_single_book, None)
+    assert uf._held_positions(pos_single_manager, "Soros") == uf._held_positions(pos_single_manager, None)
 
 
 @unit
@@ -185,28 +185,28 @@ def t_funnel_accepts_date():
 
 
 @integ
-def t_funnel_book_guard():
-    """Multi-manager Phase 3: the default book is UNCHANGED (normal series shape, no status
-    field), a book with its own artifact is served from it, and a book with NO artifact comes
-    back as a clean book_mismatch status instead of silently wrong data.
+def t_funnel_manager_guard():
+    """Multi-manager Phase 3: the default manager is UNCHANGED (normal series shape, no status
+    field), a manager with its own artifact is served from it, and a manager with NO artifact
+    comes back as a clean manager_mismatch status instead of silently wrong data.
 
-    Two branches, because `_resolve_artifact` has two: a book with its OWN
-    `<stem>.<Book>.parquet` is served from it (every loaded manager has one since the
-    124-book precompute sweep), and a book with NO artifact falls to `_book_guard`, which
-    refuses to serve the legacy file under another manager's label. This test used to assert
-    that ANY non-default book was a mismatch — true when only Soros had an artifact, stale
-    since. `_UNBUILT` is a name no precompute can have run for, which is exactly the state
+    Two branches, because `_resolve_artifact` has two: a manager with its OWN
+    `<stem>.<Manager>.parquet` is served from it (every loaded manager has one since the
+    124-manager precompute sweep), and a manager with NO artifact falls to `_manager_guard`,
+    which refuses to serve the legacy file under another manager's label. This test used to
+    assert that ANY non-default manager was a mismatch — true when only Soros had an artifact,
+    stale since. `_UNBUILT` is a name no precompute can have run for, which is exactly the state
     the guard exists to catch.
     """
     import requests
     base = requests.get(f"{API}/funnel", timeout=60).json()
-    assert "status" not in base and base["series"], base           # unchanged for the covered book
-    for bk in _books_with_own_artifact("universe_funnel"):
-        own = requests.get(f"{API}/funnel", params={"book": bk}, timeout=60).json()
-        assert "status" not in own and own["series"], (bk, own)    # its own artifact, not a guard
-    mism = requests.get(f"{API}/funnel", params={"book": _UNBUILT}, timeout=60).json()
-    assert mism["status"] == "book_mismatch", mism
-    assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", mism
+    assert "status" not in base and base["series"], base         # unchanged for the covered manager
+    for mgr in _managers_with_own_artifact("universe_funnel"):
+        own = requests.get(f"{API}/funnel", params={"manager": mgr}, timeout=60).json()
+        assert "status" not in own and own["series"], (mgr, own)   # its own artifact, not a guard
+    mism = requests.get(f"{API}/funnel", params={"manager": _UNBUILT}, timeout=60).json()
+    assert mism["status"] == "manager_mismatch", mism
+    assert mism["requested_manager"] == _UNBUILT and mism["artifact_manager"] == "Soros", mism
     assert mism["kind"] == "funnel" and mism["reason"], mism
 
 

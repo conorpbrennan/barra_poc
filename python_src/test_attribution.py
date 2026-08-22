@@ -8,8 +8,8 @@ test_attribution.py — checks for PnL attribution & factor-model validation (St
   * INTEG — need the live backend on :8010; SKIP if down. /pnl_attribution linked contributions
             sum to the geometric return exactly; /residual returns RAG checks; /linkage bands
             behave (stressed ≥ base, verdicts consistent); the cube's attribution measures foot
-            (Σ factor rows = grand) and Realized = Factor contribution + Specific PnL at book
-            level; /stress correlation-stress widens book vol.
+            (Σ factor rows = grand) and Realized = Factor contribution + Specific PnL at manager
+            level; /stress correlation-stress widens manager vol.
 
 Run:  BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_attribution.py
 """
@@ -29,18 +29,18 @@ from barra_pnl_attribution import (
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
 
-# A name no precompute can have run for — the state `_book_guard` exists to catch, and (since
-# every loaded manager got its own artifact in the 124-book sweep) the only reliable way to
-# reach it. See t_pnl_attribution_book_guard.
+# A name no precompute can have run for — the state `_manager_guard` exists to catch, and (since
+# every loaded manager got its own artifact in the 124-manager sweep) the only reliable way to
+# reach it. See t_pnl_attribution_manager_guard.
 _UNBUILT = "NoSuchManager"
 
 
-def _books() -> list:
-    """The loaded books, from /meta — never a hardcoded list. Several tests below assert
-    different things on a single-book vs a multi-book cube."""
+def _managers() -> list:
+    """The loaded managers, from /meta — never a hardcoded list. Several tests below assert
+    different things on a single-manager vs a multi-manager cube."""
     import requests
     j = requests.get(f"{API}/meta", timeout=60).json()
-    return sorted(m["book"] for m in (j.get("managers") or []))
+    return sorted(m["manager"] for m in (j.get("managers") or []))
 
 UNIT, INTEG = [], []
 
@@ -172,7 +172,7 @@ def t_linkage_driver():
     d = _linkage_driver(x_t=0.05, x_win=0.20, realized=0.02,
                         sig_daily=0.002, h=63, cum_f=0.02)
     assert d["kind"] == "mixed" and d["migrated"] and abs(d["z_window"]) > 2
-    # guards: no exposure/vol to reason about -> None (specific / book rows)
+    # guards: no exposure/vol to reason about -> None (specific / manager rows)
     assert _linkage_driver(None, 0.2, 0.01, 0.002, 63, 0.01) is None
     assert _linkage_driver(0.1, None, 0.01, 0.002, 63, 0.01) is None
     assert _linkage_driver(0.1, 0.2, 0.01, 0.0, 63, 0.01) is None
@@ -329,14 +329,14 @@ def t_residual_diagnostics_shape():
 def t_linkage_bands_behave():
     import requests
     lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
-    rows = lk["rows"] + [lk["book_total"]]
+    rows = lk["rows"] + [lk["manager_total"]]
     for r in rows:
         assert r["sd_stressed"] >= r["sd_base"] - 1e-15, r
         assert r["verdict"] in ("within", "stress", "investigate"), r
         if r["z"] is not None and abs(r["z"]) <= 2:      # inside base band -> never "investigate"
             assert r["verdict"] == "within", r
-    # book stressed band must widen MORE than vol_mult alone (the correlation blend)
-    b = lk["book_total"]
+    # manager stressed band must widen MORE than vol_mult alone (the correlation blend)
+    b = lk["manager_total"]
     assert b["sd_stressed"] / b["sd_base"] > lk["stress"]["vol_mult"] - 0.05
     zs = [abs(p["z"]) for p in lk["positions"]]
     assert zs == sorted(zs, reverse=True)
@@ -368,24 +368,24 @@ def t_linkage_materiality_floor():
 
 @integ
 def t_cube_measures_foot():
-    """Σ Factor contribution over Factor rows == the grand total (additive), and at book level
+    """Σ Factor contribution over Factor rows == the grand total (additive), and at manager level
     Realized PnL == Factor contribution + Specific PnL.
 
-    SINGLE-BOOK ONLY. These three measures are baked columns on tables keyed without Manager, so on
-    a multi-book cube `_validate_pivot` rejects them outright (BOOK_INDEPENDENT_MEASURES) rather
-    than serve one arbitrary book's numbers under every book's label — see
-    barra_factor_risk_cube.py and t_book_independent_measures_guarded_when_multi_book, which pins
-    that rejection. So on multi-book data the identity is not reachable through /pivot BY DESIGN,
-    and this asserts the rejection instead of asserting nothing."""
+    SINGLE-MANAGER ONLY. These three measures are baked columns on tables keyed without Manager, so
+    on a multi-manager cube `_validate_pivot` rejects them outright (MANAGER_INDEPENDENT_MEASURES)
+    rather than serve one arbitrary manager's numbers under every manager's label — see
+    barra_factor_risk_cube.py and t_manager_independent_measures_guarded_when_multi_manager, which
+    pins that rejection. So on multi-manager data the identity is not reachable through /pivot BY
+    DESIGN, and this asserts the rejection instead of asserting nothing."""
     import requests
     q2 = {"rows": "Manager", "measures": "Factor contribution,Specific PnL,Realized PnL",
           "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
     r2 = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=60)
-    if len(_books()) > 1:
+    if len(_managers()) > 1:
         assert r2.status_code == 400, r2.text
-        assert "book-independent" in r2.json()["detail"], r2.text
-        print("    (multi-book cube: identity unreachable via /pivot by design — "
-              "guard rejection asserted instead; per-book truth is barra_pnl_attribution.py)")
+        assert "manager-independent" in r2.json()["detail"], r2.text
+        print("    (multi-manager cube: identity unreachable via /pivot by design — "
+              "guard rejection asserted instead; per-manager truth is barra_pnl_attribution.py)")
         return
     q = {"rows": "Factor", "measures": "Factor contribution", "totals": "true",
          "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
@@ -406,47 +406,47 @@ def t_stress_correlation_mode():
     assert abs(cs["base_var99_normal"] - 2.326 * cs["base_vol_1d"]) < 1e-12
 
 
-# ------------------------------------------------------ multi-manager Phase 3: single-book guards
+# --------------------------------------------------------- multi-manager Phase 3: single-manager guards
 @integ
-def t_pnl_attribution_book_guard():
-    """All four endpoints: the default book is UNCHANGED, a book with its own
-    `pnl_attribution.<Book>.parquet` is served from it, and a book with NO artifact comes back as
-    a clean book_mismatch status (HTTP 200, never a 500) instead of silently showing Soros's PnL
-    under another manager's label.
+def t_pnl_attribution_manager_guard():
+    """All four endpoints: the default manager is UNCHANGED, a manager with its own
+    `pnl_attribution.<Manager>.parquet` is served from it, and a manager with NO artifact comes
+    back as a clean manager_mismatch status (HTTP 200, never a 500) instead of silently showing
+    Soros's PnL under another manager's label.
 
-    The mismatch branch used to be checked with a real manager (AQR). Every loaded book has its
-    own artifact since the 124-book precompute sweep, so that is now the SERVED branch; `_UNBUILT`
+    The mismatch branch used to be checked with a real manager (AQR). Every loaded manager has its
+    own artifact since the 124-manager precompute sweep, so that is now the SERVED branch; `_UNBUILT`
     is a name no precompute can have run for, which is the state the guard actually exists for."""
     import pathlib
     import requests
     eps = ("/pnl_attribution", "/pnl_attribution/residual",
            "/pnl_attribution/linkage", "/pnl_attribution/names")
     data = pathlib.Path(__file__).resolve().parent.parent / "data"
-    built = [b for b in _books()
-             if b != "Soros" and (data / f"pnl_attribution.{b}.parquet").exists()][:2]
+    built = [m for m in _managers()
+             if m != "Soros" and (data / f"pnl_attribution.{m}.parquet").exists()][:2]
     for ep in eps:
         base = requests.get(f"{API}{ep}", timeout=60).json()
-        assert "status" not in base or base.get("status") != "book_mismatch", (ep, base)
-        for bk in built:
-            own = requests.get(f"{API}{ep}", params={"book": bk}, timeout=120).json()
-            assert own.get("status") != "book_mismatch", (ep, bk, own)
-        mism = requests.get(f"{API}{ep}", params={"book": _UNBUILT}, timeout=60).json()
-        assert mism.get("status") == "book_mismatch", (ep, mism)
-        assert mism["requested_book"] == _UNBUILT and mism["artifact_book"] == "Soros", (ep, mism)
+        assert "status" not in base or base.get("status") != "manager_mismatch", (ep, base)
+        for mgr in built:
+            own = requests.get(f"{API}{ep}", params={"manager": mgr}, timeout=120).json()
+            assert own.get("status") != "manager_mismatch", (ep, mgr, own)
+        mism = requests.get(f"{API}{ep}", params={"manager": _UNBUILT}, timeout=60).json()
+        assert mism.get("status") == "manager_mismatch", (ep, mism)
+        assert mism["requested_manager"] == _UNBUILT and mism["artifact_manager"] == "Soros", (ep, mism)
         assert mism["kind"] == "pnl_attribution", (ep, mism)
 
 
 @integ
-def t_book_independent_measures_inert_with_one_book():
-    """Factor contribution / Specific PnL / Realized PnL are book-independent by a known atoti
+def t_manager_independent_measures_inert_with_one_manager():
+    """Factor contribution / Specific PnL / Realized PnL are manager-independent by a known atoti
     limitation (see barra_factor_risk_cube.py); the /pivot guard added in Phase 3 must be a NO-OP
-    with SINGLE-book data -- it is conditional on >1 book by construction, and firing it on a
-    single-book cube would be a regression (it would block the one case where those measures are
-    correct). Skips on multi-book data, where the guard is SUPPOSED to fire and
-    t_book_independent_measures_guarded_when_multi_book pins that it does."""
+    with SINGLE-manager data -- it is conditional on >1 manager by construction, and firing it on a
+    single-manager cube would be a regression (it would block the one case where those measures are
+    correct). Skips on multi-manager data, where the guard is SUPPOSED to fire and
+    t_manager_independent_measures_guarded_when_multi_manager pins that it does."""
     import requests
-    if len(_books()) > 1:
-        print("    (multi-book cube: the guard is meant to fire here — see the unit test)")
+    if len(_managers()) > 1:
+        print("    (multi-manager cube: the guard is meant to fire here — see the unit test)")
         return
     q = {"rows": "Manager", "measures": "Factor contribution,Specific PnL,Realized PnL",
          "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
@@ -455,13 +455,13 @@ def t_book_independent_measures_inert_with_one_book():
 
 
 @unit
-def t_book_independent_measures_guarded_when_multi_book():
-    """UNIT (no backend): with >1 book loaded on the live frames, _validate_pivot must reject the
-    three book-independent measures with a clear message pointing at the per-book alternative --
-    and this must propagate to /analysis and /ask automatically since they call the same guard
-    (see risk_api.py's _validate_pivot docstring). A non-book-independent measure (Net exposure)
-    must still be allowed under the same multi-book condition -- the guard is scoped to the three
-    named measures only, not a blanket multi-book lockout."""
+def t_manager_independent_measures_guarded_when_multi_manager():
+    """UNIT (no backend): with >1 manager loaded on the live frames, _validate_pivot must reject
+    the three manager-independent measures with a clear message pointing at the per-manager
+    alternative -- and this must propagate to /analysis and /ask automatically since they call the
+    same guard (see risk_api.py's _validate_pivot docstring). A non-manager-independent measure
+    (Net exposure) must still be allowed under the same multi-manager condition -- the guard is
+    scoped to the three named measures only, not a blanket multi-manager lockout."""
     import risk_api
     import pandas as pd
     saved = risk_api.S.get("frames")
@@ -470,14 +470,14 @@ def t_book_independent_measures_guarded_when_multi_book():
         "Manager": ["AQR", "Bridgewater"], "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
     })}
     try:
-        assert risk_api._multi_book_cube() is True
-        for meas in risk_api.BOOK_INDEPENDENT_MEASURES:
+        assert risk_api._multi_manager_cube() is True
+        for meas in risk_api.MANAGER_INDEPENDENT_MEASURES:
             try:
                 risk_api._validate_pivot(["Position"], [], [meas], {})
-                assert False, f"{meas} should have been rejected with >1 book loaded"
+                assert False, f"{meas} should have been rejected with >1 manager loaded"
             except risk_api.HTTPException as e:
                 assert e.status_code == 400
-                assert "book-independent" in e.detail and "barra_pnl_attribution.py" in e.detail, e.detail
+                assert "manager-independent" in e.detail and "barra_pnl_attribution.py" in e.detail, e.detail
         risk_api._validate_pivot(["Position"], [], ["Net exposure"], {})   # must NOT raise
     finally:
         if saved is not None:
@@ -487,8 +487,8 @@ def t_book_independent_measures_guarded_when_multi_book():
 
 
 @unit
-def t_book_independent_measures_allowed_with_one_book():
-    """UNIT: the guard is conditional on >1 book -- with exactly one (today's real shape), the
+def t_manager_independent_measures_allowed_with_one_manager():
+    """UNIT: the guard is conditional on >1 manager -- with exactly one (today's real shape), the
     three measures pass _validate_pivot untouched, matching pre-Phase-3 behaviour exactly."""
     import risk_api
     import pandas as pd
@@ -498,8 +498,8 @@ def t_book_independent_measures_allowed_with_one_book():
         "Weight": [1.0],
     })}
     try:
-        assert risk_api._multi_book_cube() is False
-        for meas in risk_api.BOOK_INDEPENDENT_MEASURES:
+        assert risk_api._multi_manager_cube() is False
+        for meas in risk_api.MANAGER_INDEPENDENT_MEASURES:
             risk_api._validate_pivot(["Position"], [], [meas], {})   # must NOT raise
     finally:
         if saved is not None:
@@ -509,13 +509,13 @@ def t_book_independent_measures_allowed_with_one_book():
 
 
 # ------------------------------------------------------ /pnl_attribution/drill (2026-08-22)
-# The Vite reconcile drawers' new per-book-correct source: computed live from S["frames"] (no
-# artifact, no cube measure), so it works on ANY loaded book unlike the baked Factor contribution
-# cube measure /pivot rejects above one book.
+# The Vite reconcile drawers' new per-manager-correct source: computed live from S["frames"] (no
+# artifact, no cube measure), so it works on ANY loaded manager unlike the baked Factor contribution
+# cube measure /pivot rejects above one manager.
 @integ
 def t_drill_position_ties_to_linkage():
     """The acceptance test: a position-mode drill's bars + specific sum to the SAME realized
-    /pnl_attribution/linkage reports for that exact (book, T, to, position) -- both paths run
+    /pnl_attribution/linkage reports for that exact (manager, T, to, position) -- both paths run
     _name_attr's identical arithmetic, this one just keeps the factor axis instead of collapsing
     it."""
     import requests
@@ -523,7 +523,7 @@ def t_drill_position_ties_to_linkage():
     assert lk["positions"], "no position surprises in the default window -- widen the fixture"
     p = lk["positions"][0]
     d = requests.get(f"{API}/pnl_attribution/drill",
-                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                     params={"T": lk["T"], "to": lk["to"], "manager": lk["manager"],
                              "position": p["position"]}, timeout=60).json()
     bars_sum = sum(b["contribution"] for b in d["bars"])
     assert abs((bars_sum + d["specific_pnl"]) - d["realized"]) < 1e-12, d
@@ -536,12 +536,12 @@ def t_drill_position_ties_to_linkage():
 @integ
 def t_drill_factor_bars_sum_to_total():
     """Factor-mode: the per-Issuer 'who carried it' bars sum exactly to the factor's own window
-    contribution for the book."""
+    contribution for the manager."""
     import requests
     lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
     frow = next(r for r in lk["rows"] if r["kind"] == "factor")
     d = requests.get(f"{API}/pnl_attribution/drill",
-                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                     params={"T": lk["T"], "to": lk["to"], "manager": lk["manager"],
                              "factor": frow["name"]}, timeout=60).json()
     assert d["factor"] == frow["name"]
     bars_sum = sum(b["contribution"] for b in d["bars"])
@@ -549,30 +549,30 @@ def t_drill_factor_bars_sum_to_total():
 
 
 @integ
-def t_drill_scales_by_book_weight():
-    """A second loaded book's drill for a shared name differs from Soros's -- proving the
-    computation is genuinely per-book, not the baked cube column's one-arbitrary-book collapse
-    (see CLAUDE.md 'book-independent attribution limitation')."""
+def t_drill_scales_by_manager_weight():
+    """A second loaded manager's drill for a shared name differs from Soros's -- proving the
+    computation is genuinely per-manager, not the baked cube column's one-arbitrary-manager
+    collapse (see CLAUDE.md 'manager-independent attribution limitation')."""
     import requests
-    books = _books()
-    other = next((b for b in books if b != "Soros"), None)
+    managers = _managers()
+    other = next((m for m in managers if m != "Soros"), None)
     if other is None:
-        print("    (single-book cube: nothing to compare against)")
+        print("    (single-manager cube: nothing to compare against)")
         return
     lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
     T, to = lk["T"], lk["to"]
     names = requests.get(f"{API}/pnl_attribution/names",
-                         params={"from": T, "to": to, "book": "Soros"}, timeout=60).json()
-    if names.get("status") == "book_mismatch":
+                         params={"from": T, "to": to, "manager": "Soros"}, timeout=60).json()
+    if names.get("status") == "manager_mismatch":
         print("    (Soros /pnl_attribution/names artifact unavailable at this window)")
         return
     candidates = [r["position"] for r in names.get("winners", []) + names.get("losers", [])]
     shared = None
     for pos in candidates:
         a = requests.get(f"{API}/pnl_attribution/drill",
-                         params={"T": T, "to": to, "book": "Soros", "position": pos}, timeout=60)
+                         params={"T": T, "to": to, "manager": "Soros", "position": pos}, timeout=60)
         b = requests.get(f"{API}/pnl_attribution/drill",
-                         params={"T": T, "to": to, "book": other, "position": pos}, timeout=60)
+                         params={"T": T, "to": to, "manager": other, "position": pos}, timeout=60)
         if a.status_code == 200 and b.status_code == 200:
             shared = (pos, a.json(), b.json())
             break
@@ -580,7 +580,7 @@ def t_drill_scales_by_book_weight():
         print(f"    (no name held by both Soros and {other} in this window)")
         return
     pos, da, db = shared
-    assert da["book"] == "Soros" and db["book"] == other, (da, db)
+    assert da["manager"] == "Soros" and db["manager"] == other, (da, db)
     assert (abs(da["realized"] - db["realized"]) > 1e-9
             or abs(da["specific_pnl"] - db["specific_pnl"]) > 1e-9), (pos, da, db)
 
@@ -590,10 +590,10 @@ def t_drill_requires_exactly_one_of_position_or_factor():
     import requests
     lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
     r = requests.get(f"{API}/pnl_attribution/drill",
-                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"]}, timeout=60)
+                     params={"T": lk["T"], "to": lk["to"], "manager": lk["manager"]}, timeout=60)
     assert r.status_code == 400, r.text
     r2 = requests.get(f"{API}/pnl_attribution/drill",
-                      params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                      params={"T": lk["T"], "to": lk["to"], "manager": lk["manager"],
                               "position": lk["positions"][0]["position"], "factor": "Market"},
                       timeout=60)
     assert r2.status_code == 400, r2.text

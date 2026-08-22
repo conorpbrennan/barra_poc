@@ -3,18 +3,18 @@ test_risk_measures.py — backend (cube) checks for the VaR decomposition measur
 live /pivot API so they exercise exactly what the UI sees.
 
 The defining contrast (Flex Agg convention):
-  * MARGINAL    (component)        is ADDITIVE -> Σ_member = book measure exactly.
+  * MARGINAL    (component)        is ADDITIVE -> Σ_member = the manager's measure exactly.
   * INCREMENTAL (remove-recompute) answers "how much risk does removing this member release".
 
-Σ_member Incremental < book is a property of a COHERENT (sub-additive) measure, and the suite
-pins it on `Model vol` — a standard deviation — over member dimensions, where it holds on both
-books. It is NOT a property of the VaR pair: a 99% quantile is the textbook example of a measure
-that is not sub-additive, and the remove-recompute re-reads the reduced book at ITS OWN tail day,
-so each member gets a credit for shifting the tail as well as for its own risk. Measured
-2026-08-21 on Soros/HistFull, Σ Incremental vs book: Scenario VaR by Issuer 0.0428 vs 0.0353,
-Total VaR by Issuer 0.0427 vs 0.0358 — both over. The old `t_incremental_total_is_subadditive`
-asserted the textbook line against the quantile measure and had failed ever since it was written;
-see `t_incremental_var_bounds` for what actually holds.
+Σ_member Incremental < the manager total is a property of a COHERENT (sub-additive) measure, and
+the suite pins it on `Model vol` — a standard deviation — over member dimensions, where it holds
+on both managers. It is NOT a property of the VaR pair: a 99% quantile is the textbook example of
+a measure that is not sub-additive, and the remove-recompute re-reads the reduced portfolio at ITS
+OWN tail day, so each member gets a credit for shifting the tail as well as for its own risk.
+Measured 2026-08-21 on Soros/HistFull, Σ Incremental vs manager total: Scenario VaR by Issuer
+0.0428 vs 0.0353, Total VaR by Issuer 0.0427 vs 0.0358 — both over. The old
+`t_incremental_total_is_subadditive` asserted the textbook line against the quantile measure and
+had failed ever since it was written; see `t_incremental_var_bounds` for what actually holds.
 
 Requires the FastAPI backend on http://127.0.0.1:8010; SKIPS (exit 0) if unreachable. Run:
     BARRA_API=http://127.0.0.1:8010 ../barra/bin/python test_risk_measures.py
@@ -47,9 +47,9 @@ def _backend_up():
         return False
 
 
-def _pivot(rows, measures, book="Soros", scen="HistFull", dollar=False):
+def _pivot(rows, measures, manager="Soros", scen="HistFull", dollar=False):
     import requests
-    filters = {"Manager": [book], "Date": [DATE], "ScenarioSet": [scen]}
+    filters = {"Manager": [manager], "Date": [DATE], "ScenarioSet": [scen]}
     q = {"rows": rows, "measures": ",".join(measures),
          "filters": json.dumps(filters), "totals": "true"}
     if dollar:
@@ -65,27 +65,27 @@ def _col_sum(recs, name):
 
 @test
 def t_marginal_scenario_is_additive():
-    """Σ Marginal Scenario VaR 99 over Factor == book Scenario VaR (the grand corner)."""
+    """Σ Marginal Scenario VaR 99 over Factor == the manager's Scenario VaR (the grand corner)."""
     d = _pivot("Factor", ["Marginal Scenario VaR 99"])
     s = _col_sum(d["records"], "Marginal Scenario VaR 99")
-    book = d["grand"]["Marginal Scenario VaR 99"]
-    assert abs(s - book) < 1e-9, f"marginal not additive: Σ={s} book={book}"
-    assert book > 0, book
+    total = d["grand"]["Marginal Scenario VaR 99"]
+    assert abs(s - total) < 1e-9, f"marginal not additive: Σ={s} total={total}"
+    assert total > 0, total
 
 
 @test
 def t_marginal_total_is_additive():
-    """Σ Marginal Total VaR 99 over Issuer == book Total VaR (Euler split sums exactly)."""
+    """Σ Marginal Total VaR 99 over Issuer == the manager's Total VaR (Euler split sums exactly)."""
     d = _pivot("Issuer", ["Marginal Total VaR 99"])
     s = _col_sum(d["records"], "Marginal Total VaR 99")
-    book = d["grand"]["Marginal Total VaR 99"]
-    assert abs(s - book) < 1e-9, f"marginal total not additive: Σ={s} book={book}"
+    total = d["grand"]["Marginal Total VaR 99"]
+    assert abs(s - total) < 1e-9, f"marginal total not additive: Σ={s} total={total}"
 
 
 @test
 def t_incremental_total_row_reconciles_with_marginal():
-    """The col-TOTAL (grand) row must read the SAME book VaR under Marginal and Incremental —
-    both reference the read-off book VaR, so they agree to the last digit (the off-by-0.001 bug
+    """The col-TOTAL (grand) row must read the SAME manager VaR under Marginal and Incremental —
+    both reference the read-off manager VaR, so they agree to the last digit (the off-by-0.001 bug
     was Incremental referencing the interpolated quantile instead)."""
     for rows, pair in (("Factor", ("Marginal Scenario VaR 99", "Incremental Scenario VaR 99")),
                        ("Issuer", ("Marginal Total VaR 99", "Incremental Total VaR 99"))):
@@ -95,44 +95,45 @@ def t_incremental_total_row_reconciles_with_marginal():
 
 @test
 def t_incremental_scenario_is_subadditive():
-    """Σ Incremental Scenario VaR 99 < book VaR, and each member's incremental ≤ its marginal.
+    """Σ Incremental Scenario VaR 99 < the manager's VaR, and each member's incremental ≤ its
+    marginal.
 
     NB this holds over FACTOR members and is not a general property — the same measure runs OVER
-    the book by Issuer/Position/Sector (see the module docstring). Kept as a regression pin on the
-    factor decomposition, not as evidence that quantile incrementals are sub-additive."""
+    the manager total by Issuer/Position/Sector (see the module docstring). Kept as a regression
+    pin on the factor decomposition, not as evidence that quantile incrementals are sub-additive."""
     d = _pivot("Factor", ["Marginal Scenario VaR 99", "Incremental Scenario VaR 99"])
     recs = d["records"]
-    book = d["grand"]["Marginal Scenario VaR 99"]
+    total = d["grand"]["Marginal Scenario VaR 99"]
     inc = _col_sum(recs, "Incremental Scenario VaR 99")
-    assert inc < book - 1e-6, f"incremental should be sub-additive: Σincr={inc} !< book={book}"
+    assert inc < total - 1e-6, f"incremental should be sub-additive: Σincr={inc} !< total={total}"
     # the dominant factor's incremental must be strictly less than its marginal (diversification)
     top = max(recs, key=lambda r: r.get("Marginal Scenario VaR 99") or 0)
     mar, im = top["Marginal Scenario VaR 99"], top["Incremental Scenario VaR 99"]
     assert 0 < im <= mar + 1e-9, f"top factor {top.get('Factor')}: incr={im} marg={mar}"
-    assert im < mar, f"top factor incr {im} should be < marg {mar} (diversified book)"
+    assert im < mar, f"top factor incr {im} should be < marg {mar} (diversified portfolio)"
 
 
 @test
 def t_incremental_model_vol_is_subadditive():
-    """Σ Incremental Model vol < book σ over MEMBER dimensions, on the reference book and the
-    largest one — the diversification property, pinned on the measure that actually has it.
+    """Σ Incremental Model vol < the manager's σ over MEMBER dimensions, on the reference manager
+    and the largest one — the diversification property, pinned on the measure that actually has it.
 
     σ = √(x'Fx + w'Δw) is a standard deviation, so it is sub-additive; removing a member releases
-    less than that member's Euler share, and the releases sum to less than the book. Holds by
-    Issuer, Position and Sector, on Soros (181 names) and Vanguard (3,617).
+    less than that member's Euler share, and the releases sum to less than the manager total. Holds
+    by Issuer, Position and Sector, on Soros (181 names) and Vanguard (3,617).
 
     NB by FACTOR it does NOT, and that is documented, not a defect: `Incremental Model vol` strips
     the member's own specific variance — right for a name, wrong for a factor, where the whole
     specific block is then subtracted once per factor. barra_factor_risk_cube.py flags the same
     fan-out where it defines `Vol ex factor`, which is the factor-correct twin."""
-    for book_ in ("Soros", "Vanguard"):
+    for manager in ("Soros", "Vanguard"):
         for rows in ("Issuer", "Sector"):
-            d = _pivot(rows, ["Marginal Model vol", "Incremental Model vol"], book=book_)
+            d = _pivot(rows, ["Marginal Model vol", "Incremental Model vol"], manager=manager)
             recs = [r for r in d["records"] if (r.get("Marginal Model vol") or 0) != 0]
-            book = d["grand"]["Marginal Model vol"]
+            total = d["grand"]["Marginal Model vol"]
             inc = _col_sum(recs, "Incremental Model vol")
-            ctx = (book_, rows, len(recs))
-            assert inc < book - 1e-9, f"{ctx}: Σincr={inc} !< book={book}"
+            ctx = (manager, rows, len(recs))
+            assert inc < total - 1e-9, f"{ctx}: Σincr={inc} !< total={total}"
             assert all((r.get("Incremental Model vol") or 0) >= 0 for r in recs), ctx
             top = max(recs, key=lambda r: r.get("Marginal Model vol") or 0)
             assert 0 < top["Incremental Model vol"] < top["Marginal Model vol"], (ctx, top)
@@ -141,21 +142,22 @@ def t_incremental_model_vol_is_subadditive():
 @test
 def t_incremental_var_bounds():
     """What the VaR incrementals DO satisfy: every member releases something, and no member
-    releases more than the whole book.
+    releases more than the whole manager total.
 
-    Deliberately no assertion on Σ_member vs book. VaR is a quantile and is not sub-additive, and
-    the remove-recompute reads the reduced book at its own tail day, so the sum runs OVER the book
-    on this market-dominated book (measured above). Asserting the violation would be worse than
-    asserting the textbook claim: it would pin today's incoherence as a requirement, and a future
-    switch to a coherent basis (ES, or a common tail day) would then read as a regression."""
+    Deliberately no assertion on Σ_member vs the manager total. VaR is a quantile and is not
+    sub-additive, and the remove-recompute reads the reduced portfolio at its own tail day, so the
+    sum runs OVER the total on this market-dominated portfolio (measured above). Asserting the
+    violation would be worse than asserting the textbook claim: it would pin today's incoherence as
+    a requirement, and a future switch to a coherent basis (ES, or a common tail day) would then
+    read as a regression."""
     for meas in ("Scenario VaR 99", "Total VaR 99"):
         d = _pivot("Issuer", [f"Marginal {meas}", f"Incremental {meas}"])
         recs = [r for r in d["records"] if (r.get(f"Marginal {meas}") or 0) != 0]
-        book = d["grand"][f"Marginal {meas}"]
-        assert recs and book > 0, (meas, book)
+        total = d["grand"][f"Marginal {meas}"]
+        assert recs and total > 0, (meas, total)
         for r in recs:
             v = r.get(f"Incremental {meas}") or 0.0
-            assert v <= book + 1e-9, (meas, r)          # nobody releases more than the book holds
+            assert v <= total + 1e-9, (meas, r)         # nobody releases more than the total holds
         top = max(recs, key=lambda r: r.get(f"Marginal {meas}") or 0)
         assert top[f"Incremental {meas}"] > 0, (meas, top)
 
@@ -178,25 +180,25 @@ def _scenario_pnl(filters, sset="Evt:COVID2020"):
 
 @test
 def t_scenario_pnl_filters_scope_the_path():
-    """/scenario_pnl honors the generic `filters` JSON: a Book scope returns the full path; an
+    """/scenario_pnl honors the generic `filters` JSON: a Manager scope returns the full path; an
     Issuer drill is a non-empty subset on the SAME date axis; Date/ScenarioSet inside `filters`
     are ignored (they're the fixed path axis, taken from date=/set=)."""
-    book = _scenario_pnl({"Manager": ["Soros"]})
-    assert book["n"] > 0 and book["var99"] > 0, book
+    mgr = _scenario_pnl({"Manager": ["Soros"]})
+    assert mgr["n"] > 0 and mgr["var99"] > 0, mgr
 
-    # a held issuer -> non-empty path, same length (date axis) as the book
+    # a held issuer -> non-empty path, same length (date axis) as the manager total
     import requests, urllib.parse
     q = {"rows": "Issuer", "measures": "Net exposure",
          "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})}
     recs = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()["records"]
     issuer = next(r["Issuer"] for r in recs if r.get("Net exposure"))
     iss = _scenario_pnl({"Manager": ["Soros"], "Issuer": [issuer]})
-    assert iss["n"] == book["n"], (iss["n"], book["n"])
+    assert iss["n"] == mgr["n"], (iss["n"], mgr["n"])
     assert iss["var99"] > 0, iss
 
     # Date/ScenarioSet in `filters` must be stripped (path axis comes from the date/set params)
     bogus = _scenario_pnl({"Manager": ["Soros"], "Date": ["1999-01-01"], "ScenarioSet": ["HistFull"]})
-    assert abs(bogus["var99"] - book["var99"]) < 1e-12, (bogus["var99"], book["var99"])
+    assert abs(bogus["var99"] - mgr["var99"]) < 1e-12, (bogus["var99"], mgr["var99"])
 
 
 @test
@@ -235,16 +237,17 @@ def t_scenario_pnl_stats_come_from_cube():
 
 
 @test
-def t_scenario_pnl_sector_breakout_stacks_to_book():
+def t_scenario_pnl_sector_breakout_stacks_to_manager():
     """breakout=Sector returns the loss curve decomposed by sector (each sector's per-day P&L is a
-    CUBE aggregation); at the worst scenario the sectors sum to the book worst loss (they stack)."""
+    CUBE aggregation); at the worst scenario the sectors sum to the manager's worst loss (they
+    stack)."""
     import requests, urllib.parse
     q = {"date": DATE, "set": "Evt:COVID2020", "filters": json.dumps({"Manager": ["Soros"]}),
          "breakout": "Sector"}
     d = requests.get(f"{API}/scenario_pnl?{urllib.parse.urlencode(q)}", timeout=60).json()
     st = d["datasets"]["dist_stacked"]
     assert st and {"date", "Sector", "pnl", "rank"} <= set(st[0]), st[:1]
-    # on the worst-loss DATE the sector contributions sum to the book worst loss (they stack)
+    # on the worst-loss DATE the sector contributions sum to the manager's worst loss (they stack)
     worst_rows = [r for r in st if r["date"] == d["worst"]["date"]]
     assert worst_rows, "no rows on worst date"
     assert abs(sum(r["pnl"] for r in worst_rows) - d["worst"]["pnl"]) < 1e-9, \
@@ -254,13 +257,14 @@ def t_scenario_pnl_sector_breakout_stacks_to_book():
 
 
 @test
-def t_day_path_markers_tie_book_cells_and_legacy_is_pruned():
+def t_day_path_markers_tie_manager_cells_and_legacy_is_pruned():
     """The per-day path (2026-08-15): rows=[Day, DayDate] + a DaySet slice. Its markers are the
-    BOOK cells made chart-ready: `VaR line at day` == -`Scenario VaR 99`, `Worst pnl at day` ==
+    MANAGER cells made chart-ready: `VaR line at day` == -`Scenario VaR 99`, `Worst pnl at day` ==
     -`Scenario worst loss` (and == the minimum of the path itself), `Worst date at day (epoch)` ==
     `Scenario worst date (epoch)` and names a real day of the path; the day x Sector breakout foots
-    to the book day; a query with no DaySet context carries the DaySet warning (the ScenarioSet one
-    does not cover it); and the legacy ScenarioDay names are OFF the allowlist (400), round 3."""
+    to the manager's day; a query with no DaySet context carries the DaySet warning (the
+    ScenarioSet one does not cover it); and the legacy ScenarioDay names are OFF the allowlist
+    (400), round 3."""
     import requests, urllib.parse
     import pandas as pd
     base = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
@@ -272,18 +276,18 @@ def t_day_path_markers_tie_book_cells_and_legacy_is_pruned():
     assert new["warning"] is None, new["warning"]
     nr = new["records"]
     assert 1 < len(nr) < 500, len(nr)
-    book = piv("ScenarioSet", "Scenario VaR 99,Scenario worst loss,Scenario worst date (epoch)", base).json()["records"][0]
+    mgr = piv("ScenarioSet", "Scenario VaR 99,Scenario worst loss,Scenario worst date (epoch)", base).json()["records"][0]
     epoch = lambda d: (pd.Timestamp(d) - pd.Timestamp("1970-01-01")).days
     for r in nr:
-        assert abs(r["VaR line at day"] + book["Scenario VaR 99"]) < 1e-12, (r, book)
-        assert abs(r["Worst pnl at day"] + book["Scenario worst loss"]) < 1e-12, (r, book)
-        assert r["Worst date at day (epoch)"] == book["Scenario worst date (epoch)"], (r, book)
+        assert abs(r["VaR line at day"] + mgr["Scenario VaR 99"]) < 1e-12, (r, mgr)
+        assert abs(r["Worst pnl at day"] + mgr["Scenario worst loss"]) < 1e-12, (r, mgr)
+        assert r["Worst date at day (epoch)"] == mgr["Scenario worst date (epoch)"], (r, mgr)
     pnls = [r["PnL at day"] for r in nr]
     assert abs(min(pnls) - nr[0]["Worst pnl at day"]) < 1e-12, (min(pnls), nr[0]["Worst pnl at day"])
     worst_day = nr[pnls.index(min(pnls))]
     assert epoch(worst_day["DayDate"]) == nr[0]["Worst date at day (epoch)"], worst_day
     assert [r["Day"] for r in nr] == list(range(len(nr))), "Day is the set's 0..n-1 index"
-    # the breakout: sector rows of a day sum to that day's book P&L
+    # the breakout: sector rows of a day sum to that day's manager P&L
     sec = piv("Day,DayDate,Sector", "PnL at day", new_f).json()["records"]
     for day in (0, 1, len(nr) - 1):
         s_ = sum(r["PnL at day"] for r in sec if r["Day"] == day)
@@ -306,7 +310,7 @@ def t_day_vector_plan_ties_level_plan():
     cube's `Scenario PnL vector` (+ its dates dual, + one single-cell markers query) instead of
     the 2,618-member level scan. It must be indistinguishable in output: record-for-record equal
     (same keys, same order, |diff| < 1e-12) to the LEVEL plan (`plan=levels`) -- the fact-joined
-    Day level -- on Soros and Vanguard, HistFull and Evt:COVID2020, book path and the
+    Day level -- on Soros and Vanguard, HistFull and Evt:COVID2020, the manager's path and the
     day x Sector breakout (which must still foot). Since 2026-08-21 (TODO item 5) it also takes
     TWO breakouts and a Day/DayDate window, both pinned here against `plan=levels`; the shape it
     still does not take (no DaySet) falls through to the level plan and its warning."""
@@ -325,10 +329,10 @@ def t_day_vector_plan_ties_level_plan():
             else:
                 assert x == y, (ctx, k, x, y)
     MEAS = "PnL at day,VaR line at day,Worst pnl at day,Worst date at day (epoch)"
-    for book, date in (("Soros", DATE), ("Vanguard", "2026-06-30")):
+    for manager, date in (("Soros", DATE), ("Vanguard", "2026-06-30")):
         for st in ("HistFull", "Evt:COVID2020"):
-            ctx = (book, st)
-            f = {"Manager": [book], "Date": [date], "ScenarioSet": [st], "DaySet": [st]}
+            ctx = (manager, st)
+            f = {"Manager": [manager], "Date": [date], "ScenarioSet": [st], "DaySet": [st]}
             vec = piv("Day,DayDate", MEAS, f)
             lev = piv("Day,DayDate", MEAS, f, plan="levels")
             assert vec.get("plan") == "vector" and lev.get("plan") == "levels", (ctx, vec.get("plan"), lev.get("plan"))
@@ -338,12 +342,12 @@ def t_day_vector_plan_ties_level_plan():
             for a, b in zip(vr, lr):
                 same(a, b, ctx)
             # DaySet-only filter (no ScenarioSet) is the same shape
-            v2 = piv("Day,DayDate", "PnL at day", {"Manager": [book], "Date": [date], "DaySet": [st]})
+            v2 = piv("Day,DayDate", "PnL at day", {"Manager": [manager], "Date": [date], "DaySet": [st]})
             assert v2.get("plan") == "vector" and len(v2["records"]) == len(vr), ctx
             for a, b in zip(v2["records"], vr):
                 assert abs(a["PnL at day"] - b["PnL at day"]) < 1e-12, (ctx, a, b)
             # day x Sector: vector == levels record-for-record (same hierarchy path columns) + foots
-            if st == "Evt:COVID2020" or book == "Soros":      # keep the Vanguard HistFull level scan out of the gate
+            if st == "Evt:COVID2020" or manager == "Soros":   # keep the Vanguard HistFull level scan out of the gate
                 vs = piv("Day,DayDate,Sector", "PnL at day,VaR line at day", f)
                 ls = piv("Day,DayDate,Sector", "PnL at day,VaR line at day", f, plan="levels")
                 assert vs.get("plan") == "vector" and len(vs["records"]) == len(ls["records"]) > 0, (ctx, len(vs["records"]), len(ls["records"]))
@@ -406,7 +410,7 @@ def main():
 
 
 
-# ---- dollars (2026-08-22, Units-context refactor): MV in the cube, Book MV, the cube's `Units`
+# ---- dollars (2026-08-22, Units-context refactor): MV in the cube, Manager MV, the cube's `Units`
 # parameter simulation (weight <-> $ on the SAME measure names), /pivot?units ---------------------
 
 @test
@@ -448,28 +452,28 @@ def t_pivot_rejects_legacy_dollar_measure_name():
 def t_base_identity_pinned():
     """Base (weight-unit) values are BYTE-IDENTICAL to the pre-Units-context twin design — the
     refactor changes HOW $ is served, never the weight-unit numbers. Pinned Soros/HistFull."""
-    r = _pivot("Manager", ["Total VaR 99", "Scenario VaR 99", "Book MV"])
+    r = _pivot("Manager", ["Total VaR 99", "Scenario VaR 99", "Manager MV"])
     rec = r["records"][0]
     if DATE == "2026-06-30":
         assert abs(rec["Total VaR 99"] - 0.03576148156351585) < 1e-12, rec["Total VaR 99"]
         assert abs(rec["Scenario VaR 99"] - 0.03523562876608036) < 1e-12, rec["Scenario VaR 99"]
-        assert abs(rec["Book MV"] - 4298665482.0) < 1.0, rec["Book MV"]
-    assert rec["Book MV"] > 1e9, "Soros book is billions of dollars, not thousands — unit fix"
+        assert abs(rec["Manager MV"] - 4298665482.0) < 1.0, rec["Manager MV"]
+    assert rec["Manager MV"] > 1e9, "Soros's portfolio is billions of dollars, not thousands — unit fix"
 
 
 @test
-def t_book_mv_ties_to_parquet_and_dollar_slice_is_measure_times_it():
-    """Book MV == the positions frame's dollar MV for the book/date (tie-out to the parquet);
-    every DOLLAR_MEASURES member read under units=dollar == its weight-unit value × Book MV
-    (the SAME measure name in both slices — no more "<name> $" twin); Market value by Issuer
-    sums to Book MV."""
+def t_manager_mv_ties_to_parquet_and_dollar_slice_is_measure_times_it():
+    """Manager MV == the positions frame's dollar MV for the manager/date (tie-out to the
+    parquet); every DOLLAR_MEASURES member read under units=dollar == its weight-unit value ×
+    Manager MV (the SAME measure name in both slices — no more "<name> $" twin); Market value by
+    Issuer sums to Manager MV."""
     import pandas as pd, pathlib
     pos = pd.read_parquet(pathlib.Path(__file__).resolve().parent.parent / "data" / "positions.parquet")
     frame_mv = float(pos[(pos.Manager == "Soros") & (pos.Date == DATE)].MV.sum())
-    base = _pivot("Manager", ["Book MV", "Scenario VaR 99", "Model vol"])["records"][0]
-    assert abs(base["Book MV"] - frame_mv) <= 1e-6 * frame_mv, (base["Book MV"], frame_mv)
+    base = _pivot("Manager", ["Manager MV", "Scenario VaR 99", "Model vol"])["records"][0]
+    assert abs(base["Manager MV"] - frame_mv) <= 1e-6 * frame_mv, (base["Manager MV"], frame_mv)
     dollar = _pivot("Manager", ["Scenario VaR 99", "Model vol"], dollar=True)["records"][0]
-    mv = base["Book MV"]
+    mv = base["Manager MV"]
     # dollar values are ~1e8: compare at relative precision, not an absolute 1e-3
     assert abs(dollar["Scenario VaR 99"] - base["Scenario VaR 99"] * mv) <= 1e-9 * mv
     assert abs(dollar["Model vol"] - base["Model vol"] * mv) <= 1e-9 * mv
@@ -488,13 +492,13 @@ def t_pivot_units_dollar_round_trip_unchanged_contract():
     q = {"rows": "Sector", "measures": "Marginal Total VaR 99,% of Total VaR 99",
          "filters": json.dumps(filters), "totals": "true", "units": "dollar"}
     d = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
-    w = _pivot("Sector", ["Marginal Total VaR 99", "% of Total VaR 99", "Book MV"])
+    w = _pivot("Sector", ["Marginal Total VaR 99", "% of Total VaR 99", "Manager MV"])
     assert d["units"] == "dollar" and d["dollar_measures"] == ["Marginal Total VaR 99"]
     assert d["measures"] == ["Marginal Total VaR 99", "% of Total VaR 99"]
-    mv = w["records"][0]["Book MV"]
+    mv = w["records"][0]["Manager MV"]
     # /pivot rows=Sector records also carry Country (the Security hierarchy), so a sector held in
     # two countries is two records: key on every non-measure column, not Sector alone
-    dims = lambda r: tuple(sorted((k, v) for k, v in r.items() if k not in ("Marginal Total VaR 99", "% of Total VaR 99", "Book MV")))
+    dims = lambda r: tuple(sorted((k, v) for k, v in r.items() if k not in ("Marginal Total VaR 99", "% of Total VaR 99", "Manager MV")))
     wd = {dims(r): r for r in w["records"]}
     for r in d["records"]:
         base = wd[dims(r)]

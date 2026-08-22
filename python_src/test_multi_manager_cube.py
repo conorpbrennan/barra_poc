@@ -1,30 +1,30 @@
 """
-test_multi_book_cube.py — cube-level tests for the Phase 2 multi-manager entity dimension in
+test_multi_manager_cube.py — cube-level tests for the Phase 2 multi-manager entity dimension in
 barra_factor_risk_cube.py.
 
-Builds a SMALL SYNTHETIC 2-book cube in-process (hand-built pandas frames, no network, no
+Builds a SMALL SYNTHETIC 2-manager cube in-process (hand-built pandas frames, no network, no
 dependency on the real `data/` parquets or the live :8010 backend) via
 barra_factor_risk_cube.build_cube(), on a dedicated local port, and tears it down when done.
 Covers the Phase 2 deliverables:
 
   - the entity dimension (managers.parquet -> Manager carries CIK/EntityName/FirmType/ETP-drop
     attributes, exposed as the separate `Entity` hierarchy since the 2026-08-22 physical
-    rename), queryable and correct per book
+    rename), queryable and correct per manager
   - graceful degradation when managers.parquet is ABSENT (no entity dimension, cube still builds,
     nothing raises) -- the same contract as the pre-existing optional specific_returns frame
-  - the PositionRank/Top-5 risk share "landmine": tt.rank must evaluate WITHIN the sliced book,
-    not across books. Cross-checked against an independent numpy computation of the same
-    quantity, AND against the fact that the two synthetic books carry deliberately different
+  - the PositionRank/Top-5 risk share "landmine": tt.rank must evaluate WITHIN the sliced manager,
+    not across managers. Cross-checked against an independent numpy computation of the same
+    quantity, AND against the fact that the two synthetic managers carry deliberately different
     weight vectors (a reversed permutation of the same weights) -- if ranking silently ignored
-    Manager, both books would read some shared/wrong number instead of their own.
+    Manager, both managers would read some shared/wrong number instead of their own.
   - the tt.total "landmine": the Euler identity (sum(Marginal Model vol) over Position ==
-    Model vol) must hold WITHIN a single-book slice, i.e. book-level tt.total calls must stay
-    pinned to the currently sliced book rather than lifting across books.
+    Model vol) must hold WITHIN a single-manager slice, i.e. manager-level tt.total calls must
+    stay pinned to the currently sliced manager rather than lifting across managers.
 
 Needs a working local atoti session (repo-root ActivePivot.lic.43457, same requirement as
 barra_factor_risk_cube.py itself) -- if the session can't start, SKIP cleanly rather than fail.
 
-Run:  ../barra/bin/python test_multi_book_cube.py
+Run:  ../barra/bin/python test_multi_manager_cube.py
 """
 from __future__ import annotations
 import os
@@ -90,23 +90,23 @@ def _synthetic_frames(with_managers: bool) -> dict[str, pd.DataFrame]:
         for i, p in enumerate(POSITIONS)
     ])
 
-    # Two books, SAME universe, DELIBERATELY different weights (BookB = BookA's weight vector
+    # Two managers, SAME universe, DELIBERATELY different weights (MgrB = MgrA's weight vector
     # reversed across names -- same values, still sums to exactly 1, but assigned to different
-    # names) so a within-book-vs-cross-book bug would show up as identical/wrong numbers.
+    # names) so a within-manager-vs-cross-manager bug would show up as identical/wrong numbers.
     wa = rng.dirichlet(np.ones(len(POSITIONS)))
     wb = wa[::-1].copy()
     pos_rows = []
     for p, w in zip(POSITIONS, wa):
-        pos_rows.append({"Date": DATE, "Manager": "BookA", "Position": p, "Weight": float(w),
+        pos_rows.append({"Date": DATE, "Manager": "MgrA", "Position": p, "Weight": float(w),
                           "MV": float(w) * 1e8, "ADV": 5e6})
     for p, w in zip(POSITIONS, wb):
-        pos_rows.append({"Date": DATE, "Manager": "BookB", "Position": p, "Weight": float(w),
+        pos_rows.append({"Date": DATE, "Manager": "MgrB", "Position": p, "Weight": float(w),
                           "MV": float(w) * 5e7, "ADV": 5e6})
     positions_df = pd.DataFrame(pos_rows)
 
     # sanity: both should sum to 1 exactly (a permutation of the same values)
-    assert abs(positions_df[positions_df["Manager"] == "BookA"]["Weight"].sum() - 1.0) < 1e-9
-    assert abs(positions_df[positions_df["Manager"] == "BookB"]["Weight"].sum() - 1.0) < 1e-9
+    assert abs(positions_df[positions_df["Manager"] == "MgrA"]["Weight"].sum() - 1.0) < 1e-9
+    assert abs(positions_df[positions_df["Manager"] == "MgrB"]["Weight"].sum() - 1.0) < 1e-9
 
     frames = {
         "exposures": exposures, "positions": positions_df, "securities": securities,
@@ -114,13 +114,13 @@ def _synthetic_frames(with_managers: bool) -> dict[str, pd.DataFrame]:
     }
     if with_managers:
         frames["managers"] = pd.DataFrame([
-            {"Manager": "BookA", "CIK": 111, "EntityName": "Book A Capital LLC", "FirmType": "hedge_fund",
+            {"Manager": "MgrA", "CIK": 111, "EntityName": "Manager A Capital LLC", "FirmType": "hedge_fund",
              "first_filing_date": pd.Timestamp("2020-01-01"), "last_filing_date": DATE,
              "n_filings": 10, "n_distinct_cusips_parsed": 6, "latest_report_date": DATE,
              "n_dropped_rows_all_history": 0, "n_dropped_cusips_all_history": 0, "n_dropped_latest": 0,
              "dropped_value_latest": 0.0, "total_value_latest": 1e8, "dropped_value_share_latest": 0.0,
              "n_positions_distinct": len(POSITIONS)},
-            {"Manager": "BookB", "CIK": 222, "EntityName": "Book B Partners LP", "FirmType": "family_office",
+            {"Manager": "MgrB", "CIK": 222, "EntityName": "Manager B Partners LP", "FirmType": "family_office",
              "first_filing_date": pd.Timestamp("2019-01-01"), "last_filing_date": DATE,
              "n_filings": 20, "n_distinct_cusips_parsed": 6, "latest_report_date": DATE,
              "n_dropped_rows_all_history": 3, "n_dropped_cusips_all_history": 1, "n_dropped_latest": 0,
@@ -135,28 +135,28 @@ def _synthetic_frames(with_managers: bool) -> dict[str, pd.DataFrame]:
 CUBE = None
 
 
-def _q_book(measure: str, book: str):
+def _q_manager(measure: str, manager: str):
     h, l, m = CUBE.hierarchies, CUBE.levels, CUBE.measures
     df = CUBE.query(m[measure], filter=(l["Date"] == DATE.date())
-                     & (l["ScenarioSet"] == "HistFull") & (l["Manager"] == book))
+                     & (l["ScenarioSet"] == "HistFull") & (l["Manager"] == manager))
     return float(df.iloc[0, 0])
 
 
 @test
-def t_book_hierarchy_has_two_members():
+def t_manager_hierarchy_has_two_members():
     h, l, m = CUBE.hierarchies, CUBE.levels, CUBE.measures
-    books = sorted(CUBE.query(m["contributors.COUNT"], levels=[l["Manager"]]).index)
-    assert books == ["BookA", "BookB"], books
+    managers = sorted(CUBE.query(m["contributors.COUNT"], levels=[l["Manager"]]).index)
+    assert managers == ["MgrA", "MgrB"], managers
 
 
 @test
-def t_entity_attributes_retrieved_per_book():
+def t_entity_attributes_retrieved_per_manager():
     h, l, m = CUBE.hierarchies, CUBE.levels, CUBE.measures
     df = CUBE.query(m["Manager n filings"], m["Manager ETP dropped value share"],
                      levels=[l["EntityName"], l["FirmType"], l["CIK"]]).reset_index()
     recs = {r["EntityName"]: r for _, r in df.iterrows()}
-    assert set(recs) == {"Book A Capital LLC", "Book B Partners LP"}, recs.keys()
-    a, b = recs["Book A Capital LLC"], recs["Book B Partners LP"]
+    assert set(recs) == {"Manager A Capital LLC", "Manager B Partners LP"}, recs.keys()
+    a, b = recs["Manager A Capital LLC"], recs["Manager B Partners LP"]
     assert a["FirmType"] == "hedge_fund", a.to_dict()
     assert b["FirmType"] == "family_office", b.to_dict()
     assert int(a["CIK"]) == 111 and int(b["CIK"]) == 222
@@ -165,55 +165,55 @@ def t_entity_attributes_retrieved_per_book():
 
 
 @test
-def t_top5_risk_share_matches_independent_numpy_within_book():
+def t_top5_risk_share_matches_independent_numpy_within_manager():
     h, l, m = CUBE.hierarchies, CUBE.levels, CUBE.measures
-    for book in ("BookA", "BookB"):
+    for manager in ("MgrA", "MgrB"):
         names = CUBE.query(m["Marginal Total VaR 99"], levels=[l["Position"]],
                             filter=(l["Date"] == DATE.date()) & (l["ScenarioSet"] == "HistFull")
-                            & (l["Manager"] == book))
+                            & (l["Manager"] == manager))
         names["Marginal Total VaR 99"] = names["Marginal Total VaR 99"].astype(float)
         names = names.sort_values("Marginal Total VaR 99", ascending=False)
         manual = names.head(5)["Marginal Total VaR 99"].sum() / names["Marginal Total VaR 99"].sum()
-        cube_val = _q_book("Top-5 risk share", book)
+        cube_val = _q_manager("Top-5 risk share", manager)
         assert 0 < cube_val <= 1, cube_val
-        assert abs(cube_val - manual) < 1e-9, (book, cube_val, manual)
+        assert abs(cube_val - manual) < 1e-9, (manager, cube_val, manual)
 
 
 @test
-def t_top5_risk_share_differs_between_books():
-    """If ranking silently ignored Manager (the landmine), BookA and BookB -- which hold the same
+def t_top5_risk_share_differs_between_managers():
+    """If ranking silently ignored Manager (the landmine), MgrA and MgrB -- which hold the same
     names at deliberately different (reversed) weights -- would coincidentally read the SAME
     number more often than not; assert they don't."""
-    a = _q_book("Top-5 risk share", "BookA")
-    b = _q_book("Top-5 risk share", "BookB")
+    a = _q_manager("Top-5 risk share", "MgrA")
+    b = _q_manager("Top-5 risk share", "MgrB")
     assert a != b, (a, b)
 
 
 @test
-def t_model_vol_and_var_finite_and_book_specific():
+def t_model_vol_and_var_finite_and_manager_specific():
     for measure in ("Model vol", "Scenario VaR 99", "Scenario ES 97.5"):
-        a = _q_book(measure, "BookA")
-        b = _q_book(measure, "BookB")
+        a = _q_manager(measure, "MgrA")
+        b = _q_manager(measure, "MgrB")
         assert np.isfinite(a) and np.isfinite(b), (measure, a, b)
         assert a != b, (measure, a, b)
 
 
 @test
-def t_euler_identity_holds_within_book_slice():
+def t_euler_identity_holds_within_manager_slice():
     h, l, m = CUBE.hierarchies, CUBE.levels, CUBE.measures
-    for book in ("BookA", "BookB"):
-        model_vol = _q_book("Model vol", book)
+    for manager in ("MgrA", "MgrB"):
+        model_vol = _q_manager("Model vol", manager)
         names = CUBE.query(m["Marginal Model vol"], levels=[l["Position"]],
                             filter=(l["Date"] == DATE.date()) & (l["ScenarioSet"] == "HistFull")
-                            & (l["Manager"] == book))
+                            & (l["Manager"] == manager))
         s = float(names["Marginal Model vol"].astype(float).sum())
-        assert abs(s - model_vol) < 1e-9, (book, s, model_vol)
+        assert abs(s - model_vol) < 1e-9, (manager, s, model_vol)
 
 
 def main():
     global CUBE
     p = f = 0
-    print("=== multi-book synthetic cube tests (Phase 2 entity dimension) ===")
+    print("=== multi-manager synthetic cube tests (Phase 2 entity dimension) ===")
 
     try:
         import atoti  # noqa: F401
@@ -254,10 +254,10 @@ def main():
         h2, l2, m2 = cube2.hierarchies, cube2.levels, cube2.measures
         assert "Manager" not in {n for _, n in h2}, sorted(n for _, n in h2)
         assert "Manager ETP dropped value share" not in m2
-        books = sorted(cube2.query(m2["contributors.COUNT"], levels=[l2["Manager"]]).index)
-        assert books == ["BookA", "BookB"], books
+        managers = sorted(cube2.query(m2["contributors.COUNT"], levels=[l2["Manager"]]).index)
+        assert managers == ["MgrA", "MgrB"], managers
         df = cube2.query(m2["Model vol"], filter=(l2["Date"] == DATE.date())
-                          & (l2["ScenarioSet"] == "HistFull") & (l2["Manager"] == "BookA"))
+                          & (l2["ScenarioSet"] == "HistFull") & (l2["Manager"] == "MgrA"))
         assert np.isfinite(float(df.iloc[0, 0]))
         print("PASS  t_graceful_degradation_without_managers")
         p += 1
