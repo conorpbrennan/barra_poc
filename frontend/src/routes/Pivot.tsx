@@ -122,7 +122,7 @@ export function Pivot() {
     rows: ["Sector"], measures: ["Net exposure", "Scenario VaR 99"],
     filters: { Date: [date], ScenarioSet: [scenario] },
     totals: true, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [],
-    units: "weight",
+    units: "dollar",
   });
   const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, dollarMeasures, warning, loading, error } = pivot;
 
@@ -189,7 +189,8 @@ export function Pivot() {
       hideEmpty: s.hide_empty ?? true,
       heat: s.heat ?? cfg.heat, asPct: s.as_pct ?? cfg.asPct, prec: s.prec ?? cfg.prec,
       sort: Array.isArray(s.sort) ? s.sort : [],
-      units: s.units === "dollar" ? "dollar" : "weight",
+      // default $ in every report (2026-08-22); an explicit "weight" in a saved view still wins.
+      units: s.units === "weight" ? "weight" : "dollar",
       whatif: [], shocks: {},   // a saved view is a canonical report — never load it hypothetical
     };
     setCfg(next);
@@ -225,7 +226,7 @@ export function Pivot() {
   const display = (
     <div className="small" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem 0.6rem" }}>
       <label className="row"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
-      <label className="row" title="% and fraction are formats of the same weight-unit numbers; $ re-queries the cube's dollar twins (measure × Book MV)">
+      <label className="row" title="% and fraction are formats of the same weight-unit numbers; $ re-queries the cube's Units context (measure × Book MV)">
         units <select value={cfg.units === "dollar" ? "$" : cfg.asPct ? "%" : "fraction"} style={{ width: "5.2rem" }}
           onChange={(e) => {
             const v = e.target.value;

@@ -171,7 +171,7 @@ export function usePivot(initial: Partial<PivotConfig>) {
   const [cfg, setCfg] = useState<PivotConfig>({
     rows: ["Factor"], cols: [], measures: ["Net exposure"], filters: {},
     totals: true, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [],
-    units: "weight", whatif: [], shocks: {}, ...initial,
+    units: "dollar", whatif: [], shocks: {}, ...initial,
   });
 
   const [tree, setTree] = useState<Record<string, DisplayRow[]>>({}); // parentKey -> children
