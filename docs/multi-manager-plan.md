@@ -6,32 +6,35 @@ uncommitted on `docs/vite-ui-plan` as of this note. Scope: `python_src/barra_bui
 `limits.json`, `frontend/`. The six/seven/eight-frame contract and the cube's scenario engine are
 otherwise unchanged.
 
-> **What was built:** the book widens from Soros-only to **11 managers' 13F books** (`MANAGERS` in
-> `barra_build_frames.py`), each its own `Book` in the existing `positions` frame, sharing the same
-> exposures/factor-return/specific-risk machinery. An optional 8th frame (`managers`) carries per-book
-> entity metadata and disclosure stats. The cube gained a separate `Manager` entity hierarchy. The API
-> gained per-book guards on every artifact that was built assuming a single book, plus a hard block on
-> the three attribution measures that genuinely cannot be made per-book on this atoti version. The
-> frontend gained a real book/entity selector, degrading to plain text when only one book is loaded
-> (today's actual state — nothing about the running service's behaviour has changed yet, since a
-> multi-manager `build_frames()` has not been run against production `data/`).
+> **What was built:** the portfolio universe widens from Soros-only to **11 managers' 13F
+> portfolios** (`MANAGERS` in `barra_build_frames.py`), each its own `Manager` in the existing
+> `positions` frame, sharing the same exposures/factor-return/specific-risk machinery. An
+> optional 8th frame (`managers`) carries per-manager entity metadata and disclosure stats. The
+> cube gained a separate `Entity` hierarchy for that metadata (named `Manager` at first; renamed
+> on 2026-08-22 once the Positions table's own key took that name — see "an entity dimension"
+> below). The API gained per-manager guards on every artifact that was built assuming a single
+> manager, plus a hard block on the three attribution measures that genuinely cannot be made
+> per-manager on this atoti version. The frontend gained a real manager/entity selector,
+> degrading to plain text when only one manager is loaded (today's actual state — nothing about
+> the running service's behaviour has changed yet, since a multi-manager `build_frames()` has not
+> been run against production `data/`).
 
 ## Why
 
-The model was proven against one book. The next question — the whole reason to have a multi-manager
-model — is whether the same factor engine reads sensibly across managers with very different mandates
-(macro, multi-strat, quant, activist), and whether the desk's tooling (limits, drift, attribution,
-universe diagnostics) generalizes or needs to be book-aware. This phase answers both: it wires up the
-data plumbing for real, and it finds (and discloses, rather than papers over) exactly where the existing
-single-book assumptions break.
+The model was proven against one manager. The next question — the whole reason to have a
+multi-manager model — is whether the same factor engine reads sensibly across managers with very
+different mandates (macro, multi-strat, quant, activist), and whether the desk's tooling (limits,
+drift, attribution, universe diagnostics) generalizes or needs to be manager-aware. This phase
+answers both: it wires up the data plumbing for real, and it finds (and discloses, rather than
+papers over) exactly where the existing single-manager assumptions break.
 
-## The eleven books
+## The eleven managers
 
 CIKs verified against EDGAR (exact-name `browse-edgar` query + a broader root-name query to surface
 false positives, then cross-checked against `submissions/CIK##########.json` for entity name, filing
 count, and date range — `scratchpad/phase0-recon.md`):
 
-| Book | CIK | Style | Latest-filing scale (recent-only, pre-pagination, phase0b) |
+| Manager | CIK | Style | Latest-filing scale (recent-only, pre-pagination, phase0b) |
 |---|---|---|---|
 | Soros | 1029160 | Long/short equity | $5.53bn, 229 CUSIPs |
 | Bridgewater | 1350694 | Global macro | $22.40bn, 993 CUSIPs |
@@ -48,21 +51,21 @@ count, and date range — `scratchpad/phase0-recon.md`):
 Rejected alternates for every firm are logged in `scratchpad/phase0-recon.md` — mostly unrelated RIAs
 that share a root name (e.g. RenaissanceRe Holdings, a Bermuda reinsurer, is not Jim Simons's fund) and
 regional/offshore affiliate filers (Point72's DIFC/Hong Kong/Singapore/London/Middle East entities each
-file their own 13F; only the US flagship L.P. is modelled, consistent with "one filer = one book").
+file their own 13F; only the US flagship L.P. is modelled, consistent with "one filer = one manager").
 
 ### Two Sigma Advisers (1478735) — deliberately excluded
 
 Two entities file substantial, ongoing 13F-HRs under the "Two Sigma" name: Two Sigma Investments, LP
 (1179392, 94 filings back to 2002, chosen) and Two Sigma Advisers, LP (1478735, 62 filings back to
 2010). Recon flagged this as a genuine scope question, not an identity problem — they're reported to
-run different books, not duplicates. Measured before deciding: Two Sigma Advisers' **latest 13F table
-is one name at $0** (dormant — the same shape as Elliott's superseded predecessor CIK once the
+run different portfolios, not duplicates. Measured before deciding: Two Sigma Advisers' **latest 13F
+table is one name at $0** (dormant — the same shape as Elliott's superseded predecessor CIK once the
 successor takes over) and its full-history CUSIP set contributes only **7 incremental CUSIPs** beyond
 what Two Sigma Investments already covers. Excluded on the numbers, not a coin flip: it isn't a second
-book worth carrying, it's a filer that stopped mattering. Documented in the `MANAGERS` comment block so
-a future reader doesn't "fix" the omission without re-measuring.
+manager worth carrying, it's a filer that stopped mattering. Documented in the `MANAGERS` comment block
+so a future reader doesn't "fix" the omission without re-measuring.
 
-### Elliott — two CIKs, one book
+### Elliott — two CIKs, one manager
 
 Elliott renamed/re-filed under a new legal entity in 2020: Elliott Management Corp (1048445) filed
 1999-09-30 through 2020-09-30; Elliott Investment Management L.P. (1791786) filed 2020-03-31 onward.
@@ -114,17 +117,17 @@ fix): **Bridgewater 24.47%, Millennium 11.64%, Citadel 6.76%, Soros 1.94%, Tiger
 filter. Bridgewater's public 13F is heavily commodity/index-ETF and, since 2024, spot Bitcoin/Ethereum/
 Gold/Silver trust exposure — none of it equity, none of it has a sector or fundamentals, none of it is
 representable by this model's descriptors. What's left after the filter is a small, equity-only slice
-of Bridgewater's real macro book, not a fair read of the fund. This matters for interpreting any
+of Bridgewater's real macro portfolio, not a fair read of the fund. This matters for interpreting any
 Bridgewater risk number this model produces — it should not be read as "Bridgewater's risk," only as
 "the equity residue of Bridgewater's 13F, post-ETP-filter." The disclosure (dropped rows/value/CUSIPs,
-both latest-filing and full-history) is carried per-book on the `managers` frame precisely so this
+both latest-filing and full-history) is carried per-manager on the `managers` frame precisely so this
 caveat travels with the number, not just in this doc.
 
 ## Universe scale and `UNIVERSE_CAP`
 
-The measured union of held CUSIPs across all 11 books is **22,113 distinct CUSIPs, 21,047 of them new**
-against the previous single-book (Soros-only) build's 1,199 securities. `UNIVERSE_CAP` — which this
-repo's own CLAUDE.md still described as `250` going into this phase (already stale; the real
+The measured union of held CUSIPs across all 11 managers is **22,113 distinct CUSIPs, 21,047 of them
+new** against the previous single-manager (Soros-only) build's 1,199 securities. `UNIVERSE_CAP` — which
+this repo's own CLAUDE.md still described as `250` going into this phase (already stale; the real
 pre-integration value was 3500) — is raised to **35000**. This isn't a round-up for headroom's sake:
 `build_frames()`'s `sec.head(UNIVERSE_CAP)` truncates the universe **order-dependently and silently** —
 whatever falls past the cap in whatever order `sec` happens to be sorted in just disappears, no
@@ -135,199 +138,209 @@ headroom above the measured 22,113, not just above what today's scoped test buil
 
 ## The cube: an entity dimension, and the landmine that turned out not to bite
 
-Phase 2 added the optional `managers` frame as a **partial join on `Book`** off the existing `Positions`
-table, backing a new `Manager` hierarchy (`FirmType`/`EntityName`/`CIK`) and three disclosure measures
-(`Manager ETP dropped value share`, `Manager n filings`, `Manager n positions`). Deliberately kept as a
-**separate** hierarchy rather than extra levels on the pre-existing, auto-created, single-level `Book`
-hierarchy — every `l["Book"]` lookup in the rest of the cube and in `risk_api.py` stays untouched.
+Phase 2 added the optional `managers` frame as a **partial join on `Manager`** (the Positions table's
+key, called `Book` before the 2026-08-22 physical rename described below) off the existing `Positions`
+table, backing a new hierarchy for the entity metadata (`FirmType`/`EntityName`/`CIK`) and three
+disclosure measures (`Manager ETP dropped value share`, `Manager n filings`, `Manager n positions`).
+That entity-metadata hierarchy was itself first named `Manager` too; deliberately kept **separate**
+from the pre-existing, auto-created, single-level `Book` hierarchy (extra levels grafted onto `Book`
+were rejected) so every `l["Book"]` lookup elsewhere in the cube and in `risk_api.py` stayed untouched.
 
-**2026-08-22 update:** the physical rename made `Positions`'s key (and its auto-created hierarchy)
-`Manager` — clashing with this section's `Manager` entity hierarchy, which was renamed to `Entity`
-in the same commit. Read `Book` below as `Manager` and this section's `Manager` hierarchy as
-`Entity`; see CLAUDE.md's "pivot dimension is exposed as `Manager`" note for the current state.
+**2026-08-22:** the Positions table's own key — and its auto-created hierarchy — was physically renamed
+`Manager`, which collided with this section's entity-metadata hierarchy of the same name. The
+entity-metadata hierarchy was renamed to `Entity` in the same commit (its three disclosure measures
+kept their original `Manager …` names); `Entity` stays 1:1 with `Manager` (same `Positions`→`Managers`
+row), so filtering by either reads consistently. `risk_api.py`'s `DIM_ALIASES = {"Book": "Manager"}`
+keeps `Book` accepted on input forever (saved views, old URLs), resolving to the now-canonical `Manager`
+level; `MEASURE_ALIASES = {"Book MV": "Manager MV"}` does the same for the one measure whose name
+followed the rename.
 
 Two things that looked like they might be landmines were investigated and found to be correct as-is,
 with no code change needed:
 
 - **`Top-5 risk share` / the `PositionRank` hierarchy.** `tt.rank` evaluates each candidate's measure
-  value at the *current query context*, which already includes whichever `Book` is sliced (Book was
-  never one of the hierarchies passed to the rank call, so it just stays pinned). Verified on real
-  2-book test data against an independent numpy computation: diffs at float-noise level (~1e-17) for
-  both books, and the two books' rankings provably differ (not a coincidence of both reading the same
-  wrong number).
+  value at the *current query context*, which already includes whichever `Manager` is sliced (Manager
+  was never one of the hierarchies passed to the rank call, so it just stays pinned). Verified on real
+  2-manager test data against an independent numpy computation: diffs at float-noise level (~1e-17) for
+  both managers, and the two managers' rankings provably differ (not a coincidence of both reading the
+  same wrong number).
 - **`tt.total` lifting.** All 15 `tt.total(...)` call sites in the cube already lift exactly
-  `{Security, FactorDim, PositionRank}` and never `Book`/`Date`/`ScenarioSet` — "book total" has always
-  meant "total for whichever book/date/scenario-set is currently sliced," not "total across every
-  book." Adding `Manager` doesn't change this since it's never passed to a `tt.total`/`OriginScope`
-  call either. Verified via the Euler identity (`Σ Marginal Model vol == Model vol`) within a
-  single-book slice on real 2-book data: residuals ~1e-16, both books.
+  `{Security, FactorDim, PositionRank}` and never `Manager`/`Date`/`ScenarioSet` — "manager total" has
+  always meant "total for whichever manager/date/scenario-set is currently sliced," not "total across
+  every manager." Adding `Entity` doesn't change this since it's never passed to a `tt.total`/
+  `OriginScope` call either. Verified via the Euler identity (`Σ Marginal Model vol == Model vol`)
+  within a single-manager slice on real 2-manager data: residuals ~1e-16, both managers.
 
 A third issue, **not one of the two named landmines**, was found and is the single most consequential
 limitation of this integration:
 
-### The book-independent attribution measures
+### The manager-independent attribution measures
 
 `Factor contribution`, `Specific PnL`, and `Realized PnL` are additive cube measures built on physical
 columns baked at cube-build time from a pandas merge keyed on `(Date, Position)` — deliberately with no
-`Book` key, so these measures stay immune to the what-if hypothetical-trades branch (which lives on
+`Manager` key, so these measures stay immune to the what-if hypothetical-trades branch (which lives on
 `Positions`' live, branchable weight; a static baked column can't read a transient branch). With the
-original single-book data this was harmless — there was only one book's weight to bake in. With more
-than one book, the merge silently produces duplicate-keyed rows for any name held by more than one
-manager on the same date (confirmed: the Exposures leaf-row count roughly doubled on a 2-book test
-build), and `Factor contribution` read an *identical* number for both books on a date where they held
-materially different weights of the same name.
+original single-manager data this was harmless — there was only one manager's weight to bake in. With
+more than one manager, the merge silently produces duplicate-keyed rows for any name held by more than
+one manager on the same date (confirmed: the Exposures leaf-row count roughly doubled on a 2-manager
+test build), and `Factor contribution` read an *identical* number for both managers on a date where
+they held materially different weights of the same name.
 
-The natural fix — reuse Book as a second hierarchy dual on the attribution side table, alongside the
-existing Factor dual from Exposures — was attempted and **empirically blocked by atoti 0.9.15**: every
-join topology tried (a single edge from either parent table, and a two-edge "diamond" mapping Book via
-Positions and Factor via Exposures simultaneously, tried in both edge orders, including explicit
-post-hoc hierarchy redefinition) left one of the two axes as an unresolvable ambiguous `Book` hierarchy
-(`ValueError: Disambiguate 'Book' to narrow it down to one of [('Positions','Book','Book'),
-('FactorPnL','Book','Book')]`) — one repro even built successfully and only failed at query time. This
-is a concrete Atoti API/architecture limit on this version, established by direct experiment, not
-inferred from documentation.
+The natural fix — reuse the manager hierarchy as a second hierarchy dual on the attribution side table,
+alongside the existing Factor dual from Exposures — was attempted and **empirically blocked by atoti
+0.9.15**: every join topology tried (a single edge from either parent table, and a two-edge "diamond"
+mapping the manager hierarchy via Positions and Factor via Exposures simultaneously, tried in both edge
+orders, including explicit post-hoc hierarchy redefinition) left one of the two axes as an unresolvable
+ambiguous hierarchy — `ValueError: Disambiguate 'Book' to narrow it down to one of
+[('Positions','Book','Book'), ('FactorPnL','Book','Book')]`, quoted exactly as produced at the time,
+under the hierarchy's pre-rename name (`Book`, since renamed `Manager`) — one repro even built
+successfully and only failed at query time. This is a concrete Atoti API/architecture limit on this
+version, established by direct experiment, not inferred from documentation.
 
 **What shipped instead**: the merge was hardened (deduped to one deterministic row per `(Date,
-Position)`, first book alphabetically) so it can no longer silently corrupt the leaf tables with
-duplicate keys — but the three measures are **not** made book-aware by this. For a name held by more
-than one manager, they read that one arbitrary book's weight under every book's label, regardless of
-which book the query is actually sliced to. Since Phase 3, `_validate_pivot` — the one function
+Position)`, first manager alphabetically) so it can no longer silently corrupt the leaf tables with
+duplicate keys — but the three measures are **not** made manager-aware by this. For a name held by more
+than one manager, they read that one arbitrary manager's weight under every manager's label, regardless
+of which manager the query is actually sliced to. Since Phase 3, `_validate_pivot` — the one function
 `/pivot`, `/analysis`, and `/ask`'s `query_cube` tool all call before touching the cube — **rejects
-these three measures outright once more than one book is loaded**, with a message that names the
-mechanism and points at the correct alternative (`barra_pnl_attribution.py`'s `book=` parameter, which
-computes attribution live from the raw frames, correctly scoped to one book, at the cost of not being a
-live cube drill). Single-book behaviour — today's actual production state — is untouched: the guard
-only fires once `positions["Book"].nunique() > 1`.
+these three measures outright once more than one manager is loaded**, with a message that names the
+mechanism and points at the correct alternative (`barra_pnl_attribution.py`'s `manager=` parameter,
+`book=` still silently accepted, which computes attribution live from the raw frames, correctly scoped
+to one manager, at the cost of not being a live cube drill). Single-manager behaviour — today's actual
+production state — is untouched: the guard only fires once more than one manager is on the live
+positions frame.
 
 **Follow-up, not attempted here**: either confirm a supported way to alias one table's column onto an
 already-established hierarchy from a second table in this atoti version (possibly fixed in a later
-release, or achievable through an API surface not tried), or build N book-keyed physical tables in a
-loop over the active books so each book gets its own attribution column. Either would let the guard be
-relaxed to genuine per-book correctness instead of an outright block.
+release, or achievable through an API surface not tried), or build N manager-keyed physical tables in a
+loop over the active managers so each manager gets its own attribution column. Either would let the
+guard be relaxed to genuine per-manager correctness instead of an outright block.
 
-## The API: per-book guards, not per-book correctness
+## The API: per-manager guards, not per-manager correctness
 
-Several precomputed artifacts and live-frame reads were written assuming exactly one book, with no
-per-book scoping mechanism of their own:
+Several precomputed artifacts and live-frame reads were written assuming exactly one manager, with no
+per-manager scoping mechanism of their own:
 
 - `barra_universe_membership.py` hardcodes `SOROS_CIK` and never reads `positions.parquet` — its
-  coverage is fixed at build time, independent of whatever books the live frames hold.
+  coverage is fixed at build time, independent of whatever managers the live frames hold.
 - `barra_universe_funnel.py`, `barra_universe_span.py`, `barra_universe_drift.py`, and
-  `barra_pnl_attribution.py`'s `run()` all read (or were called against) whatever book(s) happened to be
-  in `positions.parquet` at build time, with no Book filter baked into the artifact's own schema.
+  `barra_pnl_attribution.py`'s `run()` all read (or were called against) whatever manager(s) happened to
+  be in `positions.parquet` at build time, with no Manager filter baked into the artifact's own schema.
 
-Serving any of these under a different book's label would be silently wrong, not merely stale — worse
-than an error. `_artifact_book(kind)` resolves, as best it can, which book a given artifact actually
-covers: for `membership` it's deterministic (`SOROS_CIK` resolved through `barra_build_frames.MANAGERS`
-rather than a hardcoded string, so a future rename of that book's label can't silently desync); for the
-other four kinds, it infers from the **live** `positions` frame — exactly one distinct `Book` means
-that's (almost certainly) what the artifact covers, more than one means "can't verify."
-`_book_guard(kind, requested_book)` wraps this into a clean HTTP 200 with
-`{"status": "book_mismatch", "kind", "requested_book", "artifact_book", "basis", "reason"}` on a
-mismatch — mirroring `/drawdown`'s existing `status: "insufficient"` idiom rather than inventing a new
+Serving any of these under a different manager's label would be silently wrong, not merely stale —
+worse than an error. `_artifact_manager(kind)` resolves, as best it can, which manager a given artifact
+actually covers: for `membership` it's deterministic (`SOROS_CIK` resolved through
+`barra_build_frames.MANAGERS` rather than a hardcoded string, so a future rename of that manager's label
+can't silently desync); for the other four kinds, it infers from the **live** `positions` frame —
+exactly one distinct `Manager` means that's (almost certainly) what the artifact covers, more than one
+means "can't verify." `_manager_guard(kind, requested_manager)` wraps this into a clean HTTP 200 with
+`{"status": "manager_mismatch", "kind", "requested_manager", "artifact_manager", "basis", "reason"}` on
+a mismatch — mirroring `/drawdown`'s existing `status: "insufficient"` idiom rather than inventing a new
 shape family. Wired into all eight affected endpoints (`/universe`, `/funnel`, `/span`, `/drift`, the
-four `/pnl_attribution*` routes), each of which gained a `book` query parameter defaulting to `"Soros"`
-— today's data is genuinely single-book, so every existing caller that never sends `book` sees zero
-behaviour change.
+four `/pnl_attribution*` routes), each of which gained a `manager` query parameter defaulting to
+`"Soros"` (`book` still silently accepted) — today's data is genuinely single-manager, so every existing
+caller that never sends either sees zero behaviour change.
 
-**Disclosed weakness, not fixed**: `_artifact_book`'s inference reads today's *live* positions frame,
+**Disclosed weakness, not fixed**: `_artifact_manager`'s inference reads today's *live* positions frame,
 not a stamp recorded at the artifact's own build time. If an artifact goes stale relative to the
-currently-loaded frames — built while Soros was the sole book, then the frames later swapped to a
-different single-book set without rerunning the precompute — the helper would report the new book as a
-match and wave a genuine mismatch straight through. There's no version linkage anywhere in the
+currently-loaded frames — built while Soros was the sole manager, then the frames later swapped to a
+different single-manager set without rerunning the precompute — the helper would report the new manager
+as a match and wave a genuine mismatch straight through. There's no version linkage anywhere in the
 frame/artifact contract that could catch this; fixing it would mean the precomputes each writing their
-own covered-book stamp and the guard checking it instead of inferring, which wasn't done here.
+own covered-manager stamp and the guard checking it instead of inferring, which wasn't done here.
 
-`barra_universe_funnel.py` additionally had a narrower, real bug latent inside the single-book
+`barra_universe_funnel.py` additionally had a narrower, real bug latent inside the single-manager
 assumption: its `held`/`held_survivors` flag used to mean "held by the union of all rows in
-`positions`," which is silently "held by ANY manager" the moment a second book exists — not a guard
-question, an actual wrong-answer risk. Fixed with `_held_positions(pos, book)`; `run()`'s new
-`book: str | None = "Soros"` parameter defaults to reproducing today's exact behaviour (`book=None` is
-kept as an explicit escape hatch to the old any-book-union reading, unused by any caller in the repo).
+`positions`," which is silently "held by ANY manager" the moment a second manager exists — not a guard
+question, an actual wrong-answer risk. Fixed with `_held_positions(pos, manager)`; `run()`'s new
+`manager: str | None = "Soros"` parameter defaults to reproducing today's exact behaviour
+(`manager=None` is kept as an explicit escape hatch to the old any-manager-union reading, unused by any
+caller in the repo).
 
-### `/limits` — additive disclosure, not per-book thresholds
+### `/limits` — additive disclosure, not per-manager thresholds
 
 `limits.json` gained one additive field, `calibrated_for` (default `"Soros"` when absent, matching what
-was always implicitly true). `/limits`'s response gained `calibrated_for`, `cross_book_thresholds`
+was always implicitly true). `/limits`'s response gained `calibrated_for`, `cross_manager_thresholds`
 (bool), and `calibration_note` (a plain sentence, present only when the flag is true) — all additive;
 no existing consumer's keys changed. This surfaces the caveat rather than hiding it: **the desk limit
 thresholds remain a single flat set, tuned against Soros's scale and strategy, and have not been
-recalibrated per book.** Reading Bridgewater's or Citadel's Scenario VaR against Soros's warn/limit
+recalibrated per manager.** Reading Bridgewater's or Citadel's Scenario VaR against Soros's warn/limit
 bands is directionally informative but not a real per-manager risk budget.
 
 ## The frontend: an entity selector that earns its ink
 
 `/meta.managers` is the UI's one source for the entity list (`_managers_meta()`, mirroring the existing
 `hypo_shocks` precedent: server-sourced, never hardcoded, so the UI can never drift from whatever
-`ACTIVE_MANAGERS` scope the running build actually used). The context bar's book field renders **plain
+`ACTIVE_MANAGERS` scope the running build actually used). The context bar's manager field renders **plain
 text when only one manager is loaded** and a real `<select>` once two or more exist — a `<select>` with
 one immutable option is chartjunk (ink spent on a control that cannot do anything); the interactivity
 itself is what's hidden until there's a genuine choice, the same principle already applied elsewhere in
-the app (`HowToRead`'s collapsed `<details>`). Every guarded lens (Universe, Drift, the Attribution
-PnL tab, Overview's reconcile strip) renders the `book_mismatch` payload as a restrained, non-alarming
-notice (`BookMismatchNotice` — `muted small`, never the red `.err` class, because this is a disclosed
+the app (`HowToRead`'s collapsed `<details>`). Every guarded lens (Universe, Drift, the Attribution PnL
+tab, Overview's reconcile strip) renders the `manager_mismatch` payload as a restrained, non-alarming
+notice (`ManagerMismatchNotice` — `muted small`, never the red `.err` class, because this is a disclosed
 expected state, not a failure) instead of crashing on an unexpected response shape.
 
 ## What was NOT done — deliberately out of scope
 
 - **Per-entity precomputes.** `barra_universe_membership/funnel/span/drift.py` and
-  `barra_pnl_attribution.py` were not rewritten to natively carry a `Book` dimension on their own
-  artifacts — the Phase 3 guard makes the single-book assumption *safe* (fails closed with a clear
-  status), not *correct* for every book. A proper per-book artifact story would give each of the 11
-  managers their own universe-membership/funnel/span/drift/attribution read; that's real, scoped
+  `barra_pnl_attribution.py` were not rewritten to natively carry a `Manager` dimension on their own
+  artifacts — the Phase 3 guard makes the single-manager assumption *safe* (fails closed with a clear
+  status), not *correct* for every manager. A proper per-manager artifact story would give each of the
+  11 managers their own universe-membership/funnel/span/drift/attribution read; that's real, scoped
   follow-on work, not a quick patch.
-- **Per-book limits.** `/limits`'s thresholds stay one flat Soros-calibrated set; see above.
+- **Per-manager limits.** `/limits`'s thresholds stay one flat Soros-calibrated set; see above.
 - **A cross-entity comparison lens.** Nothing in this phase lets a user put Bridgewater's and
   Citadel's risk numbers side by side in one view. Given the caveat below, that comparison would need
   to be built carefully (normalizing for what a 13F even represents for each style of fund), not bolted
   on as a naive multi-select.
 - **An 11-manager end-to-end `build_frames()` run.** Every verification in this phase (Phase 1's
   builder plumbing, Phase 2's cube joins, Phase 3's API guards, Phase 4's frontend wiring) was checked
-  against 2-book synthetic or scoped test data (`ACTIVE_MANAGERS = ["Soros", "TigerGlobal"]`,
-  hand-built 2-book cube fixtures) or read-only `positions_from_13f` calls against individual managers
-  — never a real 11-manager, ~35,000-name production build. Performance and correctness at that full
-  scale (particularly `tt.rank` over a `PositionRank` hierarchy with tens of thousands of mostly-zero
-  members across 11 books) is unverified.
+  against 2-manager synthetic or scoped test data (`ACTIVE_MANAGERS = ["Soros", "TigerGlobal"]`,
+  hand-built 2-manager cube fixtures) or read-only `positions_from_13f` calls against individual
+  managers — never a real 11-manager, ~35,000-name production build. Performance and correctness at
+  that full scale (particularly `tt.rank` over a `PositionRank` hierarchy with tens of thousands of
+  mostly-zero members across 11 managers) is unverified.
 
 ## The honest caveat: a 13F is not a fair cross-manager risk metric
 
 A 13F filing is a **long-only, US-listed-equity, quarterly snapshot filed up to 45 days after quarter
 end** — no shorts, no derivatives (options are explicitly filtered out by the existing cash-equity
-filter), no non-US-listed holdings, no intra-quarter trading. For a fund whose real book *is*
+filter), no non-US-listed holdings, no intra-quarter trading. For a fund whose real portfolio *is*
 substantially that — a long-only or long-biased US equity manager like Soros or (its equity residue,
 after the ETP filter) Bridgewater — the 13F is a reasonably fair, if stale and incomplete, read. For a
 genuinely hedged multi-strategy fund like Citadel or Millennium, whose real risk includes large short
-books, derivatives overlays, fixed income, and non-equity strategies entirely invisible to a 13F, the
-document is a small and actively misleading slice: a risk number computed only from the long US-equity
-book of a multi-strat fund is not "the fund's risk," it can't even reliably be characterized as *net*
-long-equity risk, because the offsetting shorts that would net against it are exactly the part the 13F
-doesn't show. **Risk numbers from this model should not be compared across those two groups of managers
-as if they meant the same thing.** This caveat existed implicitly for the single-book Soros model too;
-it becomes load-bearing the moment more than one manager, with different real strategies, is on screen
-at once, and belongs in every place this model's multi-manager output gets read by anyone who wasn't in
-this build.
+positions, derivatives overlays, fixed income, and non-equity strategies entirely invisible to a 13F,
+the document is a small and actively misleading slice: a risk number computed only from the long
+US-equity portfolio of a multi-strat fund is not "the fund's risk," it can't even reliably be
+characterized as *net* long-equity risk, because the offsetting shorts that would net against it are
+exactly the part the 13F doesn't show. **Risk numbers from this model should not be compared across
+those two groups of managers as if they meant the same thing.** This caveat existed implicitly for the
+single-manager Soros model too; it becomes load-bearing the moment more than one manager, with
+different real strategies, is on screen at once, and belongs in every place this model's multi-manager
+output gets read by anyone who wasn't in this build.
 
 ## Known open items (see also CLAUDE.md's cross-reference)
 
 1. ~~**Pre-existing, unrelated test failure**: `test_risk_measures.py::t_incremental_total_is_subadditive`~~
    **RESOLVED 2026-08-21 — and it was not a violation.** The reading above ("a real sub-additivity
-   violation in a risk measure") assumed Σ_member Incremental < book VaR is a property the measure
-   owes. It is not: that holds for a COHERENT measure, and a 99% quantile is the textbook measure
-   that is not one. The remove-recompute also re-reads the reduced book at ITS OWN tail day, so
+   violation in a risk measure") assumed Σ_member Incremental < portfolio VaR is a property the
+   measure owes. It is not: that holds for a COHERENT measure, and a 99% quantile is the textbook
+   measure that is not one. The remove-recompute also re-reads the reduced portfolio at ITS OWN tail day, so
    each member is credited for shifting the tail as well as for its own risk. It is not a Soros or
    a Total-VaR quirk either — measured by Issuer on HistFull, Scenario VaR sums to 0.0428 against a
-   0.0353 book and Total VaR to 0.0427 against 0.0358, and the same happens by Sector and by
-   Position. The old test passed only where it happened to hold (Scenario VaR over FACTOR members).
-   The property is real for `Incremental Model vol` (a standard deviation), where it holds on both
-   Soros and Vanguard and is now pinned; the cube comment that asserted "VaR is sub-additive" is
-   corrected. See `docs/optimization-log.md` §"Round 5".
-2. **`/dims` reports `Book` members as `['N/A', 'Soros']`** on the live, unrestarted service — an extra
-   `"N/A"` member alongside the real book. Cause not identified; plausibly an atoti default member
-   surfacing for exposure rows with no matching position. Confirmed not caused by anything in this
-   phase (it's pre-existing on the running pre-Phase-3 code) and confirmed the new `_multi_book_cube()`
-   helper is unaffected (it reads the `positions` frame directly, which has no such member). The
-   frontend filters it out defensively (`m.book !== "N/A"`) wherever a book list is built from `/meta`,
-   as a precaution rather than a fix. Worth root-causing before the entity dimension goes live.
+   portfolio total of 0.0353 and Total VaR to 0.0427 against 0.0358, and the same happens by Sector
+   and by Position. The old test passed only where it happened to hold (Scenario VaR over FACTOR
+   members). The property is real for `Incremental Model vol` (a standard deviation), where it holds
+   on both Soros and Vanguard and is now pinned; the cube comment that asserted "VaR is
+   sub-additive" is corrected. See `docs/optimization-log.md` §"Round 5".
+2. **`/dims` reports `Manager` members as `['N/A', 'Soros']`** on the live, unrestarted service — an
+   extra `"N/A"` member alongside the real manager. Cause not identified; plausibly an atoti default
+   member surfacing for exposure rows with no matching position. Confirmed not caused by anything in
+   this phase (it's pre-existing on the running pre-Phase-3 code) and confirmed the new
+   `_multi_manager_cube()` helper is unaffected (it reads the `positions` frame directly, which has no
+   such member). The frontend filters it out defensively (`m.manager !== "N/A"`) wherever a manager
+   list is built from `/meta`, as a precaution rather than a fix. Worth root-causing before the entity
+   dimension goes live.
 3. **OpenFIGI CUSIP-resolution drift makes a rebuild non-reproducible.** Re-running the Soros
    crosswalk today (same code, same CUSIPs) fails to resolve 9 names that resolved when `data/` was
    last built, including Honeywell (CUSIP 438516106 — confirmed live, both through this repo's
@@ -337,27 +350,27 @@ this build.
    this phase's code — no crosswalk logic was touched — but it means **a fresh rebuild will not
    reproduce previously published numbers** for a small, disclosed set of names. Whoever runs the next
    full rebuild should expect this and treat it as a known, external drift, not a new bug.
-4. **Per-entity precomputes and per-book limits — not done.** See "What was NOT done" above.
-5. **`_artifact_book`'s staleness gap — not fixed.** See the per-book-guard section above; there is no
-   artifact-versioning mechanism in the frame contract to catch a stale single-book artifact being
-   served against a since-changed set of live frames.
+4. **Per-entity precomputes and per-manager limits — not done.** See "What was NOT done" above.
+5. **`_artifact_manager`'s staleness gap — not fixed.** See the per-manager-guard section above; there
+   is no artifact-versioning mechanism in the frame contract to catch a stale single-manager artifact
+   being served against a since-changed set of live frames.
 
 ## Effort / risk
 
 Five phases, same day (2026-07-30): recon (read-only, SEC EDGAR queries only), builder (config +
-pagination + ETP filter + per-book weight normalization + the 8th frame), cube (one optional frame, one
-new hierarchy, three measures, two landmines investigated, one real limitation found and guarded),
+pagination + ETP filter + per-manager weight normalization + the 8th frame), cube (one optional frame,
+one new hierarchy, three measures, two landmines investigated, one real limitation found and guarded),
 API (two guard mechanisms reused across 12 endpoints total, one additive limits disclosure), frontend
 (one real selector, guarded rendering on 6 call sites). The main residual risk is exactly what's listed
 under "what was NOT done" and "known open items" above — this phase makes the multi-manager plumbing
-correct and safe to expose, it does not yet make every existing single-book analytical lens genuinely
-correct *for* every one of the 11 books.
+correct and safe to expose, it does not yet make every existing single-manager analytical lens
+genuinely correct *for* every one of the 11 managers.
 
-## Buyside-list expansion — 124 books (2026-08-14)
+## Buyside-list expansion — 124 managers (2026-08-14)
 
 ActiveViam's prospect list ("Buy Side NAM target names July 2026", from Kathy Perrotte's email of
 2026-08-14, 145 firm names) was resolved against SEC EDGAR and folded into `MANAGERS`: **113 new
-books**, taking the table from 11 to **124**. This section records the method and the exclusions;
+managers**, taking the table from 11 to **124**. This section records the method and the exclusions;
 the entry-level provenance comment sits above the block in `barra_build_frames.py`.
 
 **Resolution method.** Each name was searched on EDGAR's company search filtered to form 13F-HR
@@ -376,11 +389,11 @@ Montreal ← "BMO Asset Mgt." (the US arm was sold to Columbia in 2021), State S
 Franklin Resources ← Franklin Templeton (also absorbs Putnam). "Fidelity Investments (US)" is FMR
 LLC; "Fidelity Canada" is FIL Ltd (Fidelity International).
 
-**Stitched books (Elliott pattern, current CIK first):** BlackRock (BlackRock, Inc. 2012383 —
+**Stitched managers (Elliott pattern, current CIK first):** BlackRock (BlackRock, Inc. 2012383 —
 the 2024 holdco reorg — + BlackRock Finance, Inc. 1364742), Caxton (Caxton Associates LLP
 2051323 + LP 872573), Jump (Jump Financial 1831577 + Jump Trading 1127998), Appaloosa (Appaloosa
 LP 1656456 + Appaloosa Management LP 1006438). Other managers' possible predecessor CIKs were
-NOT chased — a book whose current entity registered mid-sample simply starts later (e.g.
+NOT chased — a manager whose current entity registered mid-sample simply starts later (e.g.
 PineBridge's current CIK registered ~2025; its 2016–2025 filings, if any exist under an older
 entity, are not stitched).
 
@@ -399,15 +412,15 @@ within 12 months under any matching entity):
 whole-market filers (BlackRock, Vanguard, State Street, FMR, the bank filers) and is UNMEASURED
 for the new list — `sec.head(UNIVERSE_CAP)` truncates order-dependently and silently, so the cap
 must sit far above any plausible union; if a build reports a universe near the cap, re-measure.
-`ACTIVE_MANAGERS` remains `None` (all books). The full audit trail (per-name candidates, scores,
+`ACTIVE_MANAGERS` remains `None` (all managers). The full audit trail (per-name candidates, scores,
 filing recency) is in the session scratchpad's `resolution.json` / `final_books.json`.
 
-**Known consequences, deliberately accepted.** (1) A full 124-book pull is an order of magnitude
-larger than the 11-book build: thousands of 13F info tables (BlackRock/Vanguard's run to tens of
+**Known consequences, deliberately accepted.** (1) A full 124-manager pull is an order of magnitude
+larger than the 11-manager build: thousands of 13F info tables (BlackRock/Vanguard's run to tens of
 MB each), a CUSIP crosswalk approaching the whole 13F-eligible universe, and price/fundamental
 pulls for every new name — expect hours, not minutes, on a cold cache, and OpenFIGI resolution
-drift (open item 3 above) applies to every newly-resolved name. (2) The book-independent
-attribution guard, per-book artifact guards, and Soros-calibrated limits all carry over
-unchanged — everything documented above about "correct for every book" applies 11× harder at
+drift (open item 3 above) applies to every newly-resolved name. (2) The manager-independent
+attribution guard, per-manager artifact guards, and Soros-calibrated limits all carry over
+unchanged — everything documented above about "correct for every manager" applies 11× harder at
 124. (3) FirmType now has ~36 values, assigned editorially from public knowledge of each firm —
 it is a browsing dimension, not a data-sourced fact.

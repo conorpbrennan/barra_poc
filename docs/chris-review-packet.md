@@ -1,7 +1,7 @@
 # Review packet for Chris — decisions and findings, 2026-07-03
 
 DRAFT — Conor to review before sending. Everything below is live in the tool; numbers are from
-the 2024-12-31 book unless dated otherwise.
+the 2024-12-31 portfolio unless dated otherwise.
 
 ## 1. What changed since your last review
 
@@ -18,11 +18,11 @@ cube-served number carries a live numpy cross-check; the tie-outs read at machin
 
 **2a. Model vol is now the reference risk number; the limit metric moved with it.**
 We took the primer at its word: σ = √(x'Fx + w'Δw) with the factor/specific split leads every
-display (book: 1.44%/d, 94% factor / 6% specific). The desk limits are written on the
+display (portfolio: 1.44%/d, 94% factor / 6% specific). The desk limits are written on the
 Kupiec-backtested metrics: the limit is now on **Scenario VaR 99** rather than the old house
 Total VaR 99 composite (which survives as a measure marked "legacy"). The thresholds
 themselves are placeholder defaults we set (VaR 4.5%/5.5%, ES 5.0%/6.5%, Top-5 share 40%/50%)
-— confirm the metric choice, and give us the numbers you'd actually run this book against.
+— confirm the metric choice, and give us the numbers you'd actually run this portfolio against.
 
 **2b. Views removed to match your process.**
 Cut: the standalone per-bucket Scenario-VaR "Risk by level" tab (superseded by CTR — ch 09's
@@ -57,7 +57,7 @@ worst: NonLinSize 18%, EarnYield 21%). A noise factor leaks real risk into wrong
 propose dropping it (builder change + rebuild).
 
 **5b. The specific block under-forecasts.** Rolling bias b = **1.26** (outside the 1±0.29
-band; window peak 4.8) with **16.7% two-sigma exceedances vs 4.6% expected**. The book-level
+band; window peak 4.8) with **16.7% two-sigma exceedances vs 4.6% expected**. The portfolio-level
 forecast is conservative (b = 0.55) so this nets out today, but the specific number itself
 shouldn't be trusted in stress months. Candidates: shorten the EWMA half-life, or add the
 structural (characteristics-based) blend from ch 08. Some of it is 13F staleness landing in
@@ -65,7 +65,7 @@ structural (characteristics-based) blend from ch 08. Some of it is 13F staleness
 
 **5c. Two suspect Liquidity loadings.** GFL and SNY breached their reconcile bands
 factor-driven while the Liquidity factor itself stayed within band — the hidden-beta signature
-(realized comovement exceeds the modeled loading). GFL is also the book's worst
+(realized comovement exceeds the modeled loading). GFL is also the portfolio's worst
 days-to-liquidate name. Propose: inspect their Liquidity descriptors (exposure-profile view)
 and check the trailing-63d dollar-ADV inputs before trusting their marginals.
 

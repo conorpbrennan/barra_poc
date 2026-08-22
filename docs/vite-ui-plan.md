@@ -27,7 +27,7 @@ direct labelling, sparklines, bullet graphs, small multiples, prose in a ~46rem 
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Soros factor risk     Book▾  As-of 2024-12-31▾  Scenario HistFull▾   📖 │  context bar
+│ Soros factor risk  Manager▾  As-of 2024-12-31▾  Scenario HistFull▾   📖 │  context bar
 ├──────────────┬─────────────────────────────────────────────────────────┤
 │ Overview     │   RISK                 LIMITS (bullet)      TRADE/QUALITY │
 │ Pivot        │   VaR99 3.6% ▁▂▃▅▆      VaR ▕███▏░ ⚠        Gross 1.00    │
@@ -221,8 +221,8 @@ no forced cutover); deleting the two `flexagg2++` nginx locations reverts cleanl
 
 ## §9 — Global context bar (the one IA change)
 
-Today there is **no** global book/date/scenario control — each panel carries its own scenario selectbox
-and the as-of date is read from the latest `/trends` record. The new UI hoists **book / as-of date /
+Today there is **no** global manager/date/scenario control — each panel carries its own scenario selectbox
+and the as-of date is read from the latest `/trends` record. The new UI hoists **manager / as-of date /
 scenario-set** into one context bar shared by every lens (Few: shared context once, not repeated chrome).
 Panels inherit it; the few that are intrinsically set-specific (drawdown/backtest default `HistFull`)
 take the global set unless overridden. This is the only deliberate behaviour change — **decided
@@ -256,7 +256,7 @@ take the global set unless overridden. This is the only deliberate behaviour cha
   `flexagg2++` is a **new route** serving the Vite SPA. They run side by side permanently — no forced
   cutover.
 - Vite + React + TS SPA, **in-repo** under `frontend/` (one repo, one deploy); free stack only.
-- **Global context bar, panels inherit** — book/date/scenario hoisted to one shared bar; set-specific
+- **Global context bar, panels inherit** — manager/date/scenario hoisted to one shared bar; set-specific
   panels default `HistFull` but follow the global set (§9). The only deliberate behaviour change vs today.
 - Server-side pivot only — grid is a pure renderer; **AG Grid Community** (free, already proven here),
   custom dnd-kit field list, hand-rolled drill.

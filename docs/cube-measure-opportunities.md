@@ -81,13 +81,13 @@ the naive stress table's `σ_k·vol_k` becomes cube-consistent by construction. 
 
 **2. Hedge table from the cube** (replaces most of `_hedge_table` in `/hedge`)
 Two pieces, both polarization-identity algebra we already ship:
-- *Vol after neutralizing factor k* = `√(var(book_vec − v_k) + specvar_book)`. NB the current
+- *Vol after neutralizing factor k* = `√(var(portfolio_vec − v_k) + specvar_portfolio)`. NB the current
   `Incremental Model vol` at a FACTOR member subtracts the fanned-out specific (correct for
   names, wrong for factors) — a factor-aware variant (keep the full specific block) IS the
   hedge table's `vol_after`, drillable and what-if-composable.
-- *Min-variance hedge ratio* `h*_k = −cov(book_vec, v_k)/var(v_k)` — same `cov` via
-  polarization; per-factor as a measure, the D6 hedge for ANY slice (hedge a sector's book,
-  not just the whole book). The multi-instrument hedge (matrix inverse) stays in Python.
+- *Min-variance hedge ratio* `h*_k = −cov(portfolio_vec, v_k)/var(v_k)` — same `cov` via
+  polarization; per-factor as a measure, the D6 hedge for ANY slice (hedge a sector's portfolio,
+  not just the whole portfolio). The multi-instrument hedge (matrix inverse) stays in Python.
 Effort: small-moderate; tie-outs against `_hedge_table` like the CTR pattern.
 
 ## Tier 2 — high value, real architecture (atoti simulation features)

@@ -16,9 +16,9 @@ Scope: `python_src/barra_build_frames.py` (v2).
 >   still gets a specific-risk forecast without polluting the factor returns).
 > - Rebuilt: 503 estimation / 693 coverage-only names. **Before → after:** style-loading range
 >   −3.1…3.1 → −10.1…10.6; most-negative held Size loading −2.97 → **−6.78** (its true value, was
->   clipped); **style-factor VaR 99 (ex-Market) 0.51% → 1.05%** — the split surfaces book style risk the
+>   clipped); **style-factor VaR 99 (ex-Market) 0.51% → 1.05%** — the split surfaces portfolio style risk the
 >   ±3 clip was hiding; the market-dominated headline Total VaR ≈ 3.6% is unchanged (Market is a
->   structural 1.0 loading); the span check reads ~82% of the book inside on average (latest month
+>   structural 1.0 loading); the span check reads ~82% of the portfolio inside on average (latest month
 >   70.5%) vs the artificially-high ~90% under the old uniform clip; `factor_returns`/`specific_var`
 >   row counts ≈ unchanged; all desk limits green. `UNCAP_COVERAGE=False` reproduces the legacy
 >   single-universe behaviour. Full test suite green.
@@ -60,7 +60,7 @@ Two named universes, both rebuilt monthly:
 | **Coverage** | estimation ∪ every 13F-held name (and any candidate watchlist) | assign loadings to all of these | **No** — z-score against the estimation cross-section's median/MAD, but **do not clip** |
 
 The estimation universe is the clean cross-section the model is fit on. The coverage universe is
-"every name we could have a position on" — it must always contain the book, and its loadings are
+"every name we could have a position on" — it must always contain the portfolio, and its loadings are
 *assigned* by standardising each name against the **estimation** universe's stats, uncapped.
 
 ### Why uncapped coverage matters (Chris's example)
@@ -68,7 +68,7 @@ The estimation universe is the clean cross-section the model is fit on. The cove
 If estimation = SPX and a held name is far smaller than anything in SPX, standardising its raw Size
 against the SPX median/MAD gives a large-negative z (say −6). That is the **correct** statement: it
 is six estimation-universe MADs below the median. Clipping it to −3 understates a real exposure and
-mis-states the book's true size tilt. Capping belongs only in estimation, to protect the regression
+mis-states the portfolio's true size tilt. Capping belongs only in estimation, to protect the regression
 from a corrupt or extreme descriptor contaminating every factor return.
 
 ## Concrete builder changes (`barra_build_frames.py`)
@@ -96,7 +96,7 @@ measure are untouched. This is purely a change to *how the loadings and factor r
 - **Correct loadings for off-index holdings** (the uncapped-coverage point).
 - **A cleaner factor-return estimate** (regression no longer pulled by illiquid/odd names).
 - **A foundation for active risk** — once coverage is explicit, a benchmark (e.g. SPX weights) is
-  just another coverage portfolio, and active = book − benchmark exposures. (Separate build.)
+  just another coverage portfolio, and active = portfolio − benchmark exposures. (Separate build.)
 
 ## Open questions for Chris
 
@@ -104,9 +104,9 @@ measure are untouched. This is purely a change to *how the loadings and factor r
 > "survivorship bias should be avoided at all costs." That settled it over the S&P 1500 idea below: on
 > free data only the S&P 500 has clean PIT membership (the hanshof change log), and the diagnostics
 > built since (see `universe-diagnostics-plan.md`) confirm it's well-supported — the funnel over the
-> PIT S&P 500 is near-flat (the names are already clean) and the span check shows ~90% of the book
+> PIT S&P 500 is near-flat (the names are already clean) and the span check shows ~90% of the portfolio
 > sits inside the S&P 500's factor space. Broader (S&P 1500 / R3000) would need a paid PIT feed
-> (Norgate ~$630/yr or WRDS/Compustat) and is parked unless the book's drift later forces it. The
+> (Norgate ~$630/yr or WRDS/Compustat) and is parked unless the portfolio's drift later forces it. The
 > remaining estimation-universe membership is defined by **PIT data-quality rules**, not an index
 > beyond the S&P 500 seed.
 
@@ -122,5 +122,5 @@ measure are untouched. This is purely a change to *how the loadings and factor r
 ## Effort / risk
 
 ~1 week. Contained to the builder; the cube/API/tests downstream are unaffected by construction. The
-main validation is a before/after on factor returns and on the book's headline risk numbers, plus a
+main validation is a before/after on factor returns and on the portfolio's headline risk numbers, plus a
 spot-check that off-index holdings now read sensible uncapped loadings.

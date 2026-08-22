@@ -20,10 +20,10 @@ Two commitments made to Chris, plus the visualization idea:
 1. **"I'll check which indices Soros holdings are in for each filing."** → Phase 1. Bitemporal.
 2. **"Apply the filtering you suggest and detail which underlyings are excluded and why, so we can
    see if the DQ is performing as expected."** → Phase 2 (the funnel).
-3. **"Does the book sit inside the estimation universe's span → high confidence?"** (Chris's
+3. **"Does the portfolio sit inside the estimation universe's span → high confidence?"** (Chris's
    VALUE/SIZE picture) → Phase 3 (the span check).
 
-The headline Phase 1 produces is the one Chris flagged as decisive: *what fraction of the Soros book,
+The headline Phase 1 produces is the one Chris flagged as decisive: *what fraction of the Soros portfolio,
 by weight, sits in names not covered by S&P 1500?* If it's ~0, the SP1500-vs-R3000 choice doesn't
 matter and we estimate on SP1500. If it's material, Russell 3000 earns its extra data cost.
 
@@ -116,8 +116,8 @@ Optional `?date=` to pick a filing other than latest.
 New panel in `risk_pivot_app.py`, same shape as `render_trends`/`render_drawdown`
 (`risk_pivot_app.py:475`/`:438`):
 
-- **Headline:** "X% of the latest book weight sits outside S&P 1500 (Y% outside Russell 3000)."
-- **Stacked area/bar** over filings: book weight by the four buckets, 2016→latest.
+- **Headline:** "X% of the latest portfolio weight sits outside S&P 1500 (Y% outside Russell 3000)."
+- **Stacked area/bar** over filings: portfolio weight by the four buckets, 2016→latest.
 - **Per-filing expander:** the names outside S&P 1500 — issuer, weight, and which (if any) broader
   index caught them — i.e. *which underlyings are excluded from an SP1500 estimation universe and
   why*, the Phase-1 form of the "detail which underlyings are excluded" commitment.
@@ -151,7 +151,7 @@ on free data — the S&P 500:
 > effective at *t* (Phase 1's Track-A source), which carries names that have since left or delisted, so
 > it is **survivorship-free**.
 
-Index component = **S&P 500**, by construction. The held book is **not** part of the estimation
+Index component = **S&P 500**, by construction. The held portfolio is **not** part of the estimation
 population — it joins on the *coverage* side (estimation-survivors ∪ held, uncapped; see the design
 note). Membership is then the **PIT rule-set applied to population(t)**: size, liquidity, history,
 listing — all evaluable point-in-time (fundamentals as-of the SEC `filed` date, prices/volume daily).
@@ -240,7 +240,7 @@ churn injecting noise into factor estimates for no informational reason.
 ### Decisions
 
 - **Pre-filter population: LOCKED to PIT S&P 500** (`population(t)` = hanshof change-log snapshot
-  as-of *t*). Index component = S&P 500; survivorship-free; held book is coverage-only, not in the
+  as-of *t*). Index component = S&P 500; survivorship-free; held portfolio is coverage-only, not in the
   estimation population.
 - **Stability buffers: confirmed in** — built with cross-month hysteresis.
 
@@ -265,7 +265,7 @@ newly-pulled small-cap tail — which is exactly what the funnel is built to exp
 Chris's VALUE/SIZE picture, generalized: does each holding sit inside the factor-space spanned by the
 estimation universe? `barra_universe_span.py` + `GET /span`, both reads on the same panel:
 
-- **(a) the literal 2D scatter** — estimation cloud vs the book for a chosen factor pair (picker;
+- **(a) the literal 2D scatter** — estimation cloud vs the portfolio for a chosen factor pair (picker;
   default Size×ResidVol), built live from the exposures frame so any pair works without rebuilding.
 - **(b) the numeric verdict** — squared **Mahalanobis distance** of each holding from the cloud
   centre (in the cloud's own covariance, across all 10 style factors jointly), "inside" = within the
@@ -274,18 +274,18 @@ estimation universe? `barra_universe_span.py` + `GET /span`, both reads on the s
 **Method chosen: Mahalanobis** (over a plain bounding box) — it accounts for the cloud's spread and
 factor correlations, so "inside" means inside the actual estimation ellipsoid, not a loose box. The
 estimation cloud is the **Phase-2 funnel survivors**, so the three phases chain: membership → funnel →
-span. Aggregated by 13F weight: ~82% of the book inside on average post estimation/coverage split
+span. Aggregated by 13F weight: ~82% of the portfolio inside on average post estimation/coverage split
 (coverage loadings uncapped, so off-index holdings show their true extreme positions — lower and
 truer than the ~90% the old uniform ±3 clip gave), dipping since 2021. Loadings are z-scored/winsorized, so the space is in standardized-exposure terms.
 
 ## Phase 4 — style-drift attribution (intentional vs not) — BUILT
 
-The span trend surfaced a real post-2021 drift of the book out of the S&P 500's span (toward smaller,
+The span trend surfaced a real post-2021 drift of the portfolio out of the S&P 500's span (toward smaller,
 higher-vol names). Chris's read (2026-06-23): at ~85% overlap it's fine for the *estimation universe*,
 but the drift itself is the interesting question — **intentional** (deliberate style tilt / new PM) or
 **unintentional** (re-pricing)? Action differs: **benchmark** if intentional, **hedge** if not.
 
-`barra_universe_drift.py` makes it empirical. It tracks the book's net factor exposure x_k = Σ w·L over
+`barra_universe_drift.py` makes it empirical. It tracks the portfolio's net factor exposure x_k = Σ w·L over
 time and decomposes each factor's drift Δx_k (pre-split t0 → latest t1) into four sources that sum to Δ
 exactly:
 
@@ -298,9 +298,9 @@ exactly:
 `GET /drift?split=` serves the per-factor trend, the ranked t0→t1 drift, the attribution, and a
 per-factor "lean"; the "🧭 Style-drift attribution" panel charts it. **Finding (split 2021-01-01,
 2020-12-31 → 2024-12-31):** the drift is **dominated by `entered`** across the movers (ResidVol
-−0.05→+1.13, Δ+1.18 almost all from new names; NonLinSize, Value, Beta likewise) — the book *rotated
+−0.05→+1.13, Δ+1.18 almost all from new names; NonLinSize, Value, Beta likewise) — the portfolio *rotated
 into* smaller/higher-vol/value names rather than the held names drifting there. So it **leans
-intentional → update the benchmark**. The uncapped-coverage split matters here: the book's true
+intentional → update the benchmark**. The uncapped-coverage split matters here: the portfolio's true
 off-index tilts now show. The final verdict still needs desk knowledge (Soros's intent / PM changes);
 this is the evidence, not the call. Tests in `test_drift.py`.
 
@@ -324,8 +324,8 @@ and ticker-drift caveats are real but disclosed, not silent.
 
 - **Estimation universe breadth / PIT membership** — RESOLVED: go with **option (1), the point-in-time
   S&P 500** ("survivorship bias should be avoided at all costs"). A broader index would need a paid PIT
-  feed (Norgate ~$630/yr, or WRDS/Compustat); parked unless the book's drift later forces it. The
-  span check shows ~82% of the book sits inside the S&P 500's factor space (post-split), so option 1 is
+  feed (Norgate ~$630/yr, or WRDS/Compustat); parked unless the portfolio's drift later forces it. The
+  span check shows ~82% of the portfolio sits inside the S&P 500's factor space (post-split), so option 1 is
   well-supported.
 - **Near-flat funnel** — RESOLVED: expected and fine; for liquid SPX names the daily prices are
   market-clearing, so the DQ filters confirming clean data is the correct result.

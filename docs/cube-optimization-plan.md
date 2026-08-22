@@ -1,16 +1,16 @@
 # Cube optimization — the measured plan (2026-08-14)
 
-The 124-book expansion made cube performance a first-order question. This plan is built on a
+The 124-manager expansion made cube performance a first-order question. This plan is built on a
 **benchmark harness** (`python_src/cube_bench.py`) that stands up the full cube from `data/`,
 instruments every build stage, runs a fixed 44-query suite covering every measure family (each
 query cold + warm, JVM RSS before/after/peak sampled at 200ms), and emits a comparable JSON.
 The harness is the gate for every optimization below: change one thing, re-run, `--diff` the
 two JSONs. Baseline: `bench_baseline.json` (session scratchpad, 2026-08-14; box: 62G RAM,
-20 cores, `BARRA_CUBE_XMX=32g`; bench book = Vanguard, 3,635 names — the largest manager).
+20 cores, `BARRA_CUBE_XMX=32g`; bench manager = Vanguard, 3,635 names — the largest manager).
 
 ## What the data actually says
 
-**The routine paths are fast.** Every single-book, date-sliced, HistFull-sliced query — the
+**The routine paths are fast.** Every single-manager, date-sliced, HistFull-sliced query — the
 shapes the Vite UI and risk_api actually issue — runs in **60–500 ms cold, 20–50 ms warm**.
 That includes the by-position decomposition grids (3,635 rows of Marginal Total VaR: 0.49 s)
 and the whole scenario-scalar family. The demo does not have a general performance problem.
@@ -27,9 +27,9 @@ The measured pathologies, ranked:
 
 | # | Pathology | Evidence (cold, Vanguard unless noted) |
 |---|---|---|
-| 1 | **ScenarioDay unpacking** | book path **10 s warm-cube / ~50 s cold-cube, +14 G JVM**; day × Sector **fails** (~20–60 s then MdxException). Probes: COVID (82 real days) **52 s** vs HistFull (2,618 days) **49 s** — cost is per-member evaluation over the full-size 2,618-member parameter hierarchy, NOT vector length; small book 24.6 s → scales with book size too. |
+| 1 | **ScenarioDay unpacking** | manager path **10 s warm-cube / ~50 s cold-cube, +14 G JVM**; day × Sector **fails** (~20–60 s then MdxException). Probes: COVID (82 real days) **52 s** vs HistFull (2,618 days) **49 s** — cost is per-member evaluation over the full-size 2,618-member parameter hierarchy, NOT vector length; small manager 24.6 s → scales with portfolio size too. |
 | 2 | **All-sets enumeration of heavy measures** | `Risk HHI` × all 130 sets **fails** at ~11 s (reproducible); × the 7 real sets **0.48 s**. `Model vol` × 130 = 1.05 s vs × 7 = 0.12 s. The 123 PIT sets are 95% of the set count and are only ever addressed by name (`/trends` honest-vol), never enumerated. |
-| 3 | **Date-unsliced cross-book vector queries** | `Scenario VaR 99` by Book with **no Date filter**: 60.2 s (succeeded on an idle 32 G cube; the same shape 500'd on the loaded production cube — it sits exactly at the limits). **Date-sliced, the same query over all 123 books is 0.76 s.** This revises the earlier "all-books queries are out of contract" claim: they are fine — *unsliced-Date* × books × vectors is the killer. |
+| 3 | **Date-unsliced cross-manager vector queries** | `Scenario VaR 99` by Manager with **no Date filter**: 60.2 s (succeeded on an idle 32 G cube; the same shape 500'd on the loaded production cube — it sits exactly at the limits). **Date-sliced, the same query over all 123 managers is 0.76 s.** This revises the earlier "all-books queries are out of contract" claim: they are fine — *unsliced-Date* × managers × vectors is the killer. |
 | 4 | **Dead columns in the Positions load** | positions with MV+ADV: 6.6 s; Weight-only: 5.0 s (−25%; MV/ADV are never read by any measure). |
 | 5 | **Memory retention after bursts** | suite peak 41 G, settling only slowly; the production cube has twice needed a bounce after heavy use. |
 
@@ -72,9 +72,9 @@ there is no elementwise NaN filter in the array API, only length-preserving `pos
 `negative_values`. Padding is off, permanently, on this SDK.
 
 **Round 2 (2026-08-15) took hotspot 1 up again and got it 10×** — days as a physical fact table
-with an ordinary `Day` level instead of the 2,618-member parameter hierarchy: book path 25 s → 2.5 s,
+with an ordinary `Day` level instead of the 2,618-member parameter hierarchy: manager path 25 s → 2.5 s,
 +14 G → +0.9 G, and `day × Sector` works where it used to fail. The hard < 2 s / < 0.5 s targets were
-still missed on the largest book's full history, and the reason is now measured rather than guessed.
+still missed on the largest manager's full history, and the reason is now measured rather than guessed.
 Attempt log, numbers and verdict: `docs/cube-opt-round2-scenarioday.md`.
 
 The one numerically-safe half of the step was then tried alone and **also reverted**: making
@@ -123,8 +123,8 @@ process, same query order, only the cube code differing):
   PIT split costs it ~5%.
 - `/dims` takes ~20 s on this build, which is why several integration test-modules silently SKIP
   (their `_backend_up()` probes `/dims` with a 5 s timeout). Pre-existing and unrelated: the cost
-  is `contributors.COUNT` **by Book** over 6 M leaf rows. Step 2 in fact **improves** it —
-  measured 19.9 s → 14.9 s total (Book alone 17.5 → 13.1 s), because a fact now fans over 7
+  is `contributors.COUNT` **by Manager** over 6 M leaf rows. Step 2 in fact **improves** it —
+  measured 19.9 s → 14.9 s total (Manager alone 17.5 → 13.1 s), because a fact now fans over 7
   ScenarioSet members instead of 130.
 
 API side: `/meta.pit_sets` reads the new hierarchy; `_pred_book_vols` reads the mirrored measures
@@ -163,14 +163,14 @@ dozen extra measures on the cube surface: reverted. The duplication in the sourc
 readability question, not a performance one.
 
 **Step 4 — slim the Positions load + build-time prep.** Feed `read_pandas` only
-(Date, Book, Position, Weight) [−25% on that stage, −~185 MB JVM]; move the attribution prep
+(Date, Manager, Position, Weight) [−25% on that stage, −~185 MB JVM]; move the attribution prep
 (the `w` dedupe, FactorPnL/SpecPnL derivation, lines 175–213) into the builder as persisted
 columns so `build_cube` stops doing pandas work on every restart. Target: build 56 s → ~40 s.
 Optionally: `partitioning=` on the two big tables (0.9.15 supports it) — measure with the
 harness before keeping.
 
 **Results (2026-08-14): DONE, kept** (`docs/cube_bench_step4_20260814.json`). `read_pandas` now
-takes `positions[POSITION_CUBE_COLS]` = (Date, Book, Position, Weight); MV and ADV never cross
+takes `positions[POSITION_CUBE_COLS]` = (Date, Manager, Position, Weight); MV and ADV never cross
 into the JVM. The harness's own H3 micro-bench is the clean A/B for this (same process, same
 frame): **6.42 s full-width → 5.14 s slim, −20%**. `load_frames` is untouched, so
 `S["frames"]["positions"]` keeps MV/ADV for `/liquidity`, `/whatif`'s editor and the funnel.
@@ -216,7 +216,7 @@ is, so there is no measured basis for a bound yet.
 Bound `cube.aggregate_cache` explicitly once Step 3's data shows how much the cache is worth.
 
 **Step 6 — policy, not engine: Date-context enforcement in `/pivot`.** (Hotspot 3.) When a
-scenario-family measure is queried with Book on an axis and NO Date in context, `/pivot`
+scenario-family measure is queried with Manager on an axis and NO Date in context, `/pivot`
 already warns about missing ScenarioSet context; extend the same warning-or-default to Date
 (default = latest COB, disclosed in the response). Turns the 60-s/borderline-failure shape
 into the 0.76-s shape without touching the cube.
@@ -234,8 +234,8 @@ rewrite requests. `docs/cube_bench_step6_20260814.json` is the final-state harne
 is byte-identical to Step 5; it doubles as the post-program baseline).
 
 **Step 7 — evaluate an aggregate provider (only if Steps 1–4 leave a gap).** A partial bitmap
-provider at (Date, Book, Factor) pre-aggregates `Net exposure` for the scenario engine. The
-baseline says routine queries don't need it — this is insurance for future scale (more books,
+provider at (Date, Manager, Factor) pre-aggregates `Net exposure` for the scenario engine. The
+baseline says routine queries don't need it — this is insurance for future scale (more managers,
 daily calendar), gated like everything else on a harness diff and a what-if branch check
 (providers must respect source scenarios, or the branch-sensitivity design breaks).
 
@@ -243,8 +243,8 @@ daily calendar), gated like everything else on a harness diff and a what-if bran
 round 2 tried an aggregate provider at {Date, Book, Factor} and atoti refused it outright —
 `Hierarchy[Positions, Book] cannot be part of the partial provider definition because it is an
 analysis hierarchy. This use case is not supported.` Every hierarchy this cube would want to
-pre-aggregate on (Book, ScenarioSet, PITSet, Day) is an analysis hierarchy created by a partial
-join, so Step 7 is closed for any book-scoped measure on this SDK, not merely deferred. After Steps 2/4/5/6 every routine
+pre-aggregate on (Manager, ScenarioSet, PITSet, Day) is an analysis hierarchy created by a partial
+join, so Step 7 is closed for any manager-scoped measure on this SDK, not merely deferred. After Steps 2/4/5/6 every routine
 query in the suite is 0.03–0.5 s cold and 0.01–0.05 s warm, the all-sets family no longer fails,
 and the one query shape that could take a minute is now bounded by policy at 1.1 s. A provider
 would buy nothing there. The two things still slow are the two a `Net exposure` provider does not
@@ -252,7 +252,7 @@ address:
 - **ScenarioDay unpacking** (10–50 s, and the × Sector variant still fails) is a *per-member*
   evaluation over a 2,618-member parameter hierarchy, not an exposure-aggregation cost — which is
   exactly why its warm time equals its cold time (nothing to reuse) and why pre-aggregating
-  `Net exposure` at (Date, Book, Factor) leaves the 2,618 vector index reads untouched. Note also
+  `Net exposure` at (Date, Manager, Factor) leaves the 2,618 vector index reads untouched. Note also
   how narrow this hotspot is in practice: the UI's per-day path comes from `/scenario_pnl`, which
   reads the whole P&L vector + its date dual in ONE query (`pnl_vector_book`: **0.04 s cold**).
   The ScenarioDay dimension was used only by the notebook idiom and a hand-built pivot (both
@@ -268,10 +268,10 @@ address:
   `docs/cube-opt-round2-startup.md`.**]**
 
 Also unresolved by a provider and worth flagging as the real next candidate: `/dims` at ~15 s,
-whose cost is `contributors.COUNT` **by Book** over those 6 M rows (13.1 s of the 14.9 s total,
-measured). That is a member-enumeration problem — the cheap fix is to enumerate Book from the
+whose cost is `contributors.COUNT` **by Manager** over those 6 M rows (13.1 s of the 14.9 s total,
+measured). That is a member-enumeration problem — the cheap fix is to enumerate Manager from the
 positions frame instead of the cube, not to build an aggregate store. Revisit the provider only
-if the calendar goes daily or the book count grows again, and gate it on the same harness diff
+if the calendar goes daily or the manager count grows again, and gate it on the same harness diff
 plus a what-if branch check (a provider that ignores source scenarios silently breaks the
 branch-sensitivity design).
 
@@ -334,7 +334,7 @@ full harness (`docs/cube_bench_merged_20260815.json`) and the 57-test accuracy g
 | item | before | after (merged, this box) | hard metric | verdict |
 |---|---|---|---|---|
 | **start-up** `build_cube` | 56–64 s | **26.9 s** harness / service up in ~40 s (was ~70) | < 35 s | **MET** — root cause was model-definition round-trips (49%), not the exposures load (6%) |
-| **ScenarioDay** book path | 25 s cold, +14 G | **1.5 s cold / 1.2 s warm, +0.9 G**; COVID replay 0.09 s; day×Sector 12.7 s (was: fails) | < 2 s / < 0.5 s; sector < 5 s | cold MET; warm + sector NOT MET — measured SDK floor ~0.5–0.8 ms per fact-joined member; aggregate providers hard-refused by atoti |
+| **ScenarioDay** manager path | 25 s cold, +14 G | **1.5 s cold / 1.2 s warm, +0.9 G**; COVID replay 0.09 s; day×Sector 12.7 s (was: fails) | < 2 s / < 0.5 s; sector < 5 s | cold MET; warm + sector NOT MET — measured SDK floor ~0.5–0.8 ms per fact-joined member; aggregate providers hard-refused by atoti |
 | **/dims** | 15–28 s every call | **1.4–3.2 s once per frame swap** (ambient-load dependent), then **~8 ms** cached | < 1 s cold / < 50 ms cached | cached MET (by 4 orders); cold NOT MET on the letter — first-call cost is paid once |
 
 Cross-cutting: JVM after build 7.8 → 6.1 G; no query regressed beyond the harness's own noise
@@ -376,10 +376,10 @@ running) — `docs/api_bench_merged_20260815.json`:
 
 | item | before (round 2 / this box) | after (merged, quiet box) | verdict |
 |---|---|---|---|
-| **1+2 per-day path** — vector plan (`_day_vector_shape`; cube's P&L vector + one markers cell, unpacked in the API; level plan kept for other shapes, `plan=` param, payload `plan` key) | Vanguard HistFull book 11.5 s (level plan, same box) / +markers 21 s / ×Sector 29 s; Soros 1.0 / 1.6 / 4.3 s | **0.53 / 0.50 / 2.1 s Vanguard; 0.52 / 0.47 / 0.84 s Soros**; COVID ~0.45 s any book | both round-2 gates MET (warm < 0.5 s on the small shapes; ×Sector < 5 s); invariant to book size, measure count, load. Honest caveat: API-side reshape of a cube vector, not a cube-native level — disclosed in the doc + code |
+| **1+2 per-day path** — vector plan (`_day_vector_shape`; cube's P&L vector + one markers cell, unpacked in the API; level plan kept for other shapes, `plan=` param, payload `plan` key) | Vanguard HistFull portfolio 11.5 s (level plan, same box) / +markers 21 s / ×Sector 29 s; Soros 1.0 / 1.6 / 4.3 s | **0.53 / 0.50 / 2.1 s Vanguard; 0.52 / 0.47 / 0.84 s Soros**; COVID ~0.45 s any manager | both round-2 gates MET (warm < 0.5 s on the small shapes; ×Sector < 5 s); invariant to portfolio size, measure count, load. Honest caveat: API-side reshape of a cube vector, not a cube-native level — disclosed in the doc + code |
 | **3 start-up** — arrow cache for the bulk load (`data/.cube_cache`), persisted attribution regenerated; `load_async`/threads and `ParquetLoad` measured and rejected; serve-before-load evaluated, not done | build_cube 26.9 s (round-2 harness), `load.bulk` 12.0 s, attribution prep 3.7 s live | **build_cube 18.8 / 19.0 s**, `load.bulk` 7.4 s, attribution prep ~0; service answers `/meta` ~25 s after restart | MET; the floor is now `session.start` 5.3 s + `load.bulk` 7.4 s (JVM ingest, serialised by the datastore) |
 | **4 /dims cold** — `_prewarm()` daemon thread after `cube ready` (also `/dq`) | 1.4–3 s first call | **10 ms / 24 ms first user call** | MET (nobody pays the cold call) |
-| **5 API loops** — `api_bench.py` (34 requests × 2 books, cold+warm, payload identity gate `--same`); `_pred_book_vols`/`_name_attr` row-index memo + concurrent PIT queries, `/trends` book memo + concurrent cold fill, `/dq` memo | calibration@Vanguard 120–370 s, @Soros 94 s; trends_book@Vanguard 34/36 s; pnl_attribution_residual 24–30 s; /dq warm 7–9 s | **calibration 7.0 / 5.6 s cold, 0.04 warm; trends_book@Vanguard 13.0 cold / 0.01 warm; residual 1.4 / 0.33; /dq 0.02** | MET; 66/68 payloads byte-identical (2 `/span` diffs are pre-existing set-order only). Left: `/pnl_attribution/linkage` 1–2 s, `/whatchanged` 1.5 s, `pivot_var_trend_by_date` 2.6–3.5 s |
+| **5 API loops** — `api_bench.py` (34 requests × 2 managers, cold+warm, payload identity gate `--same`); `_pred_book_vols`/`_name_attr` row-index memo + concurrent PIT queries, `/trends` manager memo + concurrent cold fill, `/dq` memo | calibration@Vanguard 120–370 s, @Soros 94 s; trends_book@Vanguard 34/36 s; pnl_attribution_residual 24–30 s; /dq warm 7–9 s | **calibration 7.0 / 5.6 s cold, 0.04 warm; trends_book@Vanguard 13.0 cold / 0.01 warm; residual 1.4 / 0.33; /dq 0.02** | MET; 66/68 payloads byte-identical (2 `/span` diffs are pre-existing set-order only). Left: `/pnl_attribution/linkage` 1–2 s, `/whatchanged` 1.5 s, `pivot_var_trend_by_date` 2.6–3.5 s |
 | **6 legacy path** — every consumer migrated to Day/DayDate (Streamlit feed migration, notebooks, tests, Vite fixtures, bench twins), then `ScenarioDay` + the five `Scenario … at day` measures PRUNED from the allowlist (400; cube still defines them for the A/B) | the one UI/`/ask` path that could hit the 120 s timeout / BadArgumentException | gone from the API surface | done |
 
 Two lessons for the record: (1) the box is shared and the JVM's parallel scans are load-bound —

@@ -8,11 +8,11 @@ bridge" section for the full writeup; the measured highlights:
 - Builder: `data/stock_returns.parquet` (9th, optional frame), 96.7% of 5,197 coverage names
   priced, 10.77M sparse rows, 2016-01-04 → 2026-08-13. Two new DQ checks (coverage, return
   sanity — flags 6,799/10.77M rows with |r| > 50%, disclosed, not chased).
-- Cube: `build_cube` 19.66s → 27.41s (+7.75s) in-process on the 124-book frames; JVM RSS ~7.2G
+- Cube: `build_cube` 19.66s → 27.41s (+7.75s) in-process on the 124-manager frames; JVM RSS ~7.2G
   post-build. Soros/HistFull/2026-06-30: `Price VaR 99` 2.99% vs `Total VaR 99` 3.58%.
 - `/var_bridge` (Soros/2026-06-30/HistFull): T0 3.524% → T1 3.576% (+0.053%) → T2 3.486%
   (−0.090%) → T3 2.986% (−0.500%) → T4 2.986% (+0.000%) — **exposure drift is the largest term**
-  on this book/date; coverage is ~0 (every held name priced and covered). Numpy verification
+  on this manager/date; coverage is ~0 (every held name priced and covered). Numpy verification
   diff ~7e-18.
 - Scoped down, disclosed: no cube-native `PriceDays` day-fact table (would cost ~15M rows keyed
   by ~5,200 positions instead of 23 factors) — `Price PnL at day` was not built; the day-by-day
@@ -31,9 +31,9 @@ bridge" section for the full writeup; the measured highlights:
 
 ## The idea
 
-Every VaR in the cube today comes from the factor model: `Scenario VaR 99` simulates the book on
+Every VaR in the cube today comes from the factor model: `Scenario VaR 99` simulates the portfolio on
 historical **factor** returns with today's exposures; `Total VaR 99` adds a Gaussian, diagonal
-specific block in quadrature. The **Price** family simulates the same book on historical **stock**
+specific block in quadrature. The **Price** family simulates the same portfolio on historical **stock**
 returns — no model at all — and the bridge explains the difference term by term.
 
 The bridge works because the two are tied by an identity. For every covered name on a regression
@@ -52,11 +52,11 @@ and *Price VaR*.
 | `Price worst loss`, `Price mean PnL`, `Price PnL vol` | same |
 | `Marginal Price VaR 99` (tail-day Euler, sums exactly) | `Marginal Total VaR 99` |
 | `% of Price VaR 99` | `% of Total VaR 99` |
-| `Incremental Price VaR 99` (book minus book-without-member) | `Incremental Total VaR 99` |
+| `Incremental Price VaR 99` (portfolio minus portfolio-without-member) | `Incremental Total VaR 99` |
 | `Marginal Price ES 97.5` | `Marginal Scenario ES 97.5` |
 | `Price PnL at day` (+ markers) | `PnL at day` |
 | `Price coverage` | new — weight share with a real return, as a vector by day |
-| `Price coverage at tail` | new — coverage on the book's tail day |
+| `Price coverage at tail` | new — coverage on the portfolio's tail day |
 | `… $` twins via `DOLLAR_MEASURES` | — |
 
 The marginal and incremental conventions are copied from the model family exactly (same tail-day
@@ -70,7 +70,7 @@ Absent on v1 data; the cube and API degrade like they do for `specific_returns`.
 2,618 days ≈ 13.6M values.
 
 Missing days (young listings, delistings): **zero-fill and disclose**. A missing return means the
-name contributes nothing to the book's P&L that day; `Price coverage` reports the weight share that
+name contributes nothing to the portfolio's P&L that day; `Price coverage` reports the weight share that
 was actually priced, day by day, and the lens flags tail days where coverage is low. Never backfill
 from the model — that would make Price VaR depend on the model it is meant to check.
 
@@ -108,7 +108,7 @@ T1 and T4 come from the cube. Per-name version of the same table for the top dis
 
 ## API
 
-- `GET /var_bridge?date=&book=&set=&alpha=` — the five numbers, four terms, coverage on the tail
+- `GET /var_bridge?date=&manager=&set=&alpha=` — the five numbers, four terms, coverage on the tail
   day, the per-name disagreement table, `verification`.
 - Price measures on the `/pivot` allowlist, `SCEN_DEP`-style dependency on `PriceSet`
   (`PRICE_DEP`), `$` twins, Day-path entries; `/dims` publishes `price_dependent`.
@@ -130,9 +130,9 @@ T1 and T4 come from the cube. Per-name version of the same table for the top dis
 - Identity: on covered names at a regression date, T3 rebuilt from `L·f + u` equals the price
   simulation to float precision → the bridge closes exactly.
 - Euler: `Σ Marginal Price VaR 99 == Price VaR 99`; incremental sub-additive; `%` sums to 1.
-- Coverage: zero-fill accounted — `Price coverage` × book = priced weight, day by day.
+- Coverage: zero-fill accounted — `Price coverage` × portfolio = priced weight, day by day.
 - Set semantics: Evt window vectors are slices of HistFull.
-- `$` twins: `Price VaR 99 $ == Price VaR 99 × Book MV`.
+- `$` twins: `Price VaR 99 $ == Price VaR 99 × Manager MV`.
 - API: `/var_bridge` terms sum to T4 − T0; `verification` diff ≤ 1e-12.
 
 ## Order of work

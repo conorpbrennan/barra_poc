@@ -10,10 +10,10 @@ call other endpoints serially, or do numpy work on top of the cube. Nothing meas
 
 `cd python_src && BARRA_API=http://127.0.0.1:8010 ../barra/bin/python api_bench.py out.json`
 
-- 34 requests per book × 2 books (Soros = the reference book, Vanguard = the largest), each cold
+- 34 requests per manager × 2 managers (Soros = the reference manager, Vanguard = the largest), each cold
   then warm, over HTTP against a RUNNING `risk_api`. Covers: `/meta`, `/dims`; the Overview set
   (`/risk`, `/limits`, `/dq`, `/backtest`, `/contributions`, `/whatchanged`, `/pnl_attribution`,
-  `/pnl_attribution/linkage|residual|names`, `/pnl_attribution?by=sector`); Trends (book path,
+  `/pnl_attribution/linkage|residual|names`, `/pnl_attribution?by=sector`); Trends (manager path,
   Model vol path, by=Factor); Stress/What-if (`/stress` naive + conditional, `/reverse_stress`,
   `/hedge`, `/whatif` empty trades); Universe/Drift (`/universe`, `/funnel`, `/span`, `/drift`);
   Model (`/calibration`, `/regression`, `/factor_cov`); six `/pivot` shapes the field list
@@ -59,14 +59,14 @@ Where the time went, by reading the code against the numbers:
 - **`/pnl_attribution/residual`** (and `/names`, `?by=`) → `_pred_book_vols` on its window PLUS
   `_name_attr`, which per month masks the DAILY `specific_returns` frame (~13M rows) — 12 scans of
   13M rows was most of the 16 s, and it recomputed on every call.
-- **`/trends` book path** → ~126 serial single-date cube queries (the OOM-avoiding loop, correct
+- **`/trends` manager path** → ~126 serial single-date cube queries (the OOM-avoiding loop, correct
   and kept), recomputed on every call although the cube never changes in-process.
 - **`/dq`** → `barra_dq_checks.run` on the live frames, every call, 7–14 s of pure-function work.
 - **`/dims`** was already cached after the first call (round 2); the first user still paid it.
 
 ## What changed (`python_src/risk_api.py`, API layer only — no cube change)
 
-1. **`_pred_book_vols` memoized per (book, month)** on `S`, shared by `/calibration` and
+1. **`_pred_book_vols` memoized per (manager, month)** on `S`, shared by `/calibration` and
    `/pnl_attribution/residual`; the numpy half fed from **cached per-Date row indices**
    (`_frame_rows_by`: one `groupby(...).indices` per (frame, keys) per process, `iloc` thereafter)
    instead of full-frame masks; the per-month PIT cube queries run **concurrently** (8 workers).
@@ -75,7 +75,7 @@ Where the time went, by reading the code against the numbers:
 2. **`_name_attr`** fed from the same cached row indices; the `specific_returns` (d0, next] window is
    assembled from per-day index arrays via `searchsorted` on the sorted day list. Same rows, same
    sums.
-3. **`/trends` book path memoized** per (set, book, measures, cube identity), and a cold fill runs
+3. **`/trends` manager path memoized** per (set, manager, measures, cube identity), and a cold fill runs
    the per-date queries concurrently (8 workers), results re-assembled in date order.
 4. **`/dq` memoized** (`_dq_checks`, keyed on the frames' identity).
 5. **Start-up prewarm** (`_prewarm`, called from `lifespan` after `cube ready`): a daemon thread
@@ -116,12 +116,12 @@ of the payload byte-identical). Pre-existing, untouched here; a `sorted()` there
 deterministic (out of this item's scope).
 
 **Tests** (own instance): `test_trends.py` 4/4, `test_dq.py` 5/5, `test_model_trust.py` 11/12
-(`t_exposure_profile_shape` fails on `beyond3.share` 0.60 ≥ 0.5 — data-dependent on the 124-book
+(`t_exposure_profile_shape` fails on `beyond3.share` 0.60 ≥ 0.5 — data-dependent on the 124-manager
 coverage universe, `/exposure_profile` untouched), `test_attribution.py` 21/24 (the three failures
-are stale against the 124-book build: `t_pnl_attribution_book_guard` expects AQR to be a
-`book_mismatch` but `pnl_attribution.AQR.parquet` now exists and is served; `t_cube_measures_foot`
-and `t_book_independent_measures_inert_with_one_book` query the book-independent attribution
-measures through `/pivot`, which the multi-book guard rejects with 400 by design). None of the four
+are stale against the 124-manager build: `t_pnl_attribution_manager_guard` expects AQR to be a
+`manager_mismatch` but `pnl_attribution.AQR.parquet` now exists and is served; `t_cube_measures_foot`
+and `t_manager_independent_measures_inert_with_one_manager` query the manager-independent attribution
+measures through `/pivot`, which the multi-manager guard rejects with 400 by design). None of the four
 touches code changed here.
 
 ## What was NOT done (all of it done since — round 4, 2026-08-21)
@@ -131,7 +131,7 @@ mechanisms and the measured after.
 
 - `/pnl_attribution/linkage` (2–8 s) and `/whatchanged` (1.5–3.4 s) — next candidates; both mix
   cube calls with the same per-month frame masks and would take the `_frame_rows_by` treatment.
-  → done (4.3): 1.94 → 0.57 s and 1.50 → 0.91 s. Doing it exposed a book-scoping **bug** in
+  → done (4.3): 1.94 → 0.57 s and 1.50 → 0.91 s. Doing it exposed a manager-scoping **bug** in
   `/whatchanged`'s exposure attribution (4.4).
 - `/trends` `by=Factor` (2–4 s on Vanguard) is one query; nothing API-side to do.
   → confirmed: the query is 94% of the call (records 3 ms, encode 10 ms), so it was memoized
