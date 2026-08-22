@@ -508,6 +508,97 @@ def t_book_independent_measures_allowed_with_one_book():
             risk_api.S.pop("frames", None)
 
 
+# ------------------------------------------------------ /pnl_attribution/drill (2026-08-22)
+# The Vite reconcile drawers' new per-book-correct source: computed live from S["frames"] (no
+# artifact, no cube measure), so it works on ANY loaded book unlike the baked Factor contribution
+# cube measure /pivot rejects above one book.
+@integ
+def t_drill_position_ties_to_linkage():
+    """The acceptance test: a position-mode drill's bars + specific sum to the SAME realized
+    /pnl_attribution/linkage reports for that exact (book, T, to, position) -- both paths run
+    _name_attr's identical arithmetic, this one just keeps the factor axis instead of collapsing
+    it."""
+    import requests
+    lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
+    assert lk["positions"], "no position surprises in the default window -- widen the fixture"
+    p = lk["positions"][0]
+    d = requests.get(f"{API}/pnl_attribution/drill",
+                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                             "position": p["position"]}, timeout=60).json()
+    bars_sum = sum(b["contribution"] for b in d["bars"])
+    assert abs((bars_sum + d["specific_pnl"]) - d["realized"]) < 1e-12, d
+    assert abs(d["realized"] - p["realized"]) < 1e-9, (d["realized"], p["realized"])
+    assert abs(bars_sum - p["factor_pnl"]) < 1e-9, (bars_sum, p["factor_pnl"])
+    assert abs(d["specific_pnl"] - p["specific_pnl"]) < 1e-9, (d["specific_pnl"], p["specific_pnl"])
+    assert d["n_factors_at_T"] >= 0
+
+
+@integ
+def t_drill_factor_bars_sum_to_total():
+    """Factor-mode: the per-Issuer 'who carried it' bars sum exactly to the factor's own window
+    contribution for the book."""
+    import requests
+    lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
+    frow = next(r for r in lk["rows"] if r["kind"] == "factor")
+    d = requests.get(f"{API}/pnl_attribution/drill",
+                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                             "factor": frow["name"]}, timeout=60).json()
+    assert d["factor"] == frow["name"]
+    bars_sum = sum(b["contribution"] for b in d["bars"])
+    assert abs(bars_sum - d["total"]) < 1e-9, d
+
+
+@integ
+def t_drill_scales_by_book_weight():
+    """A second loaded book's drill for a shared name differs from Soros's -- proving the
+    computation is genuinely per-book, not the baked cube column's one-arbitrary-book collapse
+    (see CLAUDE.md 'book-independent attribution limitation')."""
+    import requests
+    books = _books()
+    other = next((b for b in books if b != "Soros"), None)
+    if other is None:
+        print("    (single-book cube: nothing to compare against)")
+        return
+    lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
+    T, to = lk["T"], lk["to"]
+    names = requests.get(f"{API}/pnl_attribution/names",
+                         params={"from": T, "to": to, "book": "Soros"}, timeout=60).json()
+    if names.get("status") == "book_mismatch":
+        print("    (Soros /pnl_attribution/names artifact unavailable at this window)")
+        return
+    candidates = [r["position"] for r in names.get("winners", []) + names.get("losers", [])]
+    shared = None
+    for pos in candidates:
+        a = requests.get(f"{API}/pnl_attribution/drill",
+                         params={"T": T, "to": to, "book": "Soros", "position": pos}, timeout=60)
+        b = requests.get(f"{API}/pnl_attribution/drill",
+                         params={"T": T, "to": to, "book": other, "position": pos}, timeout=60)
+        if a.status_code == 200 and b.status_code == 200:
+            shared = (pos, a.json(), b.json())
+            break
+    if shared is None:
+        print(f"    (no name held by both Soros and {other} in this window)")
+        return
+    pos, da, db = shared
+    assert da["book"] == "Soros" and db["book"] == other, (da, db)
+    assert (abs(da["realized"] - db["realized"]) > 1e-9
+            or abs(da["specific_pnl"] - db["specific_pnl"]) > 1e-9), (pos, da, db)
+
+
+@integ
+def t_drill_requires_exactly_one_of_position_or_factor():
+    import requests
+    lk = requests.get(f"{API}/pnl_attribution/linkage", timeout=60).json()
+    r = requests.get(f"{API}/pnl_attribution/drill",
+                     params={"T": lk["T"], "to": lk["to"], "book": lk["book"]}, timeout=60)
+    assert r.status_code == 400, r.text
+    r2 = requests.get(f"{API}/pnl_attribution/drill",
+                      params={"T": lk["T"], "to": lk["to"], "book": lk["book"],
+                              "position": lk["positions"][0]["position"], "factor": "Market"},
+                      timeout=60)
+    assert r2.status_code == 400, r2.text
+
+
 def main():
     p = f = 0
 

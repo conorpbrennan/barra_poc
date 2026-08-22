@@ -37,6 +37,8 @@ Endpoints:
     GET /pnl_attribution?from=&to=&by=     -> realized PnL by factor + residual (Carino-linked)
     GET /pnl_attribution/residual          -> residual diagnostics (IR, autocorr, bias) with RAG
     GET /pnl_attribution/linkage?T=        -> risk decomposition at T vs PnL over T→T+h (surprise z)
+    GET /pnl_attribution/drill?T=&to=&book=&position=|factor=
+                                            -> live per-book reconcile drill (frames, not the cube)
     POST /analysis                         -> streamed risk-analyst commentary on ONE view's numbers
 
 The /analysis endpoint runs the SAME guarded pivot the UI shows, then sends ONLY those tidy
@@ -2928,6 +2930,61 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     return out
 
 
+def _drill_contrib(T: str, to: str, book: str):
+    """Per (Position, Factor) live PnL contribution over the window [T, to) (fwd-month
+    convention), plus per-position specific PnL and the T-date loadings — the reconcile drawers'
+    live replacement for the baked (book-independent) `Factor contribution` cube measure
+    (2026-08-22, see CLAUDE.md "book-independent attribution limitation"). This is EXACTLY
+    `_name_attr`'s per-month loop with the factor axis kept instead of collapsed
+    (`Ld[facs] @ fsum[facs]` there == `Ld[facs].mul(fsum[facs])` summed over factors here), so a
+    position's per-factor bars + its specific PnL sum to the SAME `realized` `_name_attr` (and
+    therefore `/pnl_attribution/linkage`'s `positions[].realized`) reports for (book, T, to,
+    position) — that identity is the acceptance test, not a separate reconciliation.
+    Returns (contrib: DataFrame Position×Factor, specific: Series Position, loadings_T: DataFrame
+    Position×Factor loadings as-of T)."""
+    f = S["frames"]
+    exp, pos, frt = f["exposures"], f["positions"], f["factor_returns"]
+    sr = f.get("specific_returns")
+    if sr is None:
+        raise HTTPException(404, "specific_returns frame missing — rebuild with the v2 builder")
+    t0, t1 = pd.Timestamp(T), pd.Timestamp(to)
+    exp_dates = np.sort(exp["Date"].unique())
+    d0s = [pd.Timestamp(d) for d in exp_dates if t0 <= pd.Timestamp(d) < t1]
+    if not d0s:
+        raise HTTPException(404, f"no exposure dates in [{t0.date()}, {t1.date()})")
+    pos_by = _frame_rows_by("positions", ("Manager", "Date"))
+    exp_by = _frame_rows_by("exposures", ("Date",))
+    contrib_parts, spec_parts = [], []
+    for d0 in d0s:
+        nxt = exp_dates[np.searchsorted(exp_dates, np.datetime64(d0)) + 1] \
+            if np.searchsorted(exp_dates, np.datetime64(d0)) + 1 < len(exp_dates) else None
+        pidx = pos_by.get((book, d0))
+        w_ = (pos.iloc[pidx] if pidx is not None else pos.iloc[:0]).groupby("Position")["Weight"].sum()
+        if w_.empty:
+            continue
+        frd = frt[(frt["Date"] > d0) & ((frt["Date"] <= nxt) if nxt is not None else True)]
+        fsum = frd.groupby("Factor")["Return"].sum()
+        srd = _sr_rows_between(d0, nxt)
+        eps = srd[srd["Position"].isin(w_.index)].groupby("Position")["SpecificReturn"].sum()
+        eidx = exp_by.get(d0)
+        exp_d = exp.iloc[eidx] if eidx is not None else exp.iloc[:0]
+        Ld = (exp_d[exp_d["Position"].isin(w_.index)]
+              .pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first"))
+        facs = [c for c in Ld.columns if c in fsum.index]
+        month_contrib = Ld[facs].fillna(0.0).mul(fsum[facs], axis=1).mul(w_.reindex(Ld.index), axis=0)
+        contrib_parts.append(month_contrib)
+        eps_i = eps.reindex(w_.index).fillna(0.0)
+        spec_parts.append(w_ * eps_i)
+    if not contrib_parts:
+        raise HTTPException(404, f"no {book} positions in [{t0.date()}, {t1.date()})")
+    contrib = pd.concat(contrib_parts).groupby(level=0).sum()
+    specific = pd.concat(spec_parts).groupby(level=0).sum()
+    eidx0 = exp_by.get(t0)
+    exp_t0 = exp.iloc[eidx0] if eidx0 is not None else exp.iloc[:0]
+    loadings_T = exp_t0.pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first")
+    return contrib, specific, loadings_T
+
+
 def _attr_headline() -> dict | None:
     """Trailing-12m attribution headline for the /analysis payload. None when the artifact is
     absent (v1 build) so commentary is unaffected."""
@@ -3631,6 +3688,57 @@ async def pnl_attribution_linkage(T: str | None = None,
                      "(loading refresh / 13F re-anchor) — an ill-conditioned z, not a factor "
                      "event."),
         }
+    return await run_in_threadpool(run)
+
+
+@app.get("/pnl_attribution/drill")
+async def pnl_attribution_drill(T: str, to: str, book: str = "Soros",
+                                position: str | None = None, factor: str | None = None):
+    """Live per-book reconcile drill for the Vite Attribution drawers (2026-08-22). The baked
+    `Factor contribution` cube measure is book-INDEPENDENT above one book (it carries ONE
+    arbitrary book's weight per name — see CLAUDE.md "book-independent attribution limitation")
+    and `_validate_pivot` rejects it outright once >1 book is loaded, which 400'd the drawers on
+    the 123-book build. This recomputes the identical forward-month-convention math live from
+    `S["frames"]` for the REQUESTED book's own as-of weights (`_drill_contrib`, which mirrors
+    `_name_attr`/`/pnl_attribution/linkage` exactly), so it works on ANY loaded book — no
+    artifact, no `_book_guard` (unlike /universe, /funnel, /span, /drift, the other
+    /pnl_attribution* routes: those read a single-book PRECOMPUTED artifact with no book concept
+    of its own; this reads the live per-book frames directly, so there is nothing to mismatch).
+
+    `position=` (PositionDrawer): that name's per-factor contribution over [T, to) + its specific
+    PnL + its T-date loadings; `bars`' contributions plus `specific_pnl` sum to `realized` to
+    float precision by construction (same arithmetic as `_name_attr`, factor axis kept instead of
+    collapsed). `factor=` (FactorDrawer): the inverse who-carried-it view — that factor's
+    contribution over [T, to) for the book, by Issuer; `bars` sum to `total`."""
+    if (position is None) == (factor is None):
+        raise HTTPException(400, "pass exactly one of position= or factor=")
+    def run():
+        contrib, specific, loadings_T = _drill_contrib(T, to, book)
+        if position is not None:
+            row = contrib.loc[position] if position in contrib.index else pd.Series(dtype=float)
+            if row.empty and position not in specific.index:
+                raise HTTPException(404, f"no {book} exposure/PnL for {position} in [{T}, {to})")
+            spec_pnl = float(specific.get(position, 0.0))
+            lt = loadings_T.loc[position] if position in loadings_T.index else pd.Series(dtype=float)
+            bars = [{"factor": f_, "contribution": float(v),
+                     "loading_at_T": (float(lt[f_]) if f_ in lt.index and pd.notna(lt[f_]) else None)}
+                    for f_, v in row.items() if v != 0.0]
+            bars.sort(key=lambda b: -abs(b["contribution"]))
+            realized = float(row.sum()) + spec_pnl
+            tk = _ticker_map()
+            return {"book": book, "T": T, "to": to, "position": position,
+                    "ticker": tk.get(position, position),
+                    "bars": bars, "specific_pnl": spec_pnl, "realized": realized,
+                    "n_factors_at_T": int(lt.notna().sum())}
+        if factor not in contrib.columns:
+            raise HTTPException(404, f"no {factor} exposure for {book} in [{T}, {to})")
+        col = contrib[factor]
+        sec = S["frames"]["securities"][["Position", "Issuer"]].set_index("Position")["Issuer"]
+        by_issuer = col.groupby(sec.reindex(col.index).fillna("Unknown")).sum()
+        bars = [{"issuer": str(iss), "contribution": float(v)} for iss, v in by_issuer.items() if v != 0.0]
+        bars.sort(key=lambda b: -abs(b["contribution"]))
+        return {"book": book, "T": T, "to": to, "factor": factor,
+                "bars": bars, "total": float(col.sum())}
     return await run_in_threadpool(run)
 
 
