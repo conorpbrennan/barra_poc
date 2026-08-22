@@ -26,6 +26,10 @@ def run(frames: dict | None = None) -> list[dict]:
     — the CLI block below prints). Pass `frames` (the cube's in-memory six) to check exactly what is
     served; omit to read the parquet frames from disk. Reusable by risk_api's /dq endpoint."""
     f = frames if frames is not None else {n: pd.read_parquet(OUT / f"{n}.parquet") for n in KEYS}
+    if frames is None:                      # CLI mode: pick up optional frames too, if built
+        for _opt in ("stock_returns",):
+            if (OUT / f"{_opt}.parquet").exists():
+                f[_opt] = pd.read_parquet(OUT / f"{_opt}.parquet")
     _results: list[dict] = []
 
     def check(level: str, name: str, detail: str = "") -> None:
@@ -218,6 +222,20 @@ def run(frames: dict | None = None) -> list[dict]:
             detail = f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit"
         check("WARN" if w > 0.25 else "PASS",
               "size-curve proxy loadings (imputed log-mcap, held book)", detail)
+
+    # --- 7. stock_returns (optional 9th frame, Price VaR — docs/price-var-plan.md) -------------
+    if "stock_returns" in f:
+        sr = f["stock_returns"]
+        sec_n = len(f["securities"])
+        covered = sr["Position"].nunique()
+        cov_share = covered / sec_n if sec_n else 0.0
+        check("WARN" if cov_share < 0.5 else "PASS",
+              "stock_returns: coverage share of securities priced",
+              f"{covered}/{sec_n} names ({cov_share:.1%})")
+        wild = sr[sr["Return"].abs() > 0.5]
+        check("WARN" if len(wild) else "PASS", "stock_returns: |daily return| <= 50%",
+              f"{len(wild)}/{len(sr)} rows, max |r| {sr['Return'].abs().max():.3g}"
+              if len(wild) else f"{len(sr):,} rows")
 
     return _results
 

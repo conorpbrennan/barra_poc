@@ -985,6 +985,43 @@ def stooq_daily(symbol: str) -> pd.DataFrame | None:
     df["Date"] = pd.to_datetime(df["Date"])
     return df.set_index("Date").sort_index()
 
+def stock_returns_from_prices(securities: pd.DataFrame, prices: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """The ninth (optional) frame: daily SIMPLE returns for every coverage name, from the SAME
+    cached Stooq/Yahoo prices already pulled for the descriptor/factor-return pipeline (`prices`
+    is the {ticker: DataFrame} dict `build_frames` builds via `_pull_map(stooq_daily, ...)` — this
+    function does no network I/O of its own, so it costs nothing extra inside a build).
+
+    `securities` needs only Position/Ticker (the frame's own `sec[["figi","ticker"]]` renamed).
+    SPARSE output: one row per (Date, Position) that has a real close-to-close return -- a missing
+    day (young listing, holiday-calendar mismatch, delisting) is simply ABSENT, never a
+    synthesized zero. The cube/API zero-fill it when aligning onto a scenario calendar (never
+    backfilled from the model). Simple returns, not log: P&L is linear in weights, matching
+    barra_pnl_attribution.py's own r_i convention. Corporate actions: Stooq/Yahoo serve ADJUSTED
+    closes (splits handled, dividends folded in) -- disclosed, not re-derived.
+    """
+    tkr2pos: dict[str, list] = {}
+    for pos, tkr in zip(securities["Position"], securities["Ticker"]):
+        tkr2pos.setdefault(tkr, []).append(pos)
+    dates_parts, pos_parts, ret_parts = [], [], []
+    for tkr, px in prices.items():
+        if px is None or "Close" not in px or px.empty or tkr not in tkr2pos:
+            continue
+        ret = px["Close"].pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+        if ret.empty:
+            continue
+        d, v = ret.index.to_numpy(), ret.to_numpy()
+        for pos in tkr2pos[tkr]:            # a ticker maps to exactly one Position in practice
+            dates_parts.append(d); pos_parts.append(np.full(len(d), pos)); ret_parts.append(v)
+    if not dates_parts:
+        return pd.DataFrame(columns=["Date", "Position", "Return"])
+    out = pd.DataFrame({"Date": np.concatenate(dates_parts),
+                        "Position": np.concatenate(pos_parts),
+                        "Return": np.concatenate(ret_parts)})
+    # Trim to the model window (>= START): the factor-return calendar this frame is aligned onto
+    # never reaches earlier, and Stooq/Yahoo happily serve decades of pre-START history for
+    # long-listed names -- keeping it would triple the frame for rows nothing ever reads.
+    return out[out["Date"] >= pd.Timestamp(START)].reset_index(drop=True)
+
 def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
                       mkt: pd.DataFrame, rates: pd.DataFrame | None = None,
                       ndx: pd.DataFrame | None = None) -> pd.DataFrame:
@@ -1510,6 +1547,11 @@ def build_frames(out_dir=None):
               if p is not None}
     funda  = {int(c): f for c, f in
               _pull_map(fundamentals, [int(c) for c in sec["cik"].unique()], "fundamentals").items()}
+    # 9th (optional) frame: daily simple returns for every coverage name, from the SAME `prices`
+    # dict above -- no extra network I/O (see stock_returns_from_prices). Absent on v1 data / any
+    # pre-Price-VaR build; the cube/API degrade like they do for specific_returns.
+    stock_returns = stock_returns_from_prices(
+        sec[["figi", "ticker"]].rename(columns={"figi": "Position", "ticker": "Ticker"}), prices)
 
     # --- exposures (leaf) + factor cache + specific risk -------------------
     exposures = build_exposures(sec, prices, funda, cal, mkt, rates, ndx)
@@ -1614,14 +1656,14 @@ def build_frames(out_dir=None):
     managers_df["n_positions_distinct"] = managers_df["n_positions_distinct"].fillna(0).astype(int)
 
     return (exposures, positions, securities, factor_meta, factor_returns, specific_var,
-           specific_returns, managers_df)
+           specific_returns, managers_df, stock_returns)
 
 
 if __name__ == "__main__":
     out = DATA_DIR
     frames = build_frames(out_dir=out)
     names = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var",
-             "specific_returns", "managers"]
+             "specific_returns", "managers", "stock_returns"]
     out.mkdir(exist_ok=True)
     for nm, df in zip(names, frames):
         df.to_parquet(out / f"{nm}.parquet", index=False)
