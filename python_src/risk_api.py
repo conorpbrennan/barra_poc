@@ -184,9 +184,11 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # PnL attribution (Step 15, v2-only; pruned at startup if the cube lacks them).
                  # Forward-month convention: the value at Date d0 is the PnL over the month after d0.
                  "Factor contribution", "Specific PnL", "Realized PnL",
-                 # dollars (2026-08-22): $ held per cell, the sliced book's 13F value, and a
-                 # "<measure> $" twin of every weight-unit measure (DOLLAR_MEASURES, one list
-                 # with the cube). /pivot?units=dollar swaps them in and renames back.
+                 # dollars (2026-08-22, Units-context refactor 2026-08-22): $ held per cell, the
+                 # sliced book's 13F value. Every weight-unit measure in DOLLAR_MEASURES (one list
+                 # with the cube) toggles weight<->dollars on the cube's own `Units` context —
+                 # there is no separate "<measure> $" measure name any more (see `Units` handling
+                 # in `_pivot_query`/`_pivot_result` below).
                  "Market value", "Book MV",
                  # Price family (docs/price-var-plan.md): historical sim on raw stock returns, no
                  # factor model — the model-free VaR/var_bridge compares against. v2-only; pruned
@@ -195,8 +197,7 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "Price worst loss", "Price mean PnL", "Price PnL vol",
                  "Marginal Price VaR 99", "% of Price VaR 99", "Incremental Price VaR 99",
                  "Marginal Price ES 97.5", "Price coverage at tail",
-                 ] + [f"{_x} $" for _x in DOLLAR_MEASURES]
-DOLLAR_TWINS = {_x: f"{_x} $" for _x in DOLLAR_MEASURES}
+                 ]
 SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Total VaR 99",
             "Marginal Scenario VaR 99", "Marginal Total VaR 99", "VaR sensitivity",
             "% of Scenario VaR 99", "% of Total VaR 99",
@@ -213,8 +214,6 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             # the Day-path chart markers read the ScenarioSet-context book VaR/worst loss (PnL at
             # day itself reads DaySet only -- see DAY_DEP):
             "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
-SCEN_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in SCEN_DEP}
-DAY_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in DAY_DEP}
 
 # PriceSet dependency (docs/price-var-plan.md), the SAME "needs a single-set context" idiom as
 # SCEN_DEP but for the Price family's own switch hierarchy — a Price measure with no PriceSet
@@ -223,7 +222,6 @@ PRICE_DEP = {"Price VaR 95", "Price VaR 97.5", "Price VaR 99", "Price ES 97.5", 
             "Price worst loss", "Price mean PnL", "Price PnL vol",
             "Marginal Price VaR 99", "% of Price VaR 99", "Incremental Price VaR 99",
             "Marginal Price ES 97.5", "Price coverage at tail"}
-PRICE_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in PRICE_DEP}
 
 
 def _records(df: pd.DataFrame, reset: bool = True) -> list[dict]:
@@ -735,8 +733,8 @@ def _dims_response_fallback() -> dict:
     members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES if d not in DAY_DIMS}
     members.update(_day_members(S["session"]))
     members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-    return {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
-            "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
+    return {"dimensions": DIM_NAMES, "measures": list(MEASURE_NAMES),
+            "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
             "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
             "members": members,
@@ -773,8 +771,8 @@ def _dims_response() -> dict:
             members["Manager"] = f_mgr.result()
             members.update(f_day.result())
         members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-        resp = {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
-            "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
+        resp = {"dimensions": DIM_NAMES, "measures": list(MEASURE_NAMES),
+            "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
                 "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
             "members": members,
@@ -1107,21 +1105,23 @@ _PIVOT_CACHE_MAX = int(os.environ.get("BARRA_PIVOT_CACHE", "48"))       # 0 disa
 _PIVOT_CACHE_MAX_RECORDS = 25_000
 
 
-def _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan):
+def _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan, dollar=False):
     return (tuple(rlist), tuple(clist), tuple(mlist),
             tuple(sorted((k, tuple(str(x) for x in v)) for k, v in fdict.items())),
-            bool(totals), plan, id(S["cube"]))
+            bool(totals), plan, bool(dollar), id(S["cube"]))
 
 
 def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
                   scenario: str | None = None, stress_scenario: str | None = None,
-                  plan: str | None = None) -> dict:
+                  plan: str | None = None, dollar: bool = False) -> dict:
     """`_pivot_query` behind the bounded repeat-view LRU above. Callers get a shallow copy, so
     /ask's record truncation (and anything else that rebinds a top-level key) can't poison the
-    cache. Hypothetical branches (what-if trades / a StressShock scenario) bypass it entirely."""
+    cache. Hypothetical branches (what-if trades / a StressShock scenario) bypass it entirely.
+    `dollar` (the Units="$" slice) is part of the cache key — a weight-unit and a dollar view of
+    the same slice are cached separately."""
     if scenario is not None or stress_scenario is not None or _PIVOT_CACHE_MAX <= 0:
-        return _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan)
-    ck = _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan)
+        return _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan, dollar)
+    ck = _pivot_cache_key(rlist, clist, mlist, fdict, totals, plan, dollar)
     cache = S.setdefault("_pivot_cache", OrderedDict())
     hit = cache.get(ck)
     if hit is not None:
@@ -1130,7 +1130,7 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
         except KeyError:
             pass
         return dict(hit)
-    out = _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan)
+    out = _pivot_query(rlist, clist, mlist, fdict, totals, scenario, stress_scenario, plan, dollar)
     if len(out.get("records") or []) <= _PIVOT_CACHE_MAX_RECORDS:
         cache[ck] = out
         while len(cache) > _PIVOT_CACHE_MAX:
@@ -1143,7 +1143,7 @@ def _pivot_result(rlist: list, clist: list, mlist: list, fdict: dict, totals: bo
 
 def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
                  scenario: str | None = None, stress_scenario: str | None = None,
-                 plan: str | None = None) -> dict:
+                 plan: str | None = None, dollar: bool = False) -> dict:
     """The tidy pivot result (records [+ per_row/per_col/grand margins when totals]). Extracted
     from /pivot so /analysis feeds the model the EXACT numbers the view renders. Synchronous —
     call via run_in_threadpool. Assumes _validate_pivot has already run.
@@ -1151,7 +1151,11 @@ def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: boo
     `stress_scenario` = a StressShock PARAMETER-simulation scenario (custom sigmas — selected
     by slicing the StressShock level). Both default to the base.
     `plan` = None/"auto" (the Day shape takes the vector plan, see _day_vector_shape) or
-    "levels" (force the level plan — the tie-out tests use it)."""
+    "levels" (force the level plan — the tie-out tests use it).
+    `dollar` = slice the cube's `Units` context to its "$" scenario (2026-08-22 Units-context
+    refactor — replaces the old "<measure> $" twin rename): every DOLLAR_MEASURES member in
+    `mlist` then reads in dollars under its OWN (unchanged) name; everything else (ratios, dates,
+    counts) is untouched, since only the raw "(wt)" internals respond to the slice."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
     seen, axis = set(), []
     for name in rlist + clist:          # dedupe, preserve order
@@ -1173,6 +1177,8 @@ def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: boo
     if stress_scenario is not None:
         filt = (filt & (l["StressShock"] == stress_scenario)) if filt is not None \
             else (l["StressShock"] == stress_scenario)
+    if dollar:
+        filt = (filt & (l["Units"] == "$")) if filt is not None else (l["Units"] == "$")
 
     scen_ctx = ("ScenarioSet" in axis) or ("ScenarioSet" in fdict) or pit_mode
     if any(x in SCEN_DEP for x in mlist) and not scen_ctx:
@@ -1290,7 +1296,7 @@ def _parse_hypo(whatif: str | None, shocks: str | None, fdict: dict):
 
 
 def _hypothetical_pivot(rlist: list, clist: list, mlist: list, fdict: dict, totals: bool,
-                        wtrades: list | None, shk: dict | None) -> dict:
+                        wtrades: list | None, shk: dict | None, dollar: bool = False) -> dict:
     """_pivot_result on a transient hypothetical: a what-if source-scenario branch (trades)
     and/or a StressShock parameter scenario (sigmas) — created per call, dropped in finally.
     Synchronous — call via run_in_threadpool."""
@@ -1308,7 +1314,7 @@ def _hypothetical_pivot(rlist: list, clist: list, mlist: list, fdict: dict, tota
             sim = session.tables["StressShock"]
             sim.append(*[(stress_scen, f_, float(v)) for f_, v in shk.items()])
         return _pivot_result(rlist, clist, mlist, fdict, bool(totals),
-                             scenario=branch, stress_scenario=stress_scen)
+                             scenario=branch, stress_scenario=stress_scen, dollar=dollar)
     finally:
         if branch is not None:
             try:
@@ -1333,17 +1339,21 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
                 plan: str | None = Query(None, description=
                     '"levels" forces the level plan for the Day shape (default: vector plan)'),
                 units: str | None = Query(None, description=
-                    '"dollar": price every weight-unit measure in dollars (its "<name> $" cube '
-                    'twin = measure × Book MV), returned under the ORIGINAL measure names; '
-                    'default "weight" (fractions of book value)')):
+                    '"dollar": slice the cube\'s Units context to "$" — every DOLLAR_MEASURES '
+                    'member in `measures` is then priced at measure × Book MV, read under its '
+                    'own (unchanged) name; default "weight" (fractions of book value)')):
     """Tidy long result of cube.query(measures, levels=rows+cols, filter=<slicers>).
 
     Slicers: `filters` is a JSON object {dimension: [members]} — AND across dimensions,
     OR within a dimension. Single-value `date`/`set` query params still work and fold in.
+    `filters` also accepts `{"Units": ["$"|"Base"]}` as an UNADVERTISED alias for `units` (saved
+    views round-trip their state through `filters`); an explicit `units` query param wins.
 
     Guardrails: only whitelisted dimensions/scalar measures; the frontend pivots the tidy
     records into a matrix. Returns a `warning` when a scenario-dependent measure is requested
-    without a ScenarioSet context (it would be null) so the UI can flag it.
+    without a ScenarioSet context (it would be null) so the UI can flag it. A measure named with
+    the legacy "<name> $" suffix (removed 2026-08-22 — see the Units-context refactor) 400s with
+    a pointer at `units=dollar` instead of an opaque "unknown measure".
 
     totals=True adds CUBE-COMPUTED margins (not summed — VaR is non-additive, so the cube
     recomputes the measure at the aggregated level): `per_row` (levels=rows, aggregated over
@@ -1357,17 +1367,30 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
     """
     rlist, clist, mlist = _csv(rows), _csv(cols), _csv(measures)
     fdict = _parse_filters(filters, date, set)
-    dollar = _units_is_dollar(units)
-    qlist = [DOLLAR_TWINS.get(x, x) for x in mlist] if dollar else mlist
-    _validate_pivot(rlist, clist, qlist, fdict)
+    legacy = [x for x in mlist if x in _LEGACY_DOLLAR_NAMES]
+    if legacy:
+        raise HTTPException(400, f"{legacy}: '<measure> $' twins were removed 2026-08-22 — pass "
+                             f"units=dollar and ask for the plain measure name instead.")
+    units_alias = fdict.pop("Units", None)
+    dollar = _units_is_dollar(units) if units is not None else _units_filter_is_dollar(units_alias)
+    _validate_pivot(rlist, clist, mlist, fdict)
     wtrades, shk = _parse_hypo(whatif, shocks, fdict)
     if not wtrades and not shk:
-        data = await run_in_threadpool(_pivot_result, rlist, clist, qlist, fdict, bool(totals),
-                                       None, None, plan)
+        data = await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals),
+                                       None, None, plan, dollar)
     else:
-        data = await run_in_threadpool(_hypothetical_pivot, rlist, clist, qlist, fdict,
-                                       bool(totals), wtrades, shk)
-    return _undollar(data, mlist, qlist) if dollar else {**data, "units": "weight"}
+        data = await run_in_threadpool(_hypothetical_pivot, rlist, clist, mlist, fdict,
+                                       bool(totals), wtrades, shk, dollar)
+    out = {**data, "units": "dollar" if dollar else "weight"}
+    if dollar:
+        out["dollar_measures"] = [x for x in mlist if x in DOLLAR_MEASURES]
+    return out
+
+
+# Legacy "<name> $" measure names (removed 2026-08-22 — see the Units-context refactor): a
+# request naming one directly gets a clear 400 pointing at units=dollar, not an opaque "unknown
+# measure" from _validate_pivot (which has never heard of them).
+_LEGACY_DOLLAR_NAMES = {f"{_x} $" for _x in DOLLAR_MEASURES}
 
 
 def _units_is_dollar(units: str | None) -> bool:
@@ -1380,23 +1403,19 @@ def _units_is_dollar(units: str | None) -> bool:
     raise HTTPException(400, f"units must be 'weight' or 'dollar', got {units!r}")
 
 
-def _undollar(data: dict, mlist: list, qlist: list) -> dict:
-    """Rename the "<name> $" twins in a pivot payload back to the names the caller asked for,
-    and say which measures were priced in dollars (the rest — ratios, dates, counts — are
-    returned as they are). Pure; unit-tested without a cube."""
-    ren = {q: x for x, q in zip(mlist, qlist) if q != x}
-    def fix(rec: dict) -> dict:
-        return {ren.get(k, k): v for k, v in rec.items()}
-    out = dict(data)
-    for key in ("records", "per_row", "per_col"):
-        if isinstance(out.get(key), list):
-            out[key] = [fix(r) for r in out[key]]
-    if isinstance(out.get("grand"), dict):
-        out["grand"] = fix(out["grand"])
-    out["measures"] = [ren.get(q, q) for q in out.get("measures", qlist)]
-    out["units"] = "dollar"
-    out["dollar_measures"] = [x for x in mlist if x in DOLLAR_TWINS]
-    return out
+def _units_filter_is_dollar(val) -> bool:
+    """`{"Units": [...]}` filters-key alias for the `units` query param — same accepted
+    spellings, plus the cube's own member names ("$" / "Base"). Not advertised (never in
+    DIM_NAMES/dims.dimensions); exists only so a saved view's `filters` blob round-trips its
+    units choice without a separate top-level field. None/empty -> weight (Base)."""
+    if not val:
+        return False
+    v = str(val[0] if isinstance(val, (list, tuple)) else val).strip().lower()
+    if v in ("base", "weight", "fraction", ""):
+        return False
+    if v in ("$", "dollar", "dollars", "usd"):
+        return True
+    raise HTTPException(400, f"Units filter must be '$' or 'Base', got {val!r}")
 
 
 set_ = set   # preserve builtin; the endpoint shadows `set` with the query param
