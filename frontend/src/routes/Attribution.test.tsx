@@ -1,9 +1,13 @@
 // Smoke tests for the PnL-attribution chart components (Step 15): the sign-aware stacked hero
-// and the §4 reconcile band chart. Pure-render — no API.
-import { describe, it, expect } from "vitest";
+// and the §4 reconcile band chart. Pure-render — no API. The drawer tests further down (2026-08-22)
+// DO hit the network path (mocked fetch) — they exercise the /pnl_attribution/drill endpoint the
+// reconcile drawers now call instead of the book-independent /pivot cube trio.
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
-import { StackedHero, BandChart, DrillBars, irSignificance } from "./Attribution";
-import type { PnlLinkageResult } from "../api/types";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
+import { StackedHero, BandChart, DrillBars, irSignificance, PositionDrawer, FactorDrawer } from "./Attribution";
+import type { Dims, PnlLinkageResult } from "../api/types";
 
 const SERIES = [
   { date: "2024-01-31", market: 0.01, style: 0.002, specific: -0.001, realized: 0.011 },
@@ -150,5 +154,88 @@ describe("DrillBars", () => {
     const pos = container.querySelector('[data-bar="Beta"]') as HTMLElement;
     expect(parseFloat(neg.style.left)).toBeLessThan(75);   // centre C = 75
     expect(parseFloat(pos.style.left)).toBe(75);
+  });
+});
+
+// ---- reconcile drawers (2026-08-22): now served by /pnl_attribution/drill, computed live
+// per-book from the frames, NOT the book-independent /pivot cube trio (see Attribution.tsx's
+// header note). These mock fetch directly (no MSW in this repo — same pattern as
+// Pivot.test.tsx/Pivot.rejection.test.tsx). ----
+describe("PositionDrawer / FactorDrawer (live per-book drill)", () => {
+  const POSITION = {
+    name: "AAPL", position: "AAPL_FIGI", weight: 0.05, weight_window_avg: 0.05,
+    realized: 0.03, factor_pnl: 0.02, specific_pnl: 0.01, sd_base: 0.01, z: 3.0,
+    verdict: "investigate",
+    driver: { kind: "specific_move", migrated: false, ratio: null, z_window: null,
+              specific_share: 0.6, top_factor: null, hidden_beta: false,
+              text: "idiosyncratic — check the residual explorer." },
+  };
+  const LK_POS: PnlLinkageResult = { ...LK, positions: [POSITION] };
+  const DIMS_NO_TRIO: Dims = { dimensions: [], measures: [], scenario_dependent: [],
+    members: {}, dates: [], scenario_sets: [] };
+  const DIMS_WITH_TRIO: Dims = { ...DIMS_NO_TRIO,
+    measures: ["Factor contribution", "Specific PnL", "Realized PnL"] };
+
+  function stubDrillFetch(body: unknown) {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      const u = new URL(url, "http://x");
+      const json = (b: unknown) => ({ ok: true, status: 200, json: async () => b,
+                                       text: async () => JSON.stringify(b) });
+      if (u.pathname.endsWith("/pnl_attribution/drill")) return json(body);
+      return json({});
+    }));
+  }
+
+  function wrap(children: React.ReactNode) {
+    const qc = new QueryClient();
+    return (
+      <QueryClientProvider client={qc}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("PositionDrawer renders per-factor bars + specific from the drill endpoint, thin-loading-set warning, and hides the Pivot link when /dims prunes the trio", async () => {
+    stubDrillFetch({
+      book: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
+      bars: [{ factor: "Market", contribution: 0.018, loading_at_T: 1.0 },
+             { factor: "Value", contribution: 0.002, loading_at_T: null }],
+      specific_pnl: 0.01, realized: 0.03, n_factors_at_T: 1,
+    });
+    const { findByText, queryByText } = render(wrap(
+      <PositionDrawer p={POSITION} lk={LK_POS} dates={[]} dims={DIMS_NO_TRIO} />
+    ));
+    await findByText("Market");
+    await findByText("no loading at T");
+    await findByText(/idiosyncratic/);
+    expect(queryByText("open in Pivot →")).toBeNull();
+  });
+
+  it("PositionDrawer shows the Pivot deep link when /dims still offers the trio (single-book)", async () => {
+    stubDrillFetch({
+      book: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
+      bars: [{ factor: "Market", contribution: 0.03, loading_at_T: 1.0 }],
+      specific_pnl: 0.0, realized: 0.03, n_factors_at_T: 1,
+    });
+    const { findByText } = render(wrap(
+      <PositionDrawer p={POSITION} lk={LK_POS} dates={["2024-10-31"]} dims={DIMS_WITH_TRIO} />
+    ));
+    await findByText("open in Pivot →");
+  });
+
+  it("FactorDrawer renders per-issuer bars from the drill endpoint (who carried it)", async () => {
+    stubDrillFetch({
+      book: "Soros", T: LK.T, to: LK.to, factor: "Market",
+      bars: [{ issuer: "Apple", contribution: 0.03 }, { issuer: "Microsoft", contribution: 0.02 }],
+      total: 0.05,
+    });
+    const { findByText, queryByText } = render(wrap(
+      <FactorDrawer row={LK.rows[0]} lk={LK} dates={[]} dims={DIMS_NO_TRIO} onClose={() => {}} />
+    ));
+    await findByText("Apple");
+    await findByText("Microsoft");
+    expect(queryByText("open in Pivot →")).toBeNull();
   });
 });

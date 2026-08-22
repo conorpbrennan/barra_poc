@@ -3,23 +3,34 @@
 //   * PnL attribution — Step 15 (/pnl_attribution + /residual + /linkage): realized PnL split into
 //     factor + specific (Carino-linked), the residual diagnostics with RAG verdicts, and the §4
 //     risk↔PnL reconcile band chart (base + stressed band per factor, dot = realized, z = surprise).
-// The by-name drill lives in the Pivot via the cube measures (Factor contribution / Specific PnL /
-// Realized PnL). Tufte/Few: grey + one accent, direct labels, colour only where it means something.
+// The reconcile drawers' bar decomposition is served by /pnl_attribution/drill (2026-08-22) —
+// computed live from the frames for the requested book, NOT the /pivot cube measures: Factor
+// contribution / Specific PnL / Realized PnL are baked columns carrying ONE arbitrary book's
+// weight per name once >1 book is loaded (CLAUDE.md "book-independent attribution limitation"),
+// so _validate_pivot rejects them outright on the multi-book build. The "open in Pivot →" deep
+// links still target that cube trio (for the single-book case where it's correct and drillable
+// further), so they're hidden whenever /dims doesn't offer the trio (pruned on multi-book).
+// Tufte/Few: grey + one accent, direct labels, colour only where it means something.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useApp } from "../context/AppContext";
 import {
-  useContributions, useMeta, usePivot, usePnlAttribution, usePnlResidual, usePnlLinkage,
-  usePnlNames,
+  useContributions, useDims, useMeta, usePnlAttribution, usePnlResidual, usePnlLinkage,
+  usePnlNames, usePnlDrillPosition, usePnlDrillFactor,
 } from "../api/hooks";
 import type {
-  ContributionsResult, PnlAttributionResult, PnlLinkagePosition, PnlLinkageResult,
+  ContributionsResult, Dims, PnlAttributionResult, PnlLinkagePosition, PnlLinkageResult,
   PnlLinkageRow, PnlSeriesPoint,
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
 import { StreamPanel } from "../components/StreamPanel";
 import { HowToRead, QueryState, GuardedQueryState, RagDot, isBookMismatch } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
+
+// the book-independent trio /pivot rejects on a multi-book cube (see the header note) — the
+// deep links below only make sense while /dims still offers them (single-book data)
+const ATTRIBUTION_TRIO = ["Factor contribution", "Specific PnL", "Realized PnL"];
+const hasTrio = (dims?: Dims) => !!dims && ATTRIBUTION_TRIO.every((m) => dims.measures.includes(m));
 
 const INK = "#111";
 const BAND_KEYS: { key: keyof PnlSeriesPoint; label: string; color: string }[] = [
@@ -258,16 +269,12 @@ const pivotDrill = (cfg: { rows: string[]; measures: string[];
 const winDates = (dates: string[], T: string, to: string) =>
   dates.filter((d) => d >= T && d < to);   // fwd-month convention: value at d covers d → d+1m
 
-// one name's breach explained: per-factor contribution over the window + the T loadings
-function PositionDrawer({ p, lk, dates }: {
-  p: PnlLinkagePosition; lk: PnlLinkageResult; dates: string[];
+// one name's breach explained: per-factor contribution over the window + the T loadings, served
+// live per-book by /pnl_attribution/drill (not the /pivot cube trio — see the header note)
+export function PositionDrawer({ p, lk, dates, dims }: {
+  p: PnlLinkagePosition; lk: PnlLinkageResult; dates: string[]; dims?: Dims;
 }) {
-  const win = winDates(dates, lk.T, lk.to);
-  const base = { Book: [lk.book], Position: [p.position] };
-  const cq = usePivot("Factor", "", "Factor contribution",
-    JSON.stringify({ ...base, Date: win }), false, win.length > 0);
-  const lq = usePivot("Factor", "", "Net exposure",
-    JSON.stringify({ ...base, Date: [lk.T] }), false, win.length > 0);
+  const d = usePnlDrillPosition(lk.T, lk.to, lk.book, p.position);
   const nFactors = lk.rows.filter((r) => r.kind === "factor").length;
   return (
     <div style={{ padding: "0.4rem 0 0.55rem 1.35rem" }}>
@@ -276,27 +283,19 @@ function PositionDrawer({ p, lk, dates }: {
         {signedPct(p.factor_pnl, 2)} + specific {signedPct(p.specific_pnl, 2)} · band
         ±{pct(2 * p.sd_base, 2)} · z {signedNum(p.z, 1)}σ · {lk.T} → {lk.to}
       </p>
-      <QueryState q={cq}>
-        {(d) => {
-          const loads = new Map((lq.data?.records ?? [])
-            .filter((r) => typeof r["Net exposure"] === "number")
-            .map((r) => [String(r.Factor), (r["Net exposure"] as number) / (p.weight || 1)]));
-          const bars = d.records
-            .map((r) => ({ f: String(r.Factor),
-              v: typeof r["Factor contribution"] === "number" ? (r["Factor contribution"] as number) : 0 }))
-            .filter((b) => b.v !== 0)
-            .sort((a, b) => Math.abs(b.v) - Math.abs(a.v))
-            .map((b) => ({ label: b.f, v: b.v,
-              note: loads.has(b.f) ? `loading ${num(loads.get(b.f)!, 2)} at T`
-                                   : "no loading at T" }));
-          bars.push({ label: "Specific", v: p.specific_pnl,
-            note: p.specific_pnl === 0 ? "no residual history" : "" });
+      <QueryState q={d}>
+        {(dd) => {
+          const bars = dd.bars.map((b) => ({ label: b.factor, v: b.contribution,
+            note: b.loading_at_T !== null ? `loading ${num(b.loading_at_T, 2)} at T`
+                                          : "no loading at T" }));
+          bars.push({ label: "Specific", v: dd.specific_pnl,
+            note: dd.specific_pnl === 0 ? "no residual history" : "" });
           return (
             <>
               <DrillBars bars={bars} />
-              {loads.size < nFactors && (
+              {dd.n_factors_at_T < nFactors && (
                 <p className="muted small" style={{ margin: "0.15rem 0 0" }}>
-                  only {loads.size} of {nFactors} factor loadings at {lk.T} — a thin loading
+                  only {dd.n_factors_at_T} of {nFactors} factor loadings at {lk.T} — a thin loading
                   set is itself a hidden-beta suspect.
                 </p>
               )}
@@ -305,18 +304,20 @@ function PositionDrawer({ p, lk, dates }: {
                   {p.driver.text}
                 </p>
               )}
-              <p className="small" style={{ margin: "0.3rem 0 0" }}>
-                <Link className="muted" to={pivotDrill({ rows: ["Factor"],
-                  measures: ["Factor contribution", "Specific PnL", "Realized PnL"],
-                  filters: { ...base, Date: win },
-                  description: `${p.name.toUpperCase()} breach drill, ${lk.T} → ${lk.to}: `
-                    + "per-factor contribution (fwd-month) + specific. Specific PnL repeats "
-                    + "across factor rows (it has no factor dimension)"
-                    + (p.specific_pnl === 0
-                      ? " — blank here: this name has no residual history (outside residual "
-                        + "coverage), so specific reads as no-data, not 0."
-                      : ".") })}>open in Pivot →</Link>
-              </p>
+              {hasTrio(dims) && (
+                <p className="small" style={{ margin: "0.3rem 0 0" }}>
+                  <Link className="muted" to={pivotDrill({ rows: ["Factor"],
+                    measures: ATTRIBUTION_TRIO,
+                    filters: { Book: [lk.book], Position: [p.position], Date: winDates(dates, lk.T, lk.to) },
+                    description: `${p.name.toUpperCase()} breach drill, ${lk.T} → ${lk.to}: `
+                      + "per-factor contribution (fwd-month) + specific. Specific PnL repeats "
+                      + "across factor rows (it has no factor dimension)"
+                      + (p.specific_pnl === 0
+                        ? " — blank here: this name has no residual history (outside residual "
+                          + "coverage), so specific reads as no-data, not 0."
+                        : ".") })}>open in Pivot →</Link>
+                </p>
+              )}
             </>
           );
         }}
@@ -326,9 +327,9 @@ function PositionDrawer({ p, lk, dates }: {
 }
 
 // one positions-table row + its optional expansion (indentation + hairlines, no container)
-function FragRow({ row: p, open, onToggle, lk, dates }: {
+function FragRow({ row: p, open, onToggle, lk, dates, dims }: {
   row: PnlLinkagePosition; open: boolean; onToggle: () => void;
-  lk: PnlLinkageResult; dates: string[];
+  lk: PnlLinkageResult; dates: string[]; dims?: Dims;
 }) {
   return (
     <>
@@ -350,7 +351,7 @@ function FragRow({ row: p, open, onToggle, lk, dates }: {
       {open && (
         <tr>
           <td colSpan={7} style={{ padding: 0 }}>
-            <PositionDrawer p={p} lk={lk} dates={dates} />
+            <PositionDrawer p={p} lk={lk} dates={dates} dims={dims} />
           </td>
         </tr>
       )}
@@ -358,13 +359,12 @@ function FragRow({ row: p, open, onToggle, lk, dates }: {
   );
 }
 
-// the inverse read for a factor row: which names carried this factor's move
-function FactorDrawer({ row, lk, dates, onClose }: {
-  row: PnlLinkageRow; lk: PnlLinkageResult; dates: string[]; onClose: () => void;
+// the inverse read for a factor row: which names carried this factor's move, likewise served
+// live per-book by /pnl_attribution/drill
+export function FactorDrawer({ row, lk, dates, dims, onClose }: {
+  row: PnlLinkageRow; lk: PnlLinkageResult; dates: string[]; dims?: Dims; onClose: () => void;
 }) {
-  const win = winDates(dates, lk.T, lk.to);
-  const q = usePivot("Issuer", "", "Factor contribution",
-    JSON.stringify({ Book: [lk.book], Factor: [row.name], Date: win }), false, win.length > 0);
+  const d = usePnlDrillFactor(lk.T, lk.to, lk.book, row.name);
   return (
     <div style={{ borderTop: "1px solid #d8d5cd", borderBottom: "1px solid #d8d5cd",
       padding: "0.45rem 0 0.55rem", margin: "0.3rem 0 0.5rem" }}>
@@ -374,12 +374,10 @@ function FactorDrawer({ row, lk, dates, onClose }: {
         ±{pct(2 * row.sd_base, 2)} · z {signedNum(row.z ?? 0, 1)}σ · {lk.T} → {lk.to}{" "}
         <button className="muted" style={{ marginLeft: "0.6rem" }} onClick={onClose}>×</button>
       </p>
-      <QueryState q={q}>
-        {(d) => {
-          const rows = d.records
-            .map((r) => ({ label: String(r.Issuer),
-              v: typeof r["Factor contribution"] === "number" ? (r["Factor contribution"] as number) : 0 }))
-            .filter((b) => b.v !== 0)
+      <QueryState q={d}>
+        {(dd) => {
+          const rows = dd.bars
+            .map((b) => ({ label: b.issuer, v: b.contribution }))
             .sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
           const top = rows.slice(0, 8);
           const rest = rows.slice(8).reduce((s, b) => s + b.v, 0);
@@ -393,14 +391,16 @@ function FactorDrawer({ row, lk, dates, onClose }: {
                   {row.driver.text}
                 </p>
               )}
-              <p className="small" style={{ margin: "0.3rem 0 0" }}>
-                <Link className="muted" to={pivotDrill({ rows: ["Issuer"],
-                  measures: ["Factor contribution"],
-                  filters: { Book: [lk.book], Factor: [row.name], Date: win },
-                  description: `${row.name} drill, ${lk.T} → ${lk.to}: which names carried `
-                    + "the factor's move (per-issuer contribution, fwd-month convention)." })}>
-                  open in Pivot →</Link>
-              </p>
+              {hasTrio(dims) && (
+                <p className="small" style={{ margin: "0.3rem 0 0" }}>
+                  <Link className="muted" to={pivotDrill({ rows: ["Issuer"],
+                    measures: ["Factor contribution"],
+                    filters: { Book: [lk.book], Factor: [row.name], Date: winDates(dates, lk.T, lk.to) },
+                    description: `${row.name} drill, ${lk.T} → ${lk.to}: which names carried `
+                      + "the factor's move (per-issuer contribution, fwd-month convention)." })}>
+                    open in Pivot →</Link>
+                </p>
+              )}
             </>
           );
         }}
@@ -481,6 +481,7 @@ function PnlTab() {
   const rq = usePnlResidual(from, to, book);
   const lq = usePnlLinkage(horizon, undefined, book);
   const meta = useMeta();
+  const dims = useDims();
   // one drill open at a time (accordion) — a chart dot opens a factor drawer, a table row a
   // position drawer; opening either closes the other so the overview stays scannable.
   const [drill, setDrill] = useState<{ type: "factor" | "position"; key: string } | null>(null);
@@ -759,7 +760,7 @@ function PnlTab() {
             {drill?.type === "factor" && (() => {
               const row = lk.rows.find((r) => r.name === drill.key);
               return row ? <FactorDrawer row={row} lk={lk} dates={meta.data?.dates ?? []}
-                onClose={() => setDrill(null)} /> : null;
+                dims={dims.data} onClose={() => setDrill(null)} /> : null;
             })()}
             {(() => {
               const flagged = [...lk.rows, lk.book_total].filter((r) => r.driver);
@@ -792,7 +793,7 @@ function PnlTab() {
                         <FragRow key={p.position} open={open}
                           onToggle={() => setDrill(open ? null
                             : { type: "position", key: p.position })}
-                          row={p} lk={lk} dates={meta.data?.dates ?? []} />
+                          row={p} lk={lk} dates={meta.data?.dates ?? []} dims={dims.data} />
                       );
                     })}
                   </tbody>

@@ -10,7 +10,7 @@ import type {
   PnlAttributionResult, PnlResidualResult, PnlLinkageResult, ContributionsResult,
   ValidationResult, RegressionResult, FactorCovResult,
   HedgeResult, ExposureProfileResult, FactorPortfolioResult, PnlNamesResult,
-  BookMismatch, VarBridgeResult,
+  BookMismatch, VarBridgeResult, PnlDrillPositionResult, PnlDrillFactorResult,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -250,6 +250,26 @@ export function usePnlNames(from?: string, to?: string, book = "Soros") {
   return useQuery({
     queryKey: ["pnl_names", from ?? "", to ?? "", book],
     queryFn: () => apiGet<PnlNamesResult | BookMismatch>("/pnl_attribution/names", { from, to, book }),
+    ...common,
+  });
+}
+
+// Live per-book reconcile drill (2026-08-22) — the Attribution reconcile drawers' replacement
+// for the /pivot query on the book-independent Factor contribution measure; computed from the
+// frames for the requested book directly, so it works on any loaded book (no artifact guard).
+export function usePnlDrillPosition(T: string, to: string, book: string, position: string, enabled = true) {
+  return useQuery({
+    queryKey: ["pnl_drill_position", T, to, book, position],
+    queryFn: () => apiGet<PnlDrillPositionResult>("/pnl_attribution/drill", { T, to, book, position }),
+    enabled: enabled && !!T && !!to && !!position,
+    ...common,
+  });
+}
+export function usePnlDrillFactor(T: string, to: string, book: string, factor: string, enabled = true) {
+  return useQuery({
+    queryKey: ["pnl_drill_factor", T, to, book, factor],
+    queryFn: () => apiGet<PnlDrillFactorResult>("/pnl_attribution/drill", { T, to, book, factor }),
+    enabled: enabled && !!T && !!to && !!factor,
     ...common,
   });
 }

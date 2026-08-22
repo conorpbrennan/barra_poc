@@ -426,6 +426,21 @@ export interface PnlNamesResult {
   winners: PnlNameRow[]; losers: PnlNameRow[]; note: string;
 }
 
+// ---- live per-book reconcile drill (/pnl_attribution/drill, 2026-08-22) ----
+// The Vite reconcile drawers' replacement for the baked (book-independent) Factor contribution
+// cube measure — computed live from the frames for the REQUESTED book, so it works on any
+// loaded book (see CLAUDE.md "book-independent attribution limitation").
+export interface PnlDrillFactorBar { factor: string; contribution: number; loading_at_T: number | null }
+export interface PnlDrillPositionResult {
+  book: string; T: string; to: string; position: string; ticker: string;
+  bars: PnlDrillFactorBar[]; specific_pnl: number; realized: number; n_factors_at_T: number;
+}
+export interface PnlDrillIssuerBar { issuer: string; contribution: number }
+export interface PnlDrillFactorResult {
+  book: string; T: string; to: string; factor: string;
+  bars: PnlDrillIssuerBar[]; total: number;
+}
+
 // ---- saved views (views_api.py) ----
 export interface ViewLeaf {
   name: string; slug: string; path: string; file: string;
