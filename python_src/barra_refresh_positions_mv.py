@@ -50,11 +50,11 @@ def main() -> int:
     p = (p.groupby(["Manager", "filing_date", "figi"], as_index=False)["value"].sum()
            .rename(columns={"figi": "Position", "value": "MV"}))
     parts = []
-    for book, pb in p.groupby("Manager"):
-        filings_b = pd.DataFrame({"filing_date": np.sort(pb["filing_date"].unique())})
+    for manager, pm in p.groupby("Manager"):
+        filings_b = pd.DataFrame({"filing_date": np.sort(pm["filing_date"].unique())})
         cal_b = pd.merge_asof(pd.DataFrame({"Date": cal}), filings_b,
                               left_on="Date", right_on="filing_date", direction="backward")
-        parts.append(cal_b.dropna(subset=["filing_date"]).merge(pb, on="filing_date"))
+        parts.append(cal_b.dropna(subset=["filing_date"]).merge(pm, on="filing_date"))
     new = pd.concat(parts, ignore_index=True)[["Date", "Manager", "Position", "MV"]]
     merged = pos.drop(columns=["MV"]).merge(new, on=["Date", "Manager", "Position"], how="left")
     missing = merged["MV"].isna().sum()

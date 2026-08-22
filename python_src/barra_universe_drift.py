@@ -2,27 +2,27 @@
 barra_universe_drift.py
 =======================
 Phase 4 of the universe diagnostics (see docs/universe-diagnostics-plan.md): STYLE-DRIFT ATTRIBUTION.
-The span check (Phase 3) showed the book drifting out of the S&P 500's factor space since ~2021. Chris
+The span check (Phase 3) showed the portfolio drifting out of the S&P 500's factor space since ~2021. Chris
 (2026-06-23) framed the question: was that shift **intentional** (a deliberate style tilt / a new PM
 covering smaller names) or **unintentional** (a re-pricing of risk that made those names more
 attractive)? The action differs — **update the benchmark** if intentional, **update the hedging** if
 not — and the desk needs the evidence to decide.
 
-This makes the question empirical. For the book's net factor exposure x_k(t) = Σ_i w_i(t)·L_ik(t):
+This makes the question empirical. For the portfolio's net factor exposure x_k(t) = Σ_i w_i(t)·L_ik(t):
 
-  * the per-factor **trend** over time shows WHICH factors drifted (e.g. Size falling = book moving
-    smaller, ResidVol rising = more volatile names);
+  * the per-factor **trend** over time shows WHICH factors drifted (e.g. Size falling = portfolio
+    moving smaller, ResidVol rising = more volatile names);
   * a between-period **attribution** decomposes each factor's drift Δx_k into four sources —
-      entered      new names rotated INTO the book              ─┐ a deliberate rotation:
+      entered      new names rotated INTO the portfolio         ─┐ a deliberate rotation:
       exited       names rotated OUT                            ─┘ leans INTENTIONAL → benchmark
       reweighted   held names resized (weight change)           ── an active sizing decision
       loading_drift held names whose own loadings drifted        ── re-pricing / characteristic drift:
                                                                     leans UNINTENTIONAL → hedge
 
-So if a factor's drift is dominated by `entered`, the book rotated into new names with that tilt
+So if a factor's drift is dominated by `entered`, the portfolio rotated into new names with that tilt
 (intentional); if it's dominated by `loading_drift`, the names already held drifted there on their own
-(unintentional). The split (uncapped coverage loadings) matters here — the book's true off-index tilts
-now show, where the old ±3 clip masked them.
+(unintentional). The split (uncapped coverage loadings) matters here — the portfolio's true off-index
+tilts now show, where the old ±3 clip masked them.
 
 We present the evidence and point to the action; the final intentional/not VERDICT needs desk knowledge
 (Soros's intent, PM changes) we don't have. Pure attribution math is unit-tested. Writes
@@ -39,13 +39,13 @@ import pandas as pd
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_drift.parquet"
-DEFAULT_BOOK = "Soros"
+DEFAULT_MANAGER = "Soros"
 
 
-def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
-    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
-    legacy unsuffixed filename; others write universe_drift.<Book>.parquet."""
-    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_drift.{book}.parquet"
+def artifact_path(manager: str | None = DEFAULT_MANAGER) -> pathlib.Path:
+    """Manager-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default manager keeps
+    the legacy unsuffixed filename; others write universe_drift.<Manager>.parquet."""
+    return ARTIFACT if manager in (DEFAULT_MANAGER, None) else OUT / f"universe_drift.{manager}.parquet"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
@@ -54,7 +54,7 @@ SOURCES = ["entered", "exited", "reweighted", "loading_drift"]
 
 # --------------------------------------------------------------------------- pure attribution (unit-tested)
 def book_exposure(weights: dict, loadings: dict, factors=STYLE) -> dict:
-    """Net book exposure per factor: x_k = Σ_i w_i · L_ik."""
+    """Net portfolio exposure per factor: x_k = Σ_i w_i · L_ik."""
     return {f: float(sum(weights[p] * loadings.get(p, {}).get(f, 0.0) for p in weights))
             for f in factors}
 
@@ -91,9 +91,9 @@ def _wide_loadings(exp: pd.DataFrame, D: pd.Timestamp) -> pd.DataFrame:
 
 
 def book_at(exp: pd.DataFrame, pos: pd.DataFrame, D: pd.Timestamp):
-    """(weights dict, loadings dict) for the book held at month-end D."""
-    bk = pos[pos["Date"] == D][["Position", "Weight"]]
-    w = dict(zip(bk["Position"], bk["Weight"]))
+    """(weights dict, loadings dict) for the portfolio held at month-end D."""
+    held = pos[pos["Date"] == D][["Position", "Weight"]]
+    w = dict(zip(held["Position"], held["Weight"]))
     L = _wide_loadings(exp, D)
     L = L[L.index.isin(w)]
     loadings = {p: {f: (0.0 if pd.isna(v) else float(v)) for f, v in row.items()}
@@ -101,18 +101,18 @@ def book_at(exp: pd.DataFrame, pos: pd.DataFrame, D: pd.Timestamp):
     return w, loadings
 
 
-def run(write: bool = True, book: str = "Soros") -> dict:
+def run(write: bool = True, manager: str = "Soros") -> dict:
     print("[drift] loading frames ...", flush=True)
     exp = pd.read_parquet(OUT / "exposures.parquet")
     pos = pd.read_parquet(OUT / "positions.parquet")
-    # positions carries one row per (Book, Date, Position) since the multi-manager build, and
-    # weights are normalised PER BOOK -- so without this filter the net exposure x_k = sum(w*L)
-    # would sum across every book at once (x_Market ~= 11, not 1). `book=None` keeps the old
-    # any-book union as an explicit escape hatch; no caller uses it.
-    if book is not None:
-        pos = pos[pos["Manager"] == book]
+    # positions carries one row per (Manager, Date, Position) since the multi-manager build, and
+    # weights are normalised PER MANAGER -- so without this filter the net exposure x_k = sum(w*L)
+    # would sum across every manager at once (x_Market ~= 11, not 1). `manager=None` keeps the old
+    # any-manager union as an explicit escape hatch; no caller uses it.
+    if manager is not None:
+        pos = pos[pos["Manager"] == manager]
         if pos.empty:
-            raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
+            raise ValueError(f"no positions for manager {manager!r} in {OUT / 'positions.parquet'}")
     months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))
 
     rows = []
@@ -126,18 +126,18 @@ def run(write: bool = True, book: str = "Soros") -> dict:
     detail = pd.DataFrame(rows)
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        art = artifact_path(book)
+        art = artifact_path(manager)
         detail.to_parquet(art, index=False)
         print(f"[drift] wrote {art}  ({len(detail)} rows)", flush=True)
 
     series = detail.pivot_table(index="month", columns="factor", values="net_exposure")
     summ = drift_summary(series, pd.Timestamp("2021-01-01"))
-    print("\n[drift] book net-exposure drift, pre-2021 vs 2021+ (top movers):")
+    print("\n[drift] portfolio net-exposure drift, pre-2021 vs 2021+ (top movers):")
     for f, r in summ.head(5).iterrows():
         print(f"    {f:11s} {r['early']:+.3f} -> {r['late']:+.3f}   (Δ {r['delta']:+.3f})")
-    # attribution: 2020-12-31 vs latest. Books whose filing history starts after the split (a
+    # attribution: 2020-12-31 vs latest. Managers whose filing history starts after the split (a
     # handful of the 2026-08-14 Buyside additions) have no pre-2021 month; fall back to their
-    # FIRST month so the attribution still reads first-book -> latest instead of crashing.
+    # FIRST month so the attribution still reads first-month -> latest instead of crashing.
     pre = months[months < pd.Timestamp("2021-01-01")]
     t0 = pre[-1] if len(pre) else months[0]
     t1 = months[-1]
@@ -153,4 +153,4 @@ def run(write: bool = True, book: str = "Soros") -> dict:
 
 if __name__ == "__main__":
     import sys
-    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)
+    run(manager=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MANAGER)

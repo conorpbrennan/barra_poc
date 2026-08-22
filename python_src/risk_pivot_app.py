@@ -145,7 +145,7 @@ def _queries_from_state(state: dict) -> list:
     """The view's `queries` (self-contained pivot queries). If a view predates the model and only
     has a legacy `source` feed-list, migrate it: a scenario_pnl feed -> a Day/DayDate query over the
     fast per-day measures (its breakout becomes a third row dim; the view's ScenarioSet filter is
-    mirrored onto DaySet — `PnL at day` reads DaySet, the book markers read ScenarioSet); a bare
+    mirrored onto DaySet — `PnL at day` reads DaySet, the portfolio markers read ScenarioSet); a bare
     pivot feed -> inherit the view's own rows/cols/measures/filters. Lets old saved views still load.
     (Pre-2026-08-15 this migrated onto the legacy ScenarioDay parameter hierarchy, ~10-40x slower.)"""
     qs = state.get("queries")
@@ -344,7 +344,7 @@ except Exception as e:
 
 
 def render_limits_banner():
-    """Desk-limit RAG strip: a red/amber/green headline plus a per-limit detail table. Book-level
+    """Desk-limit RAG strip: a red/amber/green headline plus a per-limit detail table. Portfolio-level
     status from /limits (latest date, config scenario set); silent if limits aren't configured or
     the call fails, so it never blocks the page."""
     try:
@@ -356,7 +356,7 @@ def render_limits_banner():
     checks = lim.get("checks", [])
     n_br = len(lim.get("breaches", []))
     n_am = sum(1 for c in checks if c["status"] == "amber")
-    head = f"Limits — {lim['book']} · {lim['set']} · {lim['date']}"
+    head = f"Limits — {lim['manager']} · {lim['set']} · {lim['date']}"
     status = lim["status"]
     if status == "breach":
         st.error(f"🔴 {head} — {n_br} breach(es)" + (f", {n_am} warning(s)" if n_am else ""))
@@ -407,7 +407,7 @@ def render_dq_badge():
 
 def render_backtest_badge():
     """VaR backtest (model validation): Basel traffic-light + Kupiec result for the rolling-window
-    backtest of the book's daily factor-P&L. Collapsed by default; silent if /backtest is down."""
+    backtest of the portfolio's daily factor-P&L. Collapsed by default; silent if /backtest is down."""
     try:
         bt = get("/backtest")
     except Exception:
@@ -427,9 +427,9 @@ def render_backtest_badge():
         verdict = "REJECTS the model" if bt["kupiec_reject"] else "does not reject the model"
         st.caption(
             f"Kupiec POF likelihood ratio {bt['kupiec_LR']} vs χ²(1)@95% = {bt['kupiec_crit']} — {verdict}. "
-            f"Constant-portfolio backtest: the current book's exposures applied to the daily factor-return "
+            f"Constant-portfolio backtest: the current portfolio's exposures applied to the daily factor-return "
             f"history, rolling a {bt['window']}-day window to estimate VaR. It validates the VaR "
-            f"methodology, not a live P&L track record (the 13F book has none).")
+            f"methodology, not a live P&L track record (the 13F portfolio has none).")
         # FHS methodology note — expandable, default closed (popover; nested expanders aren't allowed).
         if bt["method"] == "fhs":
             with st.popover("ℹ️ FHS methodology"):
@@ -444,7 +444,7 @@ def render_backtest_badge():
                     "current volatility regime.\n\n"
                     "It's the middle ground. Equal-weight historical sim under-covers — it treats a "
                     "calm day like a turbulent one. Parametric EWMA reacts to vol but over-breaches "
-                    "on the fat tail by assuming normality. Over the Soros book at 99%, FHS λ=0.94 "
+                    "on the fat tail by assuming normality. Over the Soros portfolio at 99%, FHS λ=0.94 "
                     "lands near the expected ~1.0% exception rate (Kupiec green) where both of those "
                     "miss.")
         ed = bt.get("exception_dates", [])
@@ -454,9 +454,9 @@ def render_backtest_badge():
 
 
 def render_drawdown():
-    """Drawdown lens: max peak-to-trough of the book's simulated cumulative P&L over the scenario
+    """Drawdown lens: max peak-to-trough of the portfolio's simulated cumulative P&L over the scenario
     path — a path risk VaR/ES don't show. Equity curve + underwater chart. Collapsed; silent if
-    /drawdown is down. Constant-portfolio what-if (the held book over history), not a live record."""
+    /drawdown is down. Constant-portfolio what-if (the held portfolio over history), not a live record."""
     with st.expander("📉 Drawdown (constant-portfolio, over the scenario path)", expanded=False):
         sets = members.get("ScenarioSet") or ["HistFull"]
         sset = st.selectbox("Scenario set", sets,
@@ -481,17 +481,17 @@ def render_drawdown():
             path["Date"] = pd.to_datetime(path["date"]); path = path.set_index("Date")
             c1, c2 = st.columns(2)
             with c1:
-                st.caption("Equity curve — book held over the factor path (start = 1.0)")
+                st.caption("Equity curve — portfolio held over the factor path (start = 1.0)")
                 st.line_chart(path[["equity"]])
             with c2:
                 st.caption("Underwater — drawdown from the running peak (fraction)")
                 st.area_chart(path[["drawdown"]])
-        st.caption("Constant-portfolio what-if: the current book applied to the set's daily factor "
+        st.caption("Constant-portfolio what-if: the current portfolio applied to the set's daily factor "
                    "returns, compounded. A path lens VaR/ES miss — not a live P&L track record.")
 
 
 def render_trends():
-    """Risk-over-time panel: book VaR 99 / ES 97.5 and Risk HHI across the whole calendar, plus the
+    """Risk-over-time panel: portfolio VaR 99 / ES 97.5 and Risk HHI across the whole calendar, plus the
     top style-factor exposures over time. One /trends call per dataset (cached); collapsed."""
     with st.expander("📈 Risk trends (2016–2024)", expanded=False):
         sets = members.get("ScenarioSet") or ["HistFull"]
@@ -510,7 +510,7 @@ def render_trends():
         df["Date"] = pd.to_datetime(df["Date"]); df = df.set_index("Date")
         c1, c2 = st.columns(2)
         with c1:
-            st.caption("Tail risk — Scenario VaR 99 & ES 97.5 (fraction of book)")
+            st.caption("Tail risk — Scenario VaR 99 & ES 97.5 (fraction of portfolio)")
             cols = [c for c in ("Scenario VaR 99", "Scenario ES 97.5") if c in df]
             st.line_chart(df[cols])
         with c2:
@@ -530,9 +530,9 @@ def render_trends():
 def render_universe():
     """Estimation-universe diagnostic (Phase 1): which index each Soros holding sat in, per 13F
     filing, BITEMPORALLY (S&P 500 membership read as-of the filing's report date). Leads with the
-    latest book's weight outside S&P 1500 — Chris's question on whether the book reaches names an
-    SP1500 estimation universe wouldn't cover. Collapsed; silent if /universe is unbuilt/down."""
-    with st.expander("🌐 Estimation universe — index membership of the book", expanded=False):
+    latest portfolio's weight outside S&P 1500 — Chris's question on whether the portfolio reaches
+    names an SP1500 estimation universe wouldn't cover. Collapsed; silent if /universe is unbuilt/down."""
+    with st.expander("🌐 Estimation universe — index membership of the portfolio", expanded=False):
         try:
             u = get("/universe")
         except Exception as e:
@@ -545,7 +545,7 @@ def render_universe():
         lat = u["latest"]
         out_w, unc_w = lat["outside_sp1500"], lat["unclassified"]
         st.markdown(
-            f"**{out_w:.1%} of the book sits outside the S&P 1500** as of the {lat['report_date']} "
+            f"**{out_w:.1%} of the portfolio sits outside the S&P 1500** as of the {lat['report_date']} "
             f"filing ({lat['n_names']} names) — the coverage an SP1500 estimation universe would miss. "
             f"In S&P 500 {lat['split'].get('S&P 500', 0):.1%} · S&P 400/600 "
             f"{lat['split'].get('S&P 400/600', 0):.1%} · unclassified {unc_w:.1%}.")
@@ -553,7 +553,7 @@ def render_universe():
         df = pd.DataFrame(series)
         df["Date"] = pd.to_datetime(df["report_date"]); df = df.set_index("Date")
         cols = [b for b in u["buckets"] if b in df]
-        st.caption("Book weight by index bucket, per filing — S&P 500 is point-in-time; S&P 1500 is "
+        st.caption("Portfolio weight by index bucket, per filing — S&P 500 is point-in-time; S&P 1500 is "
                    "current membership; 'Unclassified' is the identity-resolution gap (kept out of the "
                    "headline), which thins coverage on older filings.")
         st.bar_chart(df[cols])
@@ -616,10 +616,10 @@ def render_universe():
                                + ", ".join(fn.get("unavailable_stages", [])))
                     st.caption("• " + fn.get("note", ""))
 
-        # --- Phase 3: span / high-confidence check (is the book inside the model's factor space?) ---
+        # --- Phase 3: span / high-confidence check (is the portfolio inside the model's factor space?) ---
         st.divider()
         st.markdown("**Estimation universe — span / high-confidence check** "
-                    "(does the book sit inside the model's factor space?)")
+                    "(does the portfolio sit inside the model's factor space?)")
         st.session_state.setdefault("pv_span_fx", "Size")
         st.session_state.setdefault("pv_span_fy", "ResidVol")
         try:
@@ -632,17 +632,17 @@ def render_universe():
             else:
                 sl = sp["latest"]
                 st.markdown(
-                    f"**{sl['inside_wt']:.0%} of the book sits inside** the estimation universe's factor "
+                    f"**{sl['inside_wt']:.0%} of the portfolio sits inside** the estimation universe's factor "
                     f"space at {sp['selected_date']} ({sl['n_inside']}/{sl['n_held']} names) — exposures "
                     f"there are well-supported. The rest is extrapolation (small, higher-vol names beyond "
                     f"anything the S&P 500 spans). With coverage loadings uncapped, off-index holdings "
-                    f"show their true extreme positions: ~82% of the book sits inside on average, "
+                    f"show their true extreme positions: ~82% of the portfolio sits inside on average, "
                     f"dipping since 2021 (≈59% in 2022) — Chris's intentional-vs-not question (Phase 4).")
                 sdf = pd.DataFrame(sp["series"])
                 sdf["Date"] = pd.to_datetime(sdf["month"]); sdf = sdf.set_index("Date")
                 c1, c2 = st.columns(2)
                 with c1:
-                    st.caption("Book weight inside the span over time")
+                    st.caption("Portfolio weight inside the span over time")
                     st.line_chart(sdf[["inside_wt"]])
                 with c2:
                     facs = sp["factors"]
@@ -653,9 +653,9 @@ def render_universe():
                     pts = [{"x": p["x"], "y": p["y"], "group": "estimation cloud"}
                            for p in sc["cloud"] if p["x"] is not None and p["y"] is not None]
                     pts += [{"x": p["x"], "y": p["y"],
-                             "group": "book · inside" if p["inside"] else "book · outside"}
+                             "group": "portfolio · inside" if p["inside"] else "portfolio · outside"}
                             for p in sc["held"] if p["x"] is not None and p["y"] is not None]
-                    st.caption(f"{sc['fx']} vs {sc['fy']} — estimation cloud vs the book")
+                    st.caption(f"{sc['fx']} vs {sc['fy']} — estimation cloud vs the portfolio")
                     if pts:
                         st.scatter_chart(pd.DataFrame(pts), x="x", y="y", color="group")
                 outs = [d for d in sp.get("detail", []) if not d["inside"]]
@@ -676,7 +676,7 @@ def render_universe():
 
 
 def render_drift():
-    """Phase 4: style-drift attribution. Which factors the book drifted on since `split`, and whether
+    """Phase 4: style-drift attribution. Which factors the portfolio drifted on since `split`, and whether
     the drift came from rotating into NEW names (leans intentional → benchmark) or HELD names' loadings
     drifting (leans unintentional → hedge). Chris's 2026-06-23 question, made empirical. Collapsed."""
     with st.expander("🧭 Style-drift attribution (intentional vs not)", expanded=False):
@@ -697,7 +697,7 @@ def render_drift():
         topf = [r["factor"] for r in summ[:6] if r["factor"] in sdf]
         c1, c2 = st.columns(2)
         with c1:
-            st.caption("Book net factor exposure over time (top 6 movers)")
+            st.caption("Portfolio net factor exposure over time (top 6 movers)")
             st.line_chart(sdf[topf])
         with c2:
             st.caption(f"Drift attribution {d['t0']} → {d['t1']} (top movers)")
@@ -714,7 +714,7 @@ def render_drift():
 
 def render_liquidity():
     """Step 11: days-to-liquidate per held name = MV / (participation × ADV). Headline = share of the
-    book liquidatable within a horizon; least-liquid names; names with no ADV. Collapsed; silent if
+    portfolio liquidatable within a horizon; least-liquid names; names with no ADV. Collapsed; silent if
     /liquidity is down (e.g. frames built before the Step-11 ADV column)."""
     with st.expander("💧 Liquidity — days to liquidate", expanded=False):
         c1, c2 = st.columns(2)
@@ -728,7 +728,7 @@ def render_liquidity():
         pct = lq.get("pct_weight_within_horizon")
         wavg = lq.get("weighted_avg_days"); mx = lq.get("max_days")
         st.markdown(
-            f"At **{part:.0%} of ADV/day**, **{(pct or 0):.0%} of the book by weight** can be exited "
+            f"At **{part:.0%} of ADV/day**, **{(pct or 0):.0%} of the portfolio by weight** can be exited "
             f"within **{hor:.0f} days** (as of {lq['date']}). Weighted-avg "
             f"{('%.1f' % wavg) if wavg is not None else '—'} days; worst "
             f"{('%.0f' % mx) if mx is not None else '—'}. {lq['n_no_adv']} names "
@@ -754,7 +754,7 @@ def render_liquidity():
 
 def render_whatchanged():
     """Step 9: what changed quarter-over-quarter — positions in/out/resized, the factor-exposure
-    drift attributed (rotation vs loading drift), the book risk delta, plus an on-demand LLM
+    drift attributed (rotation vs loading drift), the portfolio risk delta, plus an on-demand LLM
     'what changed' read. Collapsed; silent if /whatchanged is down."""
     with st.expander("📋 What changed (quarter-over-quarter)", expanded=False):
         try:
@@ -789,7 +789,7 @@ def render_whatchanged():
         for c in cols[1:]:
             show[c] = show[c].map(lambda v: "—" if v is None else f"{v:+.2f}")
         st.dataframe(show, hide_index=True, use_container_width=True)
-        st.caption("Book risk delta (HistFull-equivalent, Market included; losses positive)")
+        st.caption("Portfolio risk delta (HistFull-equivalent, Market included; losses positive)")
         rows = []
         for k, lab, pct in [("scenario_var_99", "Scenario VaR 99", True), ("es_975", "ES 97.5", True),
                             ("total_var_99", "Total VaR 99", True), ("specific_vol", "Specific vol", True),
@@ -853,13 +853,13 @@ def render_ask():
 
 
 def render_stress():
-    """Custom & reverse stress. Custom: book P&L under user-set per-factor sigma shocks. Reverse:
+    """Custom & reverse stress. Custom: portfolio P&L under user-set per-factor sigma shocks. Reverse:
     the single-factor sigma move that would breach a target loss, ranked by vulnerability."""
     with st.expander("🧪 Stress test (custom & reverse)", expanded=False):
         facs = members.get("Factor") or []
         t_custom, t_rev = st.tabs(["Custom shock", "Reverse stress"])
         with t_custom:
-            st.caption("Shock factors in σ (standard deviations). Book P&L = Σ exposure × (σ × factor vol) "
+            st.caption("Shock factors in σ (standard deviations). Portfolio P&L = Σ exposure × (σ × factor vol) "
                        "— the same math as the built-in Hypo scenarios, but yours.")
             base = pd.DataFrame({"Factor": facs, "Shock σ": [0.0] * len(facs)})
             edited = st.data_editor(
@@ -878,7 +878,7 @@ def render_stress():
                         st.error(f"Stress failed: {e}"); res = None
                     if res:
                         tp = res["total_pnl"]
-                        (st.error if tp < 0 else st.success)(f"Book P&L under shock: **{tp:+.2%}**")
+                        (st.error if tp < 0 else st.success)(f"Portfolio P&L under shock: **{tp:+.2%}**")
                         cdf = pd.DataFrame(res["components"])
                         cdf = cdf[["factor", "exposure", "sigma", "shock_return", "pnl"]].rename(
                             columns={"factor": "Factor", "exposure": "Exposure", "sigma": "σ",
@@ -889,9 +889,9 @@ def render_stress():
                         cdf["σ"] = cdf["σ"].map(lambda v: f"{v:+.1f}")
                         st.dataframe(cdf, hide_index=True, use_container_width=True)
         with t_rev:
-            st.caption("For a target book loss, the single-factor σ move that would breach it — ranked "
-                       "by |σ| (smallest = the book's most vulnerable factor).")
-            loss = st.number_input("Target loss (fraction of book)", min_value=0.005, max_value=0.5,
+            st.caption("For a target portfolio loss, the single-factor σ move that would breach it — ranked "
+                       "by |σ| (smallest = the portfolio's most vulnerable factor).")
+            loss = st.number_input("Target loss (fraction of portfolio)", min_value=0.005, max_value=0.5,
                                    value=0.055, step=0.005, format="%.3f", key="pv_rev_loss")
             if st.button("Run reverse stress", key="pv_rev_run"):
                 try:
@@ -911,10 +911,10 @@ def render_stress():
 
 
 def render_whatif():
-    """Pre-trade what-if: resize/drop holdings and see the book risk impact (VaR/ES/Total VaR/Specific
+    """Pre-trade what-if: resize/drop holdings and see the portfolio risk impact (VaR/ES/Total VaR/Specific
     vol/HHI, gross/net) before vs after. Risk recomputed from the cube's loadings/returns/specvar."""
     with st.expander("🔀 Pre-trade / what-if", expanded=False):
-        st.caption("Edit the New weight per holding (0 = drop), then run. Book risk is recomputed under "
+        st.caption("Edit the New weight per holding (0 = drop), then run. Portfolio risk is recomputed under "
                    "the modified weights — the same engine the cube uses.")
         try:
             boot = requests.post(f"{API}/whatif", json={"trades": []}, timeout=30)
@@ -991,7 +991,7 @@ _RAG_HEX = {"green": "#2e7d32", "amber": "#c77f00", "red": "#b03030"}
 
 def _reconcile_svg(lk: dict) -> str:
     """The §4 reconcile band chart (matches the roadmap §9 mock): one row per factor + Specific +
-    Book total; each row read against its OWN start-of-period band, so position = the surprise z.
+    Portfolio total; each row read against its OWN start-of-period band, so position = the surprise z.
     Base band ±2σ (fixed width), stressed band scaled by that row's stressed/base ratio; the dot is
     the realized contribution, coloured within / stress-regime / investigate."""
     rows = [r for r in lk["rows"]] + ["sep", lk["book_total"]]
@@ -1128,7 +1128,7 @@ def render_attribution():
             cov = att.get("coverage", {})
             unp = cov.get("unpriced") or []
             cv = cov.get("mean_priced_share")
-            st.caption((f"Coverage: {cv:.0%} of book weight priced on average"
+            st.caption((f"Coverage: {cv:.0%} of portfolio weight priced on average"
                         if cv is not None else "Coverage unknown")
                        + (f" · unpriced names ({len(unp)}): "
                           + ", ".join(f"{u['name']} ({u['weight']:.1%})" for u in unp[:8])
@@ -1202,8 +1202,8 @@ members = dims.get("members", {})
 
 
 # ----------------------------------------------------------------------------- defaults / seed
-def _book_dim(d: dict | None = None) -> str:
-    """The API's own name for the manager/book dimension.
+def _manager_dim(d: dict | None = None) -> str:
+    """The API's own name for the manager dimension.
 
     It was renamed Book -> Manager at the API surface on 2026-08-14. `Book` stays a permanent
     INPUT alias, so queries still work — but `/dims` only lists the canonical name, and a
@@ -1217,7 +1217,7 @@ def _book_dim(d: dict | None = None) -> str:
 
 def _default_members(d: str, opts: list) -> list:
     """The historical default member selection for a slicer dimension.
-    Manager/Book -> real book(s), excluding the always-zero N/A bucket; Date -> latest;
+    Manager/Book -> real manager(s), excluding the always-zero N/A bucket; Date -> latest;
     ScenarioSet -> a single set (scenario measures need one), preferring HistFull."""
     if not opts:
         return []
@@ -1236,11 +1236,11 @@ def seed_defaults(dims: dict) -> None:
     ss = st.session_state
     if ss.get("pv_seeded"):
         return
-    bd = _book_dim(dims)
-    ss.setdefault("pv_rows", [bd])
+    md = _manager_dim(dims)
+    ss.setdefault("pv_rows", [md])
     ss.setdefault("pv_cols", [])
     ss.setdefault("pv_measures", ["Total VaR 99", "Scenario VaR 99", "Specific vol"])
-    ss.setdefault("pv_slice_dims", [bd, "Date", "ScenarioSet"])
+    ss.setdefault("pv_slice_dims", [md, "Date", "ScenarioSet"])
     ss.setdefault("pv_row_tot", False)
     ss.setdefault("pv_col_tot", False)
     ss.setdefault("pv_as_pct", True)
@@ -1428,8 +1428,8 @@ def render_status_line():
 
 
 def render_overview():
-    """The landing page: overview-first per Few. A scorecard of the book's key risk numbers (each
-    with a Tufte sparkline of its trend), a compact RAG status line, then every whole-book panel as a
+    """The landing page: overview-first per Few. A scorecard of the portfolio's key risk numbers (each
+    with a Tufte sparkline of its trend), a compact RAG status line, then every whole-portfolio panel as a
     closed drill-down. Independent of the pivot — that's its own page."""
     try:
         recs = get("/trends").get("records", [])
@@ -1480,7 +1480,7 @@ def render_overview():
 
     st.caption("Details on demand")
     t_risk, t_univ, t_chg, t_checks = st.tabs(["Risk", "Universe", "Changes & Q&A", "Checks"])
-    with t_risk:           # quantitative book-risk lenses
+    with t_risk:           # quantitative portfolio-risk lenses
         render_drawdown(); render_trends(); render_attribution()
         render_liquidity(); render_stress(); render_whatif()
     with t_univ:           # estimation-universe diagnostics (Chris's review)
@@ -1500,10 +1500,10 @@ def _excel_links() -> str:
     through the same gate as the docs. Returns the <a> HTML (empty if none built yet)."""
     tmp = Path(__file__).resolve().parent.parent / "tmp"
     static = Path(__file__).resolve().parent / "static"
-    books = [("barra_section3_1name_1month.xlsx", "📑 Section 3 worked example (Excel)"),
+    workbooks = [("barra_section3_1name_1month.xlsx", "📑 Section 3 worked example (Excel)"),
              ("barra_risk_check_3pos.xlsx", "📑 Risk-measure check, 3 names (Excel)")]
     out = []
-    for fn, label in books:
+    for fn, label in workbooks:
         src = tmp / fn
         if not src.exists():
             continue
@@ -1533,7 +1533,7 @@ def _doc_links():
         + _excel_links(),
         unsafe_allow_html=True)
 
-# ---- Top-level page switch: Overview (the landing scorecard + all whole-book tooling) vs Pivot
+# ---- Top-level page switch: Overview (the landing scorecard + all whole-portfolio tooling) vs Pivot
 # (the view workspace). Default Overview. The nav lives at the top of the sidebar so it shows on
 # both pages; the radio is unkeyed and synced to st.session_state.page so the "Open Pivot →" button
 # can drive it too. On Overview we render and st.stop() — the pivot code below never runs.
@@ -1560,7 +1560,7 @@ def read_pivot_state():
     """The pivot fields read from session_state — used when the sidebar is showing the
     Repository (the pivot widgets aren't rendered then, so the grid reads their last values)."""
     ss = st.session_state
-    rows = list(ss.get("pv_rows", [_book_dim()]))
+    rows = list(ss.get("pv_rows", [_manager_dim()]))
     cols = [c for c in ss.get("pv_cols", []) if c not in rows]
     slice_dims = list(ss.get("pv_slice_dims", []))
     filters = {d: ss[f"slice_{d}"] for d in slice_dims if ss.get(f"slice_{d}")}
@@ -1822,7 +1822,7 @@ with st.sidebar:
         filters = {}
         for d in slice_dims:
             opts = members.get(d, [])
-            # newly-added dims still default sensibly (latest Date, real Book, HistFull set).
+            # newly-added dims still default sensibly (latest Date, real Manager, HistFull set).
             st.session_state.setdefault(f"slice_{d}", _default_members(d, opts))
             sel = st.multiselect(d, opts, key=f"slice_{d}", on_change=_filters_changed)
             if sel:
@@ -2521,5 +2521,5 @@ with main_col:
                 "(ag-grid Community — no client-side grouping/aggregation); sort, resize and "
                 "drag-reorder columns freely. <b>Every number, including all totals, is computed "
                 "by the Atoti cube</b> — totals are recomputed at the aggregated level (not summed "
-                "from cells), so VaR margins are the true book-level VaR, not a sum of parts.</div>",
+                "from cells), so VaR margins are the true portfolio-level VaR, not a sum of parts.</div>",
                 unsafe_allow_html=True)

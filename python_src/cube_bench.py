@@ -1,5 +1,5 @@
 """
-cube_bench.py — the cube performance harness (2026-08-14, the 124-book optimization program).
+cube_bench.py — the cube performance harness (2026-08-14, the 124-manager optimization program).
 
 Stands up the FULL cube from data/ in-process (all managers), instruments every stage of the
 build, then times a fixed suite of queries covering every measure family and the specific
@@ -12,7 +12,7 @@ hypothesized pathologies from the optimization analysis:
                                 A/B gate).
   H3  dead columns            — positions load timed full-width vs slim (micro-bench, own
                                 throwaway session).
-  H4  cross-book scaling      — vector measures by Manager at N = 1..123 books; where the
+  H4  cross-manager scaling   — vector measures by Manager at N = 1..123 managers; where the
                                 intermediate limit / time limit actually bites.
   H5  aggregate cache         — every query runs twice; warm/cold ratio.
 
@@ -33,8 +33,8 @@ import time
 import pandas as pd
 import psutil
 
-BENCH_BOOK = "Vanguard"          # the largest manager — worst realistic single-book case
-SMALL_BOOK = "ThirdPoint"        # a small book for contrast
+BENCH_MANAGER = "Vanguard"       # the largest manager — worst realistic single-manager case
+SMALL_MANAGER = "ThirdPoint"     # a small manager for contrast
 REAL_SETS = ["HistFull", "Evt:COVID2020", "Evt:Rates2022", "Evt:Selloff2018",
              "Hypo:ValueRotation", "Hypo:RiskOff", "Hypo:MomentumCrash"]
 SCALE_N = [1, 2, 4, 8, 16, 32, 64, 123]
@@ -99,14 +99,14 @@ def timed(fn, jvm):
 def build_suite(cube, ctx):
     """The fixed query suite: (id, family, callable). Order is the execution order."""
     l, m, h = ctx["l"], ctx["m"], ctx["h"]
-    D, B = ctx["date"], BENCH_BOOK
+    D, B = ctx["date"], BENCH_MANAGER
     HF = l["ScenarioSet"] == "HistFull"
     BK = l["Manager"] == B
     DT = l["Date"] == D
     base = DT & BK & HF
     DAY_HF = l["DaySet"] == "HistFull"      # the day-facts table's OWN set key (day_path_* entries)
     q = cube.query
-    books = ctx["books"]
+    managers = ctx["managers"]
 
     suite = [
         # A — additive family
@@ -159,11 +159,11 @@ def build_suite(cube, ctx):
                                                            filter=DT & BK & l["ScenarioSet"].isin(*REAL_SETS))),
         ("hhi_by_set_all130",        "sets",     lambda: q(m["Risk HHI"], levels=[l["ScenarioSet"]], filter=DT & BK)),
         ("hhi_small_book_all130",    "sets",     lambda: q(m["Risk HHI"], levels=[l["ScenarioSet"]],
-                                                           filter=DT & (l["Manager"] == SMALL_BOOK))),
+                                                           filter=DT & (l["Manager"] == SMALL_MANAGER))),
     ]
-    # F — H4: cross-book scaling of a vector measure vs an additive one
+    # F — H4: cross-manager scaling of a vector measure vs an additive one
     for n in SCALE_N:
-        picks = books[:n]
+        picks = managers[:n]
         suite.append((f"model_vol_by_book_{n:03d}", "xbook",
                       (lambda p: lambda: q(m["Model vol"], levels=[l["Manager"]],
                                            filter=DT & HF & l["Manager"].isin(*p)))(picks)))
@@ -228,8 +228,8 @@ def main(out_path: str):
     D = pd.Timestamp(dates[-1]).date()
     pos = frames["positions"]
     latest = pos[pos["Date"] == pos["Date"].max()]
-    books = (latest.groupby("Manager")["MV"].sum().sort_values(ascending=False).index.tolist())
-    ctx = {"l": l, "m": m, "h": h, "date": D, "books": books}
+    managers = (latest.groupby("Manager")["MV"].sum().sort_values(ascending=False).index.tolist())
+    ctx = {"l": l, "m": m, "h": h, "date": D, "managers": managers}
 
     results = []
     for qid, family, fn in build_suite(cube, ctx):
@@ -257,7 +257,7 @@ def main(out_path: str):
     micro = micro_bench_load(frames)
 
     out = {"stages": stages, "micro": micro, "queries": results,
-           "meta": {"bench_book": BENCH_BOOK, "date": str(D), "n_books": len(books),
+           "meta": {"bench_manager": BENCH_MANAGER, "date": str(D), "n_managers": len(managers),
                     "xmx": __import__("os").environ.get("BARRA_CUBE_XMX", "32g (default)"),
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S")}}
     pathlib.Path(out_path).write_text(json.dumps(out, indent=1))

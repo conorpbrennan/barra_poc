@@ -5,16 +5,16 @@ Real, all-open data pipeline that produces the frames consumed by the Atoti fact
 (barra_factor_risk_cube.py). Everything is free / public-domain:
 
     positions     -> SEC EDGAR 13F (multi-manager -- see MANAGERS; Soros Fund Management, CIK
-                     0001029160, was the original single-book baseline)
+                     0001029160, was the original single-manager baseline)
     fundamentals  -> SEC EDGAR XBRL company-facts API  (point-in-time, CIK-keyed)
     prices/returns-> Stooq per-symbol daily CSV         (ticker-keyed)
     crosswalk     -> OpenFIGI v3 mapping  (CUSIP -> FIGI/ticker)  +  SEC company_tickers.json
 
 Design (settled with the desk):
   * Leaf = full estimation-universe exposure panel  (Date, Position, Factor) -> Loading.
-  * Each manager's 13F is a WEIGHT OVERLAY on that leaf, as-of joined PER BOOK (quarterly, lagged
-    by filing date) -- see MANAGERS / build_frames for the multi-manager integration (Phase 1,
-    2026-07-30).
+  * Each manager's 13F is a WEIGHT OVERLAY on that leaf, as-of joined PER MANAGER (quarterly,
+    lagged by filing date) -- see MANAGERS / build_frames for the multi-manager integration
+    (Phase 1, 2026-07-30).
   * Two blocks only: linear factor P&L (factor-return cache) + diagonal specific risk.
   * factor_returns and specific_var are DERIVED from a DAILY cross-sectional regression on
     monthly-updated exposures, not downloaded -- so exposures, factor returns and specific
@@ -23,13 +23,13 @@ Design (settled with the desk):
 Emits seven frames (the cube contract) plus an optional eighth (managers, dimension-like, not part
 of the contract -- see Task E notes on MANAGERS):
   exposures        (Date, Position, Factor) -> Loading      <-- GRANULAR LEAF
-  positions        (Date, Book, Position)   -> Weight, MV, ADV <-- per-manager overlay (ADV = days-to-liquidate)
+  positions        (Date, Manager, Position) -> Weight, MV, ADV <-- per-manager overlay (ADV = days-to-liquidate)
   securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
   factor_meta      (Factor)                 -> FactorGroup
   factor_returns   (Date, Factor)           -> Return        <-- the shared cache
   specific_var     (Date, Position)         -> SpecificVar   <-- diagonal block
   specific_returns (Date, Position)         -> SpecificReturn <-- daily WLS residual u (PnL attribution)
-  managers         (Book)                   -> CIK, EntityName, FirmType, filing/coverage stats, ETP
+  managers         (Manager)                -> CIK, EntityName, FirmType, filing/coverage stats, ETP
                                                 drop disclosure  <-- OPTIONAL 8th frame, dimension-like
 
 NB Position == canonical SecId == FIGI (resolved up front so the cube only joins on SecId).
@@ -68,7 +68,7 @@ UNIVERSE_CAP    = 200000          # safety bound only; the universe is now index
                                   # ORDER-DEPENDENT and silently truncates -- the measured union of held
                                   # CUSIPs across the 11-manager MANAGERS table is ~22,113 (phase0b recon),
                                   # so the old 3500 cap would have silently dropped the majority of names.
-                                  # Raised again 35000 -> 200000 (2026-08-14, the 124-book Buyside list
+                                  # Raised again 35000 -> 200000 (2026-08-14, the 124-manager Buyside list
                                   # expansion): the union now includes whole-market filers (BlackRock,
                                   # Vanguard, State Street, Fidelity/FMR, Morgan Stanley, JPMorgan...),
                                   # whose combined held-CUSIP union approaches the full 13F-eligible
@@ -90,14 +90,14 @@ RATE_PROXY      = "tlt"           # 20y+ Treasury ETF: the RateBeta (duration) d
 NDX_PROXY       = "qqq"           # Nasdaq-100 ETF: the NdxBeta (mega-complex comovement) proxy
 
 # --------------------------------------------------------------------------- multi-manager 13F (Phase 1)
-# MANAGERS: one row per BOOK. "cik" is a single int, or a tuple of ints for a manager that renamed/
+# MANAGERS: one row per MANAGER. "cik" is a single int, or a tuple of ints for a manager that renamed/
 # re-filed under a new legal entity (the FIRST cik in the tuple is the CURRENT entity and wins on any
 # report_date both cover -- see stitch_multi_cik). CIKs verified by phase0-recon (exact-name EDGAR
 # entity match + rejected-alternates check, see scratchpad/phase0-recon.md); measured per-manager
 # scale by phase0b (2026-07-30, positions_from_13f on `filings.recent` only, i.e. BEFORE the Task B
 # pagination fix below -- Renaissance/Citadel's true history is deeper than these counts show):
 #
-#   book          filings  cusips_all  latest_cusips  latest_value   etf_wb  (recent-only, pre-pagination)
+#   manager       filings  cusips_all  latest_cusips  latest_value   etf_wb  (recent-only, pre-pagination)
 #   Soros              52       2,461            229    $5.53bn          10
 #   Bridgewater        52       2,293            993    $22.40bn         13
 #   Citadel            41      17,921          5,960    $138.7bn       1,100
@@ -114,7 +114,7 @@ NDX_PROXY       = "qqq"           # Nasdaq-100 ETF: the NdxBeta (mega-complex co
 # Two Sigma Advisers LP (CIK 1478735) is DELIBERATELY EXCLUDED -- measured (phase0b) latest table is
 # 1 name at $0 (dormant, same pattern as Elliott's predecessor once superseded) and its full-history
 # CUSIP set adds only 7 incremental CUSIPs over what Two Sigma Investments (1179392) already
-# contributes. Not a second book, not an oversight -- do not add it back without re-measuring.
+# contributes. Not a second manager, not an oversight -- do not add it back without re-measuring.
 MANAGERS = [
     {"book": "Soros",       "cik": 1029160,
      "name": "Soros Fund Management LLC",              "type": "Long/short equity"},
@@ -141,16 +141,16 @@ MANAGERS = [
      "type": "Event-driven / activist"},
     # ------------------------------------------------------------------------------------------
     # ActiveViam buy-side target list (Kathy Perrotte's "Buy Side NAM target names July 2026",
-    # received 2026-08-14): 113 further books resolved to active SEC 13F-HR filers. Resolution:
+    # received 2026-08-14): 113 further managers resolved to active SEC 13F-HR filers. Resolution:
     # EDGAR company search (classic browse-edgar + the efts entityName fallback -- classic now
     # serves a JS landing page for some single-match queries) scored against the target name,
     # then the CIK's submissions JSON checked for a 13F-HR filed within the last 12 months.
     # Group-level filers stand in for asset-management arms (Goldman Sachs Group for GSAM,
     # Morgan Stanley for MSIM, JPMorgan Chase & Co for JPMAM, Ameriprise for Columbia
-    # Threadneedle, Prudential Financial for PGIM). Four books stitch two CIKs, Elliott-style
+    # Threadneedle, Prudential Financial for PGIM). Four managers stitch two CIKs, Elliott-style
     # (current entity first): BlackRock (2024 holdco reorg), Caxton (LP->LLP), Jump
     # (Trading->Financial), Appaloosa (Management LP->LP). Other managers' pre-rename history
-    # was NOT chased -- a book whose current CIK registered mid-sample simply starts later.
+    # was NOT chased -- a manager whose current CIK registered mid-sample simply starts later.
     # 22 target names had NO active 13F filer and are deliberately absent: PIMCO (last group
     # 13F 2012), KKR (PE; KKR Asset Management last 2013), Citadel Securities (entity exists,
     # zero 13F-HRs), Hudson River Trading / Haidar / Hildene / HOOPP-adjacent OPSEU (no or
@@ -388,12 +388,12 @@ MANAGERS = [
      "name": "Wellington Management Group LLP", "type": "Traditional asset manager"},
 ]
 ACTIVE_MANAGERS: list[str] | None = None
-# ^ None = run every book in MANAGERS (the eventual default). Set to a list of "book" names (e.g.
+# ^ None = run every manager in MANAGERS (the eventual default). Set to a list of manager names (e.g.
 # ["Soros", "TigerGlobal"]) to scope build_frames() to a subset -- used for the Phase-1 2-manager
 # verification build so a full 11-manager pull isn't required to test the plumbing.
 
 DROP_ETPS = True
-# Exclude ETF / index-fund / commodity-crypto-trust rows from every manager's 13F book. Measured
+# Exclude ETF / index-fund / commodity-crypto-trust rows from every manager's 13F portfolio. Measured
 # value share on the latest filing (phase0b recon, word-boundary matched): Bridgewater 24.5%,
 # Millennium 11.7%, Citadel 6.7% -- these vehicles carry no XBRL fundamentals and no sector, so they
 # would produce meaningless cross-sectional style/industry loadings (an ETF IS a diversified slice of
@@ -466,7 +466,7 @@ def _get(url: str, headers=None, sleep=0.12) -> bytes:
         with _HTTP_LOCK:
             _HTTP["hit"] += 1
         return p.read_bytes()
-    # Bounded retry on transient transport errors (2026-08-14): a multi-hour 124-book pull makes
+    # Bounded retry on transient transport errors (2026-08-14): a multi-hour 124-manager pull makes
     # thousands of requests, and a single 30s read timeout used to kill the whole build (observed
     # live on an SEC Archives index.json). HTTP 4xx still raises immediately -- only timeouts,
     # connection drops and 5xx/429 are retried, with exponential backoff.
@@ -784,7 +784,7 @@ def _parse_infotable(xml_bytes: bytes, report_date: str, filing_date: str) -> li
             # 13F values were reported in $ THOUSANDS until the SEC's 2023 amendment — filings made
             # on/after 2023-01-03 report whole dollars (the Q4-2022 filing, made Feb 2023, is the
             # first). Weights are scale-free either way; MV is normalised to DOLLARS here so the
-            # cube's $ measures (Book MV, "<measure> $") read one unit across the whole history.
+            # cube's $ measures (Manager MV, "<measure> $") read one unit across the whole history.
             "value":   float(lt(it, "value") or 0) * (1000.0 if pd.Timestamp(filing_date) < THIRTEENF_DOLLARS_FROM else 1.0),
             "shares":  float(lt(it, "sshPrnamt") or 0),
             "sshType": lt(it, "sshPrnamtType"),
@@ -823,7 +823,7 @@ def _is_etp_issuer(issuer) -> bool:
 def filter_etps(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Drop ETP/fund-like rows (see DROP_ETPS) from a positions_from_13f-shaped frame. Returns
     (kept_df, disclosure) -- the drop is NEVER silent; disclosure carries both the full-history drop
-    counts and a latest-filing value share (a stable "how much of TODAY's book is ETPs" snapshot,
+    counts and a latest-filing value share (a stable "how much of TODAY's portfolio is ETPs" snapshot,
     matching how phase0b recon measured it -- an all-history value share would be diluted by a
     decade of size changes and mean less). disclosure is safe to persist even when df is empty."""
     cols = ["report_date", "filing_date", "issuer", "cusip", "value", "shares", "sshType", "putCall"]
@@ -864,8 +864,8 @@ def filter_etps(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 # are batches cut from `sorted(set(cusips))` -- so changing the universe (adding a manager, say)
 # re-cuts every batch, misses every key, and re-asks OpenFIGI live. That matters because OpenFIGI
 # ANSWERS DRIFT: measured 2026-07-30, the 11-manager build lost 6 real Soros holdings worth 7.1%
-# of the book (Honeywell, Chart Industries, Clearwater, Select Medical, DuPont, National Storage)
-# purely because CUSIPs that resolved for the single-book build now return "No identifier found".
+# of the portfolio (Honeywell, Chart Industries, Clearwater, Select Medical, DuPont, National Storage)
+# purely because CUSIPs that resolved for the single-manager build now return "No identifier found".
 # So resolutions are cached PER CUSIP and a positive answer is never overwritten by a later
 # negative -- a name that resolved once stays resolved, and rebuilds stop silently deleting
 # holdings. Negatives are stored too but always re-queried (cheap: ~180 batches, under a minute
@@ -941,7 +941,7 @@ def ticker_to_cik() -> pd.DataFrame:
 def index_constituents() -> list[str]:
     """Market-index seed for the estimation universe (lowercased Stooq-style tickers).
 
-    A real Barra cross-section is a broad market, not one manager's 13F book; SEED_INDEX picks
+    A real Barra cross-section is a broad market, not one manager's 13F portfolio; SEED_INDEX picks
     which index. Fetched through _get so the constituent file is disk-cached like every other
     pull -- no re-pull on rerun. Class tickers (BRK.B) use '-' on Stooq/Yahoo, so '.'->'-'."""
     if not SEED_INDEX:
@@ -1031,7 +1031,7 @@ def price_descriptors(prices: dict[str, pd.DataFrame], cal: pd.DatetimeIndex,
     Each descriptor carries its OWN history gate — the beta family needs 120 return days,
     Momentum 252, the ADV mean only 21 volume days — so a young listing gets the loadings
     its history supports instead of none at all (the old single 120-day gate silently
-    dropped every price descriptor for post-IPO entrants the book actually held).
+    dropped every price descriptor for post-IPO entrants the portfolio actually held).
 
     RateBeta / NdxBeta are PARTIAL betas: the proxy's (TLT / QQQ) daily return is residualized
     against the market over the same window, then the stock's beta to that residual — so each
@@ -1220,7 +1220,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
     # Liquidity = TURNOVER, not raw dollar volume. log-ADV is essentially log-mcap
     # cross-sectionally (the two factor returns ran ρ ≈ −0.8 vs Size), so the old descriptor
     # was a second Size and the regression split one small/illiquid effect across two unstable
-    # coefficients — the book's residual then loaded on "Liquidity" (hidden beta at R² ~0.5).
+    # coefficients — the portfolio's residual then loaded on "Liquidity" (hidden beta at R² ~0.5).
     # log(ADV+1) − log(mcap+1) ≈ log turnover decorrelates from Size by construction. A name
     # with ADV but no mcap gets NaN — better no descriptor than one in different units.
     if "Liquidity" in raw and "Size" in raw:
@@ -1246,7 +1246,7 @@ def build_exposures(sec: pd.DataFrame, prices: dict, funda: dict,
             # is wrong-units; better a disclosed proxy than either). Impute raw log-mcap from
             # the per-date ESTIMATION regression of log-mcap on log-ADV (ρ ≈ 0.9). Estimation
             # rows are never imputed, so factor-return estimation is untouched — the proxy only
-            # lets the held book be priced. Liquidity stays NaN (turnover against its own
+            # lets the held portfolio be priced. Liquidity stays NaN (turnover against its own
             # imputation basis is circular); Value/EarnYield stay NaN (no fundamentals).
             need = (~em) & g["Size"].isna() & g["_logadv"].notna()
             fit = em & g["Size"].notna() & g["_logadv"].notna()
@@ -1451,7 +1451,7 @@ def regress_factors(exp_long: pd.DataFrame, prices: dict,
 # --------------------------------------------------------------------------- 7. orchestrator
 def _pull_manager_positions(mgr: dict) -> tuple[pd.DataFrame, dict]:
     """Pull, stitch (multi-CIK rename), and ETP-filter ONE manager's full 13F history. Returns
-    (kept_df with a Book column added, per-manager stats dict for the managers.parquet frame --
+    (kept_df with a Manager column added, per-manager stats dict for the managers.parquet frame --
     n_positions_distinct is filled in later by the caller, once the coverage-universe crosswalk +
     as-of join exist)."""
     ciks = mgr["cik"] if isinstance(mgr["cik"], tuple) else (mgr["cik"],)
@@ -1507,12 +1507,12 @@ def build_frames(out_dir=None):
                                    "shares", "sshType", "putCall", "Manager"]))
     xw = crosswalk_cusips(pos13f["cusip"].tolist())
     t2c = ticker_to_cik()
-    # The estimation universe = all 13F-held names (the book's opportunity set, kept whole so the
-    # book is always a subset) UNION a market-index seed (SEED_INDEX / UNIVERSE_EXTRA). This makes
-    # the cross-section a real market rather than the manager's holdings alone; no alphabetical
+    # The estimation universe = all 13F-held names (the portfolio's opportunity set, kept whole so
+    # the portfolio is always a subset) UNION a market-index seed (SEED_INDEX / UNIVERSE_EXTRA). This
+    # makes the cross-section a real market rather than the manager's holdings alone; no alphabetical
     # truncation. UNIVERSE_CAP is now only a safety bound. Index names are keyed by ticker (no FIGI)
     # and any already present as a held name are dropped to avoid double-counting one company.
-    # sec is now built from the UNION of every book's held CUSIPs (pos13f spans all managers), so the
+    # sec is now built from the UNION of every manager's held CUSIPs (pos13f spans all managers), so the
     # coverage universe automatically extends across managers -- is_estimation below still marks
     # ONLY the S&P 500 seed, independent of which manager(s) hold a name.
     sec = (xw.dropna(subset=["figi", "ticker"])
@@ -1569,7 +1569,7 @@ def build_frames(out_dir=None):
     reg_stats.to_parquet(_out_dir / "regression_stats.parquet", index=False)
     # Add Market as a LEAF loading of 1.0 for every (Date, Position). In v2 Market is the
     # cross-sectional regression intercept, so each name loads exactly 1.0 on it and a
-    # fully-invested book (weights sum to 1) has unit market exposure. Done AFTER regress_factors
+    # fully-invested portfolio (weights sum to 1) has unit market exposure. Done AFTER regress_factors
     # (which must see style exposures only) so directional market risk flows through the scenario
     # engine instead of being dropped. x_Market = Σ weights; Market shock = the intercept series.
     mkt_load = (exposures[["Date", "Position"]].drop_duplicates()
@@ -1589,24 +1589,24 @@ def build_frames(out_dir=None):
                 [["Date", "Position", "Factor", "Loading"]])
     exposures = pd.concat([exposures, ind_load], ignore_index=True)
 
-    # --- per-book weights, as-of joined onto the monthly calendar ----------
-    # Each calendar date carries exactly the latest filing's book: the as-of join picks the filing,
-    # then an inner join takes only names in *that* filing — positions exited in a newer filing
-    # expire instead of persisting forever. Weight is normalised PER (Book, filing_date) so each
-    # manager's own filing sums to 1.0 independent of every other manager. The as-of join is done
-    # PER BOOK (a plain loop, not merge_asof(..., by="Manager")) because each manager has its own filing
-    # calendar -- a single global calendar (the old one-shot merge_asof) would silently assign one
-    # manager's filing dates to another once there's more than one book.
+    # --- per-manager weights, as-of joined onto the monthly calendar -------
+    # Each calendar date carries exactly the latest filing's portfolio: the as-of join picks the
+    # filing, then an inner join takes only names in *that* filing — positions exited in a newer
+    # filing expire instead of persisting forever. Weight is normalised PER (Manager, filing_date) so
+    # each manager's own filing sums to 1.0 independent of every other manager. The as-of join is
+    # done PER MANAGER (a plain loop, not merge_asof(..., by="Manager")) because each manager has its
+    # own filing calendar -- a single global calendar (the old one-shot merge_asof) would silently
+    # assign one manager's filing dates to another once there's more than one manager.
     p = pos13f.merge(sec[["cusip", "figi"]], on="cusip", how="inner")
     p = (p.groupby(["Manager", "filing_date", "figi"], as_index=False)["value"].sum()
            .rename(columns={"figi": "Position", "value": "MV"}))   # collapse multi-lot/multi-CUSIP rows
     p["Weight"] = p.groupby(["Manager", "filing_date"])["MV"].transform(lambda v: v / v.sum())
     pos_parts = []
-    for book, pb in p.groupby("Manager"):
-        filings_b = pd.DataFrame({"filing_date": np.sort(pb["filing_date"].unique())})
+    for manager, pm in p.groupby("Manager"):
+        filings_b = pd.DataFrame({"filing_date": np.sort(pm["filing_date"].unique())})
         cal_b = pd.merge_asof(pd.DataFrame({"Date": cal}), filings_b,
                               left_on="Date", right_on="filing_date", direction="backward")
-        pos_parts.append(cal_b.dropna(subset=["filing_date"]).merge(pb, on="filing_date"))
+        pos_parts.append(cal_b.dropna(subset=["filing_date"]).merge(pm, on="filing_date"))
     positions = (pd.concat(pos_parts, ignore_index=True) if pos_parts else
                 pd.DataFrame(columns=["Date", "filing_date", "Manager", "Position", "MV", "Weight"]))
     # --- ADV (avg daily $ volume) for days-to-liquidate (Step 11) ----------
@@ -1635,7 +1635,7 @@ def build_frames(out_dir=None):
         .rename(columns={"cik": "CIK"})
     # GICS sector already on sec (joined before regress_factors for the industry block)
     # Country of incorporation from the same SEC submissions JSON (US state -> 'US', foreign -> country);
-    # names with no CIK keep the US default. See countries_for_ciks. ~21% of the Soros book by weight is
+    # names with no CIK keep the US default. See countries_for_ciks. ~21% of the Soros portfolio by weight is
     # genuinely non-US (Alibaba/JD China, Canadian energy/industrials, Sanofi), so this is not cosmetic.
     ctry = countries_for_ciks(securities["CIK"])
     securities = securities.merge(ctry[["CIK", "Country"]], on="CIK", how="left")
@@ -1645,14 +1645,14 @@ def build_frames(out_dir=None):
                                                 + ["Industry"] * len(ind_facs))})
 
     # --- 8th (optional) frame: managers.parquet -----------------------------
-    # One row per Book: CIK(s) used, EDGAR entity name, firm type/strategy, first/last filing date
+    # One row per Manager: CIK(s) used, EDGAR entity name, firm type/strategy, first/last filing date
     # actually parsed, filing count, distinct-position count (POST crosswalk, i.e. what actually made
     # it into `positions` -- a more meaningful number than the raw pre-crosswalk CUSIP count also kept
     # here), and the Task C ETP-drop disclosure. Optional by contract like specific_returns: nothing
     # else in this builder reads it back, so its absence never breaks anything downstream.
     managers_df = pd.DataFrame(mgr_stats)
-    n_pos_by_book = positions.groupby("Manager")["Position"].nunique().rename("n_positions_distinct")
-    managers_df = managers_df.merge(n_pos_by_book, left_on="Manager", right_index=True, how="left")
+    n_pos_by_manager = positions.groupby("Manager")["Position"].nunique().rename("n_positions_distinct")
+    managers_df = managers_df.merge(n_pos_by_manager, left_on="Manager", right_index=True, how="left")
     managers_df["n_positions_distinct"] = managers_df["n_positions_distinct"].fillna(0).astype(int)
 
     return (exposures, positions, securities, factor_meta, factor_returns, specific_var,

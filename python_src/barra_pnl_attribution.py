@@ -1,7 +1,7 @@
 """
 barra_pnl_attribution.py
 ========================
-Step 15 precompute: realized PnL attribution (factor + residual) for the 13F book, plus the
+Step 15 precompute: realized PnL attribution (factor + residual) for the 13F portfolio, plus the
 pure statistics the residual diagnostics and the risk↔PnL linkage need.
 
 Realized engine (docs/pnl-attribution-plan.md §1):
@@ -13,15 +13,16 @@ Realized engine (docs/pnl-attribution-plan.md §1):
     (±50% masked days drop out on both sides), and realized = factor + specific is an identity
     at machine precision, per day. That identity is the tie-out the tests assert.
   * Drifting (buy-and-hold) weights: anchored at each 13F filing change, each name compounding
-    by its own unit NAV until the next filing re-anchors — what actually happened to the book
+    by its own unit NAV until the next filing re-anchors — what actually happened to the portfolio
     between filings, not the constant-portfolio assumption.
   * Coverage is disclosed, never silent: a held name with no reconstructed return in a month
-    keeps its weight (flat NAV) but is excluded from realized PnL; the priced share of book
+    keeps its weight (flat NAV) but is excluded from realized PnL; the priced share of portfolio
     weight and the unpriced names are written to the artifact.
 
 Writes data/pnl_attribution.parquet — one tidy frame (Date, Kind, Source, Value):
   Kind=contribution  Source ∈ {Market, <style factors>, Specific, Realized}
-                     daily arithmetic contribution to book return (Realized = the book return)
+                     daily arithmetic contribution to portfolio return (Realized = the portfolio
+                     return)
   Kind=exposure      Source = factor, Value = x_k(t) on the drifting weights (masked to the
                      names priced that day, so c_k = x_k·f_k holds row by row)
   Kind=coverage      Source = "priced_share", share of start-of-day weight priced that day
@@ -39,13 +40,13 @@ import pandas as pd
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "pnl_attribution.parquet"
-DEFAULT_BOOK = "Soros"
+DEFAULT_MANAGER = "Soros"
 
 
-def artifact_path(book: str = DEFAULT_BOOK):
-    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
-    legacy unsuffixed filename; others write pnl_attribution.<Book>.parquet."""
-    return ARTIFACT if book == DEFAULT_BOOK else OUT / f"pnl_attribution.{book}.parquet"
+def artifact_path(manager: str = DEFAULT_MANAGER):
+    """Manager-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default manager keeps
+    the legacy unsuffixed filename; others write pnl_attribution.<Manager>.parquet."""
+    return ARTIFACT if manager == DEFAULT_MANAGER else OUT / f"pnl_attribution.{manager}.parquet"
 
 
 # --------------------------------------------------------------------------- pure statistics
@@ -111,7 +112,7 @@ def _hit_rate(values: pd.Series) -> float | None:
 
 
 def _resid_factor_regression(u: pd.Series, fac: pd.DataFrame) -> dict:
-    """Regress the book residual u_p(t) on the factor returns (Chris's test #2): R², and the
+    """Regress the portfolio residual u_p(t) on the factor returns (Chris's test #2): R², and the
     per-factor loading + t-stat, largest |t| first. Near-zero R² = clean, orthogonal alpha."""
     df = pd.concat([u.rename("_u"), fac], axis=1).dropna()
     if len(df) < len(fac.columns) + 4:
@@ -169,7 +170,7 @@ def _linkage_driver(x_t: float | None, x_win: float | None, realized: float,
       kind          — exposure_migration (within band on the in-window exposure — a timing
                       artifact, not a factor event) / factor_move (exposure stable, factor
                       moved ≥ 1.5σ) / mixed.
-    None when the row has no exposure/vol to reason about (specific / book rows)."""
+    None when the row has no exposure/vol to reason about (specific / portfolio-total rows)."""
     if x_t is None or x_win is None or sig_daily <= 0 or h <= 0:
         return None
     rt = float(np.sqrt(h))
@@ -244,7 +245,7 @@ def _pairwise_mean_corr(panel: pd.DataFrame, min_obs: int = 20) -> dict | None:
 
 
 # --------------------------------------------------------------------------- realized engine
-def compute_attribution(frames: dict[str, pd.DataFrame], book: str = "Soros") -> pd.DataFrame:
+def compute_attribution(frames: dict[str, pd.DataFrame], manager: str = "Soros") -> pd.DataFrame:
     """The daily tidy artifact (see module docstring) from the seven frames."""
     if "specific_returns" not in frames:
         raise ValueError("specific_returns frame missing — rebuild with the v2 builder first")
@@ -253,7 +254,7 @@ def compute_attribution(frames: dict[str, pd.DataFrame], book: str = "Soros") ->
     sec = frames["securities"]
     tick = dict(zip(sec["Position"], sec.get("Ticker", sec["Position"])))
 
-    pos = pos[pos["Manager"] == book]
+    pos = pos[pos["Manager"] == manager]
     held_ever = sorted(pos["Position"].unique())
     fr_w = fr.pivot(index="Date", columns="Factor", values="Return").sort_index()
     sr_held = sr[sr["Position"].isin(held_ever)]
@@ -358,19 +359,19 @@ def compute_attribution(frames: dict[str, pd.DataFrame], book: str = "Soros") ->
     return art
 
 
-def run(frames: dict[str, pd.DataFrame] | None = None, book: str = "Soros") -> pd.DataFrame:
+def run(frames: dict[str, pd.DataFrame] | None = None, manager: str = "Soros") -> pd.DataFrame:
     if frames is None:
         from barra_factor_risk_cube import load_frames
         frames = load_frames()
-    art = compute_attribution(frames, book=book)
+    art = compute_attribution(frames, manager=manager)
     return art
 
 
 if __name__ == "__main__":
     import sys
-    _book = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK
-    art = run(book=_book)
-    _art_path = artifact_path(_book)
+    _manager = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MANAGER
+    art = run(manager=_manager)
+    _art_path = artifact_path(_manager)
     art.to_parquet(_art_path, index=False)
     c = art[art["Kind"] == "contribution"].pivot(index="Date", columns="Source", values="Value")
     fac = c.drop(columns=["Specific", "Realized"]).sum(axis=1)

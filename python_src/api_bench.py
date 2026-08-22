@@ -5,8 +5,8 @@ api_bench.py — the API-layer timing harness (2026-08-15, cube optimization rou
 HTTP endpoints, several of which loop over dates, fan out over other endpoints, or do numpy work on
 top of the cube. This harness times exactly those: every endpoint the Overview / Pivot / Trends /
 Stress / What-if / Attribution / Model / Universe / Changes lenses call, over HTTP against a RUNNING
-risk_api (default the :8010 service; set BARRA_API), for two books (the reference book and the
-largest one), each request cold then warm (H5 — the cube's aggregate cache + any API-side cache).
+risk_api (default the :8010 service; set BARRA_API), for two managers (the reference manager and
+the largest one), each request cold then warm (H5 — the cube's aggregate cache + any API-side cache).
 
 Every row records wall time (cold + warm), HTTP status, payload size, and any error text (a 4xx/5xx
 is a data point, never a crash); `meta` records the loadavg at start/end so a busy-box run can be
@@ -28,67 +28,67 @@ import time
 import requests
 
 API = os.environ.get("BARRA_API", "http://127.0.0.1:8010")
-BOOKS = [os.environ.get("BENCH_SMALL_BOOK", "Soros"), os.environ.get("BENCH_BOOK", "Vanguard")]
+MANAGERS = [os.environ.get("BENCH_SMALL_MANAGER", "Soros"), os.environ.get("BENCH_MANAGER", "Vanguard")]
 TIMEOUT = float(os.environ.get("BENCH_TIMEOUT", "600"))
 
 
-def _latest_date(book: str) -> str:
-    """The book's latest date via /meta (dates are cube-wide) — the date the UI opens on."""
+def _latest_date(manager: str) -> str:
+    """The manager's latest date via /meta (dates are cube-wide) — the date the UI opens on."""
     d = requests.get(f"{API}/meta", timeout=60).json()
     return d["dates"][-1]
 
 
-def suite(book: str, date: str) -> list[tuple[str, str, str, dict | None]]:
-    """(id, method, path, body) — the UI's request set for one book at one date."""
+def suite(manager: str, date: str) -> list[tuple[str, str, str, dict | None]]:
+    """(id, method, path, body) — the UI's request set for one manager at one date."""
     f = lambda **kw: json.dumps(kw)                                                # noqa: E731
     return [
         # ---- global / context bar
         ("meta",                       "GET",  "/meta", None),
         ("dims",                       "GET",  "/dims", None),
         # ---- Overview (hero + RAG strip + top contributions + QoQ)
-        ("risk_histfull",              "GET",  f"/risk?date={date}&set=HistFull&book={book}", None),
-        ("limits",                     "GET",  f"/limits?date={date}&book={book}", None),
+        ("risk_histfull",              "GET",  f"/risk?date={date}&set=HistFull&book={manager}", None),
+        ("limits",                     "GET",  f"/limits?date={date}&book={manager}", None),
         ("dq",                         "GET",  "/dq", None),
-        ("backtest",                   "GET",  f"/backtest?date={date}&book={book}", None),
-        ("contributions",              "GET",  f"/contributions?date={date}&book={book}", None),
-        ("whatchanged",                "GET",  f"/whatchanged?date={date}&book={book}", None),
-        ("pnl_attribution",            "GET",  f"/pnl_attribution?book={book}", None),
-        ("pnl_attribution_linkage",    "GET",  f"/pnl_attribution/linkage?book={book}", None),
-        ("pnl_attribution_residual",   "GET",  f"/pnl_attribution/residual?book={book}", None),
-        ("pnl_attribution_names",      "GET",  f"/pnl_attribution/names?book={book}", None),
-        ("pnl_attribution_by_sector",  "GET",  f"/pnl_attribution?book={book}&by=sector", None),
+        ("backtest",                   "GET",  f"/backtest?date={date}&book={manager}", None),
+        ("contributions",              "GET",  f"/contributions?date={date}&book={manager}", None),
+        ("whatchanged",                "GET",  f"/whatchanged?date={date}&book={manager}", None),
+        ("pnl_attribution",            "GET",  f"/pnl_attribution?book={manager}", None),
+        ("pnl_attribution_linkage",    "GET",  f"/pnl_attribution/linkage?book={manager}", None),
+        ("pnl_attribution_residual",   "GET",  f"/pnl_attribution/residual?book={manager}", None),
+        ("pnl_attribution_names",      "GET",  f"/pnl_attribution/names?book={manager}", None),
+        ("pnl_attribution_by_sector",  "GET",  f"/pnl_attribution?book={manager}&by=sector", None),
         # ---- Trends lens
-        ("trends_book",                "GET",  f"/trends?set=HistFull&book={book}", None),
-        ("trends_book_modelvol",       "GET",  f"/trends?set=HistFull&book={book}&measures=Model%20vol", None),
-        ("trends_by_factor",           "GET",  f"/trends?set=HistFull&book={book}&measures=Net%20exposure&by=Factor", None),
+        ("trends_book",                "GET",  f"/trends?set=HistFull&book={manager}", None),
+        ("trends_book_modelvol",       "GET",  f"/trends?set=HistFull&book={manager}&measures=Model%20vol", None),
+        ("trends_by_factor",           "GET",  f"/trends?set=HistFull&book={manager}&measures=Net%20exposure&by=Factor", None),
         # ---- Stress / What-if lenses
-        ("stress_naive",               "POST", "/stress", {"shocks": {"Value": -2.0}, "date": date, "book": book}),
-        ("stress_conditional",         "POST", "/stress", {"shocks": {"Value": -2.0}, "date": date, "book": book, "conditional": True}),
-        ("reverse_stress",             "GET",  f"/reverse_stress?date={date}&book={book}", None),
-        ("hedge",                      "GET",  f"/hedge?date={date}&book={book}", None),
-        ("whatif_empty",               "POST", "/whatif", {"trades": [], "date": date, "book": book}),
-        # ---- Universe / Drift lenses (artifact-backed; may be book_mismatch for the large book)
-        ("universe",                   "GET",  f"/universe?book={book}", None),
-        ("funnel",                     "GET",  f"/funnel?book={book}", None),
-        ("span",                       "GET",  f"/span?book={book}", None),
-        ("drift",                      "GET",  f"/drift?book={book}", None),
+        ("stress_naive",               "POST", "/stress", {"shocks": {"Value": -2.0}, "date": date, "book": manager}),
+        ("stress_conditional",         "POST", "/stress", {"shocks": {"Value": -2.0}, "date": date, "book": manager, "conditional": True}),
+        ("reverse_stress",             "GET",  f"/reverse_stress?date={date}&book={manager}", None),
+        ("hedge",                      "GET",  f"/hedge?date={date}&book={manager}", None),
+        ("whatif_empty",               "POST", "/whatif", {"trades": [], "date": date, "book": manager}),
+        # ---- Universe / Drift lenses (artifact-backed; may be manager_mismatch for the large manager)
+        ("universe",                   "GET",  f"/universe?book={manager}", None),
+        ("funnel",                     "GET",  f"/funnel?book={manager}", None),
+        ("span",                       "GET",  f"/span?book={manager}", None),
+        ("drift",                      "GET",  f"/drift?book={manager}", None),
         # ---- Model lens
-        ("calibration",                "GET",  f"/calibration?book={book}", None),
+        ("calibration",                "GET",  f"/calibration?book={manager}", None),
         ("regression",                 "GET",  "/regression", None),
         ("factor_cov",                 "GET",  f"/factor_cov?date={date}", None),
         # ---- Pivot lens: the field-list default shapes
         ("pivot_var_by_sector",        "GET",  "/pivot?rows=Sector&measures=Scenario%20VaR%2099,Net%20exposure&filters="
-                                                + f(Manager=[book], Date=[date], ScenarioSet=["HistFull"]), None),
+                                                + f(Manager=[manager], Date=[date], ScenarioSet=["HistFull"]), None),
         ("pivot_marginal_by_position", "GET",  "/pivot?rows=Position&measures=Marginal%20Model%20vol,%25%20of%20Model%20vol&filters="
-                                                + f(Manager=[book], Date=[date], ScenarioSet=["HistFull"]), None),
+                                                + f(Manager=[manager], Date=[date], ScenarioSet=["HistFull"]), None),
         ("pivot_by_factor_totals",     "GET",  "/pivot?rows=Factor&measures=Net%20exposure,Factor%20variance%20contribution&totals=true&filters="
-                                                + f(Manager=[book], Date=[date], ScenarioSet=["HistFull"]), None),
+                                                + f(Manager=[manager], Date=[date], ScenarioSet=["HistFull"]), None),
         ("pivot_var_trend_by_date",    "GET",  "/pivot?rows=Date&measures=Scenario%20VaR%2099&filters="
-                                                + f(Manager=[book], ScenarioSet=["HistFull"]), None),
+                                                + f(Manager=[manager], ScenarioSet=["HistFull"]), None),
         ("pivot_stress_board",         "GET",  "/pivot?rows=ScenarioSet&measures=Scenario%20VaR%2099,Scenario%20worst%20loss&filters="
-                                                + f(Manager=[book], Date=[date]), None),
+                                                + f(Manager=[manager], Date=[date]), None),
         ("pivot_day_path_covid",       "GET",  "/pivot?rows=Day,DayDate&measures=PnL%20at%20day&filters="
-                                                + f(Manager=[book], Date=[date], DaySet=["Evt:COVID2020"]), None),
+                                                + f(Manager=[manager], Date=[date], DaySet=["Evt:COVID2020"]), None),
     ]
 
 
@@ -110,13 +110,13 @@ def call(method: str, path: str, body: dict | None):
 def run(out: pathlib.Path | None, payload_dir: pathlib.Path | None = None) -> dict:
     load0 = os.getloadavg()
     rows = []
-    for book in BOOKS:
-        date = _latest_date(book)
-        for qid, method, path, body in suite(book, date):
-            rid = f"{qid}@{book}"
+    for manager in MANAGERS:
+        date = _latest_date(manager)
+        for qid, method, path, body in suite(manager, date):
+            rid = f"{qid}@{manager}"
             cold, content = call(method, path, body)
             warm, _ = call(method, path, body)
-            row = {"id": rid, "endpoint": qid, "book": book, "method": method, "path": path,
+            row = {"id": rid, "endpoint": qid, "manager": manager, "method": method, "path": path,
                    "cold_s": cold["s"], "warm_s": warm["s"], "status": cold["status"],
                    "bytes": cold["bytes"], "error": cold["error"]}
             rows.append(row)
@@ -126,7 +126,7 @@ def run(out: pathlib.Path | None, payload_dir: pathlib.Path | None = None) -> di
             if payload_dir is not None:
                 payload_dir.mkdir(parents=True, exist_ok=True)
                 (payload_dir / f"{rid.replace('/', '_')}.json").write_bytes(content)
-    res = {"meta": {"api": API, "books": BOOKS, "loadavg_start": load0, "loadavg_end": os.getloadavg(),
+    res = {"meta": {"api": API, "managers": MANAGERS, "loadavg_start": load0, "loadavg_end": os.getloadavg(),
                     "ts": time.strftime("%Y-%m-%d %H:%M:%S")},
            "requests": rows}
     if out is not None:

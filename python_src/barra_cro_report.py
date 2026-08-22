@@ -53,7 +53,7 @@ def hbar(frac: float, w: int = 110) -> str:
             f'<rect x="{x:.1f}" y="2" width="{px:.1f}" height="8" fill="{color}" opacity="0.75"/></svg>')
 
 
-REPORT_BOOK = "Soros"   # this document is written about ONE manager; see the filter in build()
+REPORT_MANAGER = "Soros"   # this document is written about ONE manager; see the filter in build()
 
 
 def build() -> None:
@@ -61,37 +61,37 @@ def build() -> None:
     exposures, positions, securities = f["exposures"], f["positions"], f["securities"]
     factor_ret, specific, factor_meta = f["factor_returns"], f["specific_var"], f["factor_meta"]
 
-    # Every count and headline below is prose about REPORT_BOOK's 13F ("Soros filed 52 quarterly
-    # 13F-HR reports ..."), so the frame must be scoped to that book. Unscoped against the
+    # Every count and headline below is prose about REPORT_MANAGER's 13F ("Soros filed 52 quarterly
+    # 13F-HR reports ..."), so the frame must be scoped to that manager. Unscoped against the
     # multi-manager build it summed all eleven -- the report claimed 19,593 names held at
     # 2026-06-30 under Soros's name, and specific vol 1.20% against the true 0.26%.
-    # The universe frames (securities/exposures) are NOT book-scoped -- they span every book in the
-    # build -- so the §4 prose needs the pre-filter book count to describe them honestly.
-    all_books = (sorted(positions["Manager"].unique().tolist())
-                 if "Manager" in positions.columns else [REPORT_BOOK])
-    n_books = len(all_books)
+    # The universe frames (securities/exposures) are NOT manager-scoped -- they span every manager
+    # in the build -- so the §4 prose needs the pre-filter manager count to describe them honestly.
+    all_managers = (sorted(positions["Manager"].unique().tolist())
+                 if "Manager" in positions.columns else [REPORT_MANAGER])
+    n_managers = len(all_managers)
     if "Manager" in positions.columns and positions["Manager"].nunique() > 1:
-        positions = positions[positions["Manager"] == REPORT_BOOK]
+        positions = positions[positions["Manager"] == REPORT_MANAGER]
         if positions.empty:
-            raise SystemExit(f"no positions for REPORT_BOOK={REPORT_BOOK!r}")
+            raise SystemExit(f"no positions for REPORT_MANAGER={REPORT_MANAGER!r}")
 
     last = positions["Date"].max()
-    book = positions[positions["Date"] == last].merge(securities, on="Position")
+    holdings = positions[positions["Date"] == last].merge(securities, on="Position")
     wide = (factor_ret[factor_ret["Factor"] != "Market"]
             .pivot(index="Date", columns="Factor", values="Return").dropna(how="any").sort_index())
     factors = list(wide.columns)
     n_style = int((factor_meta["FactorGroup"] == "Style").sum())
     n_ind = int((factor_meta["FactorGroup"] == "Industry").sum())
 
-    # --- full-book risk snapshot (mirrors the cube measures in pandas) ----------------
-    L = (exposures[(exposures["Date"] == last) & (exposures["Position"].isin(book["Position"]))]
+    # --- full-portfolio risk snapshot (mirrors the cube measures in pandas) -----------
+    L = (exposures[(exposures["Date"] == last) & (exposures["Position"].isin(holdings["Position"]))]
          .pivot(index="Position", columns="Factor", values="Loading")
-         .reindex(index=book["Position"], columns=factors).fillna(0.0))
-    wts = book.set_index("Position")["Weight"]
+         .reindex(index=holdings["Position"], columns=factors).fillna(0.0))
+    wts = holdings.set_index("Position")["Weight"]
     x = pd.Series(L.values.T @ wts.values, index=factors)
     pnl = pd.Series(wide.values @ x.values, index=wide.index)
-    sv = (specific[(specific["Position"].isin(book["Position"])) & (specific["Date"] <= last)]
-          .sort_values("Date").groupby("Position").last()["SpecificVar"].reindex(book["Position"]))
+    sv = (specific[(specific["Position"].isin(holdings["Position"])) & (specific["Date"] <= last)]
+          .sort_values("Date").groupby("Position").last()["SpecificVar"].reindex(holdings["Position"]))
     spec_var = float((wts.values ** 2 * sv.fillna(0).values).sum())
     spec_vol = float(np.sqrt(spec_var))
     sv_cov = sv.notna().mean()
@@ -116,21 +116,22 @@ def build() -> None:
     warns = [(r["name"], r["detail"]) for r in dqr if r["level"] == "WARN"]
     fails = [(r["name"], r["detail"]) for r in dqr if r["level"] == "FAIL"]
 
-    # --- estimation universe: 13F book UNION market-index seed --------------------------
+    # --- estimation universe: 13F portfolio UNION market-index seed ---------------------
     uni_n = securities["Position"].nunique()              # total estimation universe
     exp_n = exposures["Position"].nunique()               # of those, with usable loadings
     held_n = positions["Position"].nunique()              # held at >=1 sampled month-end
-    hpd = positions.groupby("Date")["Position"].nunique()  # active book breadth per date
+    hpd = positions.groupby("Date")["Position"].nunique()  # active portfolio breadth per date
     hpd_min, hpd_med, hpd_max = int(hpd.min()), int(hpd.median()), int(hpd.max())
     # Index-seeded names carry their (lowercased) ticker as Position (no real FIGI); held names
-    # carry a real FIGI. So this mask separates the market-index seed from the 13F-sourced book.
+    # carry a real FIGI. So this mask separates the market-index seed from the 13F-sourced
+    # portfolio.
     idx_only_n = int((securities["Position"].str.lower() == securities["Ticker"].str.lower()).sum())
     held_uni_n = uni_n - idx_only_n                       # crosswalked 13F names kept whole
     seed_name = ({"sp500": "the S&amp;P 500"}.get(str(SEED_INDEX).lower(), str(SEED_INDEX))
                  if SEED_INDEX else None)
     seed_label = ({"sp500": "S&amp;P 500"}.get(str(SEED_INDEX).lower(), str(SEED_INDEX))
                   if SEED_INDEX else "none")
-    # Full 13F name set (the source population the book is drawn from). Cached SEC pull; guard so
+    # Full 13F name set (the source population the portfolio is drawn from). Cached SEC pull; guard so
     # report generation never fails if the cache is cold / SEC is unreachable.
     try:
         _p13 = positions_from_13f(SOROS_CIK)
@@ -141,31 +142,31 @@ def build() -> None:
     except Exception:
         f13_filings = f13_cusips = f13_npf = 0
         f13_ok = False
-    # With several books loaded, held_uni_n is the union across ALL of them -- attributing it to
-    # REPORT_BOOK alone read as "2,461 CUSIPs resolve to 4,796 names". Keep the two separate.
-    multi = n_books > 1
-    books_clause = (
-        f" The universe is not book-scoped: it spans all <strong>{n_books}</strong> books in this "
-        f"build ({held_uni_n} 13F-sourced names between them). This report is written about "
-        f"{REPORT_BOOK} alone." if multi else "")
+    # With several managers loaded, held_uni_n is the union across ALL of them -- attributing it to
+    # REPORT_MANAGER alone read as "2,461 CUSIPs resolve to 4,796 names". Keep the two separate.
+    multi = n_managers > 1
+    managers_clause = (
+        f" The universe is not manager-scoped: it spans all <strong>{n_managers}</strong> managers in "
+        f"this build ({held_uni_n} 13F-sourced names between them). This report is written about "
+        f"{REPORT_MANAGER} alone." if multi else "")
     if f13_ok:
         f13_source = (
-            f"Across the sample {REPORT_BOOK} filed <strong>{f13_filings}</strong> quarterly 13F-HR "
+            f"Across the sample {REPORT_MANAGER} filed <strong>{f13_filings}</strong> quarterly 13F-HR "
             f"reports holding a median of <strong>{f13_npf}</strong> cash-equity names each "
             f"(<strong>{f13_cusips:,}</strong> distinct CUSIPs in total, options and bond lots "
             f"dropped), resolving to <strong>{held_n}</strong> names here. The universe keeps "
-            f"them <em>all</em>, so the book is always a subset of the universe." + books_clause)
+            f"them <em>all</em>, so the portfolio is always a subset of the universe." + managers_clause)
     else:
-        f13_source = (f"The book is drawn from the union of CUSIPs across all of {REPORT_BOOK}'s "
-                      f"13F-HR tables (options and bond lots dropped), resolving to {held_n} names, "
-                      f"all kept so the full book is covered." + books_clause)
-    _not_in = "those books" if multi else "the book"
-    nest_pop = (f"the union of all {n_books} books' 13F names" if multi else "the whole 13F book")
-    cik_note = (f"; one CIK per book, {n_books} in this build" if multi else "")
-    multi_book_note = (
-        f" The build carries <strong>{n_books}</strong> books in all ({', '.join(all_books)}); this "
-        f"document covers {REPORT_BOOK} only, and the risk numbers in §6 are {REPORT_BOOK}'s."
-        if multi else "")
+        f13_source = (f"The portfolio is drawn from the union of CUSIPs across all of "
+                      f"{REPORT_MANAGER}'s 13F-HR tables (options and bond lots dropped), resolving "
+                      f"to {held_n} names, all kept so the full portfolio is covered." + managers_clause)
+    _not_in = "those managers' portfolios" if multi else "the portfolio"
+    nest_pop = (f"the union of all {n_managers} managers' 13F names" if multi else "the whole 13F portfolio")
+    cik_note = (f"; one CIK per manager, {n_managers} in this build" if multi else "")
+    multi_manager_note = (
+        f" The build carries <strong>{n_managers}</strong> managers in all ({', '.join(all_managers)}); "
+        f"this document covers {REPORT_MANAGER} only, and the risk numbers in §6 are "
+        f"{REPORT_MANAGER}'s." if multi else "")
     if seed_name:
         seed_clause = (
             f"To make the cross-section a genuine market rather than one manager's holdings, the "
@@ -220,7 +221,7 @@ def build() -> None:
                           f"returns.")
         cov_spec_clause = (" Specific risk is formed for <strong>every coverage name</strong> (its own "
                            "residual against the estimation-fit factor returns), so the cube prices the "
-                           "whole book even though only estimation names enter the fit.")
+                           "whole portfolio even though only estimation names enter the fit.")
     else:
         cap_clause = "Every row is winsorised at <strong>±3σ</strong> (the estimation/coverage split is off)."
         cap_why = ""
@@ -324,7 +325,7 @@ def build() -> None:
 <li><strong>What.</strong> A two-block linear factor model — {n_style} style factors + {n_ind} GICS
     industry factors + a market
     intercept (the systematic block) and a diagonal name-specific block — over Soros Fund Management's
-    13F US-equity book ({n_names} names across the sample, {book.shape[0]} held at {last.date()}).</li>
+    13F US-equity portfolio ({n_names} names across the sample, {holdings.shape[0]} held at {last.date()}).</li>
 <li><strong>Data, all free / public.</strong> SEC EDGAR 13F (positions), SEC XBRL company facts
     (fundamentals, point-in-time), OpenFIGI (CUSIP→FIGI identity), Stooq / Yahoo (daily prices). One
     builder writes six parquet frames; the Atoti cube reads those and nothing else. No factor-return
@@ -338,15 +339,15 @@ def build() -> None:
 <li><strong>Risk.</strong> Every scenario is the same calculation
     <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub>·Δf<sub>k</sub></span> — only the source of the
     shock vector changes (historical simulation, event replay, or a hypothetical stress). All figures are
-    1-day, 99%; book specific vol is currently {spec_vol:.2%}.</li>
+    1-day, 99%; portfolio specific vol is currently {spec_vol:.2%}.</li>
 <li><strong>Industries are factors; country is a tag.</strong> Since 2026-07-04 each name carries a
     0/1 loading on its GICS sector and the daily regression prices {n_ind} industry factors under the
     Barra constraint (weighted industry returns sum to zero, so Market stays the market). Country
-    (SEC state of incorporation; ~21% of the book reads non-US) remains a tag only — there is
+    (SEC state of incorporation; ~21% of the portfolio reads non-US) remains a tag only — there is
     <strong>no country factor</strong>, so that exposure is carried by the market / style / industry /
     specific loadings, not a country bet.</li>
 <li><strong>Cadence.</strong> Three different clocks. <strong>Quarterly</strong> 13F holdings set the
-    book. Each <strong>month-end</strong> the exposure loadings are rebuilt — from as-of fundamentals and
+    portfolio. Each <strong>month-end</strong> the exposure loadings are rebuilt — from as-of fundamentals and
     prices (§3a–b). The daily stock returns then regress on those month-old loadings to give
     <strong>daily</strong> factor returns (§3c), which drive every risk number. Quarterly → monthly → daily.</li>
 <li><strong>Watch-outs.</strong> Monthly loadings drive daily returns (intra-month drift); the estimation
@@ -367,13 +368,13 @@ The rest of this document is the audit trail behind each line above — every in
 every check.</p>
 
 <p>This document is the audit trail for every number the model produces: where each input comes
-from, what we do to it, and which checks watch it. The book is <strong>Soros Fund Management's US
+from, what we do to it, and which checks watch it. The portfolio is <strong>Soros Fund Management's US
 equity positions</strong>, taken from their quarterly SEC <strong>13F filings</strong> (CIK
-{SOROS_CIK}).{multi_book_note} The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
+{SOROS_CIK}).{multi_manager_note} The model is a <strong>two-block linear factor model</strong>. Portfolio P&amp;L
 splits into {n_style}&nbsp;style factors plus {n_ind}&nbsp;GICS industry factors plus a market
 intercept (the systematic block) and a diagonal name-specific block. Every scenario is the same
 calculation, <span class="formula">dPnL = Σ<sub>k</sub> x<sub>k</sub> · Δf<sub>k</sub></span>,
-where x<sub>k</sub> is the book's net exposure to factor k and Δf<sub>k</sub> is a shock vector.
+where x<sub>k</sub> is the portfolio's net exposure to factor k and Δf<sub>k</sub> is a shock vector.
 The only thing that changes between scenario types is where that shock vector comes from:
 historical simulation, event replay, or a hypothetical stress. <strong>All risk figures are 1-day,
 99%.</strong></p>
@@ -431,7 +432,7 @@ sit in one place.</p>
 <table>
 <tr><th>Input</th><th>Source &amp; key</th><th>Cadence</th><th>Grain</th><th>What we rely on it for</th><th>Known caveats</th></tr>
 <tr><td>Positions</td><td>SEC EDGAR 13F-HR information tables, CUSIP-keyed (CIK {SOROS_CIK}{cik_note})</td><td>Quarterly, ~45d lag</td>
-    <td>Stock</td><td>The book, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; ETFs and commodity/crypto trusts dropped (no fundamentals, no sector); shorts and intra-quarter trades invisible; public by construction</td></tr>
+    <td>Stock</td><td>The portfolio, held as a weight overlay (§2)</td><td>Long US equity only; options (putCall) and bond lots (PRN) are dropped; ETFs and commodity/crypto trusts dropped (no fundamentals, no sector); shorts and intra-quarter trades invisible; public by construction</td></tr>
 <tr><td>Identity</td><td>OpenFIGI v3 mapping API (CUSIP→FIGI→ticker) + SEC <code>company_tickers.json</code> (ticker→CIK)</td>
     <td>On rebuild</td><td>Stock</td><td>One canonical id (FIGI) joining every frame</td><td>Unmapped CUSIPs drop out of the universe; FIGI = Position = SecId everywhere downstream</td></tr>
 <tr><td>Fundamentals</td><td>SEC XBRL company-facts API, CIK-keyed; tags: Assets, Liabilities,
@@ -443,7 +444,7 @@ sit in one place.</p>
     <td>Free, not redistributable; Stooq serves a JS anti-bot page to some hosts (fallback handles this transparently)</td></tr>
 <tr><td>Exposure loadings</td><td><strong>Not sourced, computed.</strong> Cross-sectional z-scores of the
     fundamental + price descriptors, standardised on the estimation universe (§3a–b)</td>
-    <td><strong>Monthly</strong> (rebuilt each month-end)</td><td><strong>Stock × Factor</strong></td><td>The book's net factor exposure, and the right-hand
+    <td><strong>Monthly</strong> (rebuilt each month-end)</td><td><strong>Stock × Factor</strong></td><td>The portfolio's net factor exposure, and the right-hand
     side of the daily factor-return regression</td>
     <td>Month-old when the daily returns regress on them — intra-month drift (§9)</td></tr>
 <tr><td>Factor returns</td><td><strong>Not sourced, estimated.</strong> Daily cross-sectional WLS regression of stock
@@ -469,7 +470,7 @@ per-<strong>factor</strong>. That collapse is §3, the substance of the model.</
     All frames key on FIGI. CUSIP, ticker and CIK never leave the builder.</li>
 <li><strong>Point-in-time weight overlay.</strong> Weights are normalised <em>within each
     filing</em> (Σw = 1). Each calendar month-end is then matched to the <em>latest filing on or
-    before it</em>, so the book only counts once it has been filed. Names dropped from the newest
+    before it</em>, so the portfolio only counts once it has been filed. Names dropped from the newest
     filing expire with it, so no stale positions persist. Weights sum to exactly 1.0 on all
     {positions["Date"].nunique()} month-ends.</li>
 </ol>
@@ -477,30 +478,30 @@ per-<strong>factor</strong>. That collapse is §3, the substance of the model.</
 <h2>2·b · Estimation universe &amp; its intersection with the 13F filings</h2>
 <p>The factor model is estimated cross-sectionally (§3), so each day it needs a <em>population of
 names</em> to regress over. That is the <strong>estimation universe</strong>. It is built in two
-parts: <strong>the whole 13F book plus a market-index seed</strong>. {f13_source} {seed_clause}
-The result is a market cross-section that fully contains the book, which is what a Barra-style
+parts: <strong>the whole 13F portfolio plus a market-index seed</strong>. {f13_source} {seed_clause}
+The result is a market cross-section that fully contains the portfolio, which is what a Barra-style
 model needs.</p>
 
 <table>
 <tr><th>Population</th><th class="num">Names</th><th>Definition / role</th></tr>
 <tr><td>13F source population</td><td class="num">{f13_cusips:,}</td><td>Distinct cash-equity CUSIPs across all {f13_filings} quarterly filings (before identity resolution)</td></tr>
-<tr><td>13F-held names (kept whole)</td><td class="num">{held_uni_n}</td><td>Those CUSIPs resolved to FIGI, all kept so the full book is covered</td></tr>
-<tr><td>+ market-index seed ({seed_label})</td><td class="num">{idx_only_n}</td><td>Index constituents not already in the book, unioned in for market breadth</td></tr>
+<tr><td>13F-held names (kept whole)</td><td class="num">{held_uni_n}</td><td>Those CUSIPs resolved to FIGI, all kept so the full portfolio is covered</td></tr>
+<tr><td>+ market-index seed ({seed_label})</td><td class="num">{idx_only_n}</td><td>Index constituents not already in the portfolio, unioned in for market breadth</td></tr>
 <tr><td>= estimation universe</td><td class="num">{uni_n}</td><td>The names carried in <code>securities</code></td></tr>
 <tr><td>… with usable exposures</td><td class="num">{exp_n}</td><td>Of the universe, those with enough price/fundamental data to carry loadings, the regression cross-section</td></tr>
-<tr><td>Held at ≥1 month-end</td><td class="num">{held_n}</td><td>Universe names that surface as an actual book weight at some sampled date</td></tr>
-<tr><td>Active book per month-end</td><td class="num">{hpd_med} <span class="small">(med)</span></td><td>Names in the latest filing ∩ universe on a given date (range {hpd_min}–{hpd_max})</td></tr>
+<tr><td>Held at ≥1 month-end</td><td class="num">{held_n}</td><td>Universe names that surface as an actual portfolio weight at some sampled date</td></tr>
+<tr><td>Active portfolio per month-end</td><td class="num">{hpd_med} <span class="small">(med)</span></td><td>Names in the latest filing ∩ universe on a given date (range {hpd_min}–{hpd_max})</td></tr>
 </table>
 
 <p><strong>How the populations nest.</strong> The {uni_n}-name universe is {nest_pop}
 ({held_uni_n} names) plus the index seed (+{idx_only_n} names not already held). {exp_n} of them
-have usable loadings and enter the daily regression. {REPORT_BOOK}'s book is always a strict
+have usable loadings and enter the daily regression. {REPORT_MANAGER}'s portfolio is always a strict
 <em>subset</em>: {held_n} names are held at some point in the sample, and on any one date the
-active book is the names in the latest filing that are also in the universe (median {hpd_med},
+active portfolio is the names in the latest filing that are also in the universe (median {hpd_med},
 range {hpd_min}–{hpd_max}). The point worth making: the regression that builds the factor returns
-(§3) runs over the full {exp_n}-name market cross-section, not just the names {REPORT_BOOK} holds.
-So the factors describe a market, and names {REPORT_BOOK} has never held still add breadth. The
-cube prices the full filed 13F book each quarter, and every §6 number reflects that.</p>
+(§3) runs over the full {exp_n}-name market cross-section, not just the names {REPORT_MANAGER} holds.
+So the factors describe a market, and names {REPORT_MANAGER} has never held still add breadth. The
+cube prices the full filed 13F portfolio each quarter, and every §6 number reflects that.</p>
 
 <p><strong>Why this shape.</strong> Factor-return quality goes up with breadth, and the daily
 regression skips any date with fewer than 30 valid names, so a wide market cross-section beats the
@@ -508,7 +509,7 @@ manager's holdings alone. That is why we seed an index. The only real cost is bu
 needs cold-cache SEC, OpenFIGI and Stooq calls plus a fundamentals pull. Those are rate-limited,
 cached to disk, and run in parallel across worker threads, so build time grows with the universe.
 To go wider, point <code>SEED_INDEX</code> at a bigger benchmark (S&amp;P 1500 or Russell 3000).
-The book stays a subset by construction.</p>
+The portfolio stays a subset by construction.</p>
 
 <h2>2·c · Estimation-universe data-quality filters</h2>
 <p>A real estimation universe is defined by data-quality <em>rules</em>, not by index membership
@@ -619,7 +620,7 @@ about.</p>
     share count (foreign IFRS filers in native currency; 20-F cover pages count ordinary shares
     against an ADR price; ETFs) gets its raw log-mcap <em>imputed</em> from the per-month
     estimation-universe regression of log-mcap on log-ADV (ρ ≈ 0.9) — estimation names are never
-    imputed, so factor-return estimation is untouched; the proxy only lets the held book be
+    imputed, so factor-return estimation is untouched; the proxy only lets the held portfolio be
     priced. Its Liquidity / Value / EarnYield stay missing (turnover against its own imputation
     basis would be circular; ratios need real fundamentals). Disclosed as a DQ check.
     <br><strong>Two cadences in one monthly panel.</strong> The price descriptors are recomputed
@@ -704,7 +705,7 @@ about.</p>
     give every (date, name) a <code>Market</code> loading of exactly <strong>1.0</strong> in the
     exposure panel — the leaf form of the regression intercept — and a
     <code>Ind:&lt;Sector&gt;</code> loading of <strong>1.0</strong> on its GICS sector, the leaf
-    form of the industry dummies. A fully-invested book (Σ weights = 1)
+    form of the industry dummies. A fully-invested portfolio (Σ weights = 1)
     then carries unit market exposure and its sector weights as industry exposures, so the
     directional market move and each sector's relative move flow through the scenario
     engine, and the cube can drill factor risk by industry. Both are added <em>after</em> stage (e)
@@ -752,9 +753,9 @@ Each layer is documented at the relevant line of code.</div>
 {wrows}
 </table>
 
-<h2>6 · Risk measures &amp; current book snapshot ({last.date()})</h2>
-<p>Definitions. All on the daily P&amp;L vector of the <em>current</em> book
-({n_names} names over the sample, {book.shape[0]} held at the snapshot date):</p>
+<h2>6 · Risk measures &amp; current portfolio snapshot ({last.date()})</h2>
+<p>Definitions. All on the daily P&amp;L vector of the <em>current</em> portfolio
+({n_names} names over the sample, {holdings.shape[0]} held at the snapshot date):</p>
 <ul>
 <li><span class="formula">VaR 99 = −P1(dPnL)</span>. The 1st percentile of daily scenario P&amp;L (1-day horizon).</li>
 <li><span class="formula">Worst loss = −min(dPnL)</span>. The single worst scenario day.</li>
@@ -768,12 +769,12 @@ Each layer is documented at the relevant line of code.</div>
     (CVaR) — the average loss in the tail beyond VaR. Coherent / sub-additive where VaR is not, and the
     Basel FRTB replacement for VaR. <span class="formula">Total ES 97.5</span> combines it with the
     idiosyncratic tail in quadrature, like Total VaR.</li>
-<li><span class="formula">Risk HHI = Σ<sub>name</sub> share²</span>, share = a name's fraction of book
+<li><span class="formula">Risk HHI = Σ<sub>name</sub> share²</span>, share = a name's fraction of portfolio
     Total VaR. 1 / HHI ≈ the effective number of independent risk bets — the single-number
     concentration gauge a desk watches against a limit.</li>
-<li><span class="formula">Marginal VaR / ES</span> — a member's own P&amp;L on the book's tail day(s).
-    <em>Additive</em>: sums to the book VaR/ES, so it splits the tail across factors, sectors, names.
-    <span class="formula">Incremental VaR</span> — the book VaR released by removing a member
+<li><span class="formula">Marginal VaR / ES</span> — a member's own P&amp;L on the portfolio's tail day(s).
+    <em>Additive</em>: sums to the portfolio VaR/ES, so it splits the tail across factors, sectors, names.
+    <span class="formula">Incremental VaR</span> — the portfolio VaR released by removing a member
     (recompute-without); diversification-aware and <em>not</em> additive, answering "what does cutting
     this release?".</li>
 </ul>
@@ -791,8 +792,8 @@ Each layer is documented at the relevant line of code.</div>
 have profited in that window's 1st-percentile day.</p>
 
 <h2>7 · VaR backtest &amp; model validation</h2>
-<p>The 13F book has no live daily P&amp;L, so VaR is validated by a <em>constant-portfolio backtest</em>:
-the current book's exposures applied to the daily factor-return history, rolling a 250-day window to
+<p>The 13F portfolio has no live daily P&amp;L, so VaR is validated by a <em>constant-portfolio backtest</em>:
+the current portfolio's exposures applied to the daily factor-return history, rolling a 250-day window to
 estimate VaR each day and counting <em>exceptions</em> where the realised day beat VaR. This validates
 the methodology, not a trading record.</p>
 <ul>
@@ -801,7 +802,7 @@ the methodology, not a trading record.</p>
 <li><span class="formula">Basel traffic-light</span> — green / amber / red from the binomial CDF of the
     exception count, generalising the 250-day/99% zones to any window.</li>
 </ul>
-<p>Three estimators are available; the default was chosen by a sweep over this book:</p>
+<p>Three estimators are available; the default was chosen by a sweep over this portfolio:</p>
 <table>
 <tr><th>Estimator</th><th>Tail</th><th>Reactivity</th><th>99% backtest</th></tr>
 <tr><td>Equal-weight historical sim</td><td>empirical (fat)</td><td>slow (window edge)</td><td>~1.8% — under-covers, amber</td></tr>
@@ -823,7 +824,7 @@ tests to every factor:</p>
     regression coefficients; the labels stop being trustworthy.</li>
 <li><span class="formula">Hidden beta</span> — each held name's daily specific return regressed
     on each factor's return. The modeled loading is already removed, so β ~ 0 if loadings are
-    right. Σw·β is the unmodeled book exposure the risk block can't see; the share of names
+    right. Σw·β is the unmodeled portfolio exposure the risk block can't see; the share of names
     with |t| &gt; 2 says how broad it is.</li>
 <li><span class="formula">Coverage</span> — the held weight actually carrying a loading.</li>
 </ul>
@@ -900,10 +901,10 @@ tests to every factor:</p>
 <tr><td><strong>Momentum → log relative strength</strong>, ln(p<sub>t−21</sub>/p<sub>t−252</sub>)</td>
     <td>the arithmetic 12-1 ratio is bounded at −1 and unbounded above, so its z-scored winner
     tail ran to +8/+10 (cross-sectional skew +2.2; 4.3% of names pinned at the +3 estimation
-    winsor vs 0.0% at −3) while realized momentum sensitivity saturates near +1 — the book is
-    long winners, so it inherited the overstatement as a negative hidden beta</td>
+    winsor vs 0.0% at −3) while realized momentum sensitivity saturates near +1 — the portfolio
+    is long winners, so it inherited the overstatement as a negative hidden beta</td>
     <td class="num">skew +2.2 → +0.5; residual-vs-factor R² 0.32 → 0.30 and Momentum leaves the
-    book-residual regression (β −0.17 t −2.8 → −0.11 t −1.8); tsm exits the carriers; admission
+    portfolio-residual regression (β −0.17 t −2.8 → −0.11 t −1.8); tsm exits the carriers; admission
     51%. The remaining audit row (≈ −0.16) is structural — realized sensitivity is concave in
     the characteristic on <em>both</em> tails (γ ≈ −0.35 every era since 2016, flat in
     loading-refresh age, invariant to rescaling) plus loading-independent name effects whose
@@ -919,7 +920,7 @@ tests to every factor:</p>
     −0.18 → −0.16, Size +0.72 → +0.66; residual-vs-factor R² 0.30 → 0.28; span inside-share
     85% → 88%; fit R² unchanged. A <em>drop test</em> (rebuild without NonLinSize) was run and
     REJECTED: residual/fit R² a wash, Size and Momentum hidden betas worsen, and ~17k young-IPO
-    name-dates lose book pricing — NonLinSize needs only mcap so it exists from a listing's
+    name-dates lose portfolio pricing — NonLinSize needs only mcap so it exists from a listing's
     first month and keeps young names above the regression's majority-of-loadings gate (that
     gate's hard-coded "6 of 10" was itself respecified to a majority rule the test exposed)</td></tr>
 </table>
@@ -932,7 +933,7 @@ that could not justify their seats (Growth, MegaCap) were dropped for cause, bot
 measured. What remains is <em>structural and disclosed, not chased</em>: a modest Momentum
 hidden beta (Σw·β ≈ −0.16 — payoff concavity every linear momentum factor carries, plus
 uncorrelated name effects with no common thread) and a NonLinSize intercept (Σw·β ≈ +1.15,
-loading-independent — the book co-moves with a noisy curvature factor return; its drop test
+loading-independent — the portfolio co-moves with a noisy curvature factor return; its drop test
 failed on the evidence, see the table). The open watch list is those two structural rows plus
 the sub-one-third admission cohort — Liquidity (19%), NonLinSize (18%), Value (18%), Leverage
 (16%), EarnYield (14%) — all judged again after two more quarters of data, now that industries
@@ -945,7 +946,7 @@ from pre-winsor values — never unbounding the old one.</p>
 <h2>8 · Risk tooling on the cube</h2>
 <p>Operational layers exposed in the dashboard, all reading the same cube and frames:</p>
 <ul>
-<li><strong>Desk limits (RAG)</strong> — book VaR / ES / Risk HHI and single-name / sector weight vs a
+<li><strong>Desk limits (RAG)</strong> — portfolio VaR / ES / Risk HHI and single-name / sector weight vs a
     desk limit set, red/amber/green with breach flags.</li>
 <li><strong>Data-quality panel</strong> — the §5 checks surfaced live against the served frames, plus the
     "Unknown" sector fallback for the few names without an SEC SIC.</li>
@@ -957,26 +958,26 @@ from pre-winsor values — never unbounding the old one.</p>
     the web, or any second tool. The agentic loop is bounded.</li>
 <li><strong>Risk trends</strong> — Scenario VaR / ES and Risk HHI, plus factor exposures, across the
     2016–2024 calendar.</li>
-<li><strong>Stress test</strong> — custom one-day shocks (any per-factor σ → book P&amp;L, same
+<li><strong>Stress test</strong> — custom one-day shocks (any per-factor σ → portfolio P&amp;L, same
     <span class="formula">Σ x<sub>k</sub>·σ<sub>k</sub>·vol<sub>k</sub></span> engine as the Hypo sets)
     and reverse stress (the single-factor move that breaches a target loss, ranked by vulnerability).</li>
-<li><strong>Pre-trade / what-if</strong> — resize / drop / add a position and see book VaR, ES, Total
+<li><strong>Pre-trade / what-if</strong> — resize / drop / add a position and see portfolio VaR, ES, Total
     VaR, Specific vol and Risk HHI before vs after; the risk math is reproduced in numpy so the
     "before" reconciles with the cube and the delta is the trade's effect.</li>
 <li><strong>Drawdown</strong> — the constant-portfolio equity curve and max peak-to-trough over the
     scenario path (the COVID crash reads ≈ −39%), the path lens VaR/ES miss.</li>
 <li><strong>Liquidity (days-to-liquidate)</strong> — per name <span class="formula">MV / (participation
-    · ADV)</span> on a trailing-63-day dollar ADV; the share of the book liquidatable within a horizon,
-    the weighted-average days, the least-liquid names, and any name with no ADV (reported separately).
-    ~87% of the Soros book clears within 5 days at 20% participation.</li>
+    · ADV)</span> on a trailing-63-day dollar ADV; the share of the portfolio liquidatable within a
+    horizon, the weighted-average days, the least-liquid names, and any name with no ADV (reported
+    separately). ~87% of the Soros portfolio clears within 5 days at 20% participation.</li>
 <li><strong>What changed (quarter-over-quarter)</strong> — a deterministic diff between two 13F filings:
     positions entered / exited / resized, the net factor-exposure drift attributed (rotation vs loading
-    drift), and the book risk delta (VaR / ES / HHI / specific vol, what-if math), with an on-demand
+    drift), and the portfolio risk delta (VaR / ES / HHI / specific vol, what-if math), with an on-demand
     written read.</li>
-<li><strong>Estimation universe (4-phase diagnostic)</strong> — for the held book: which index each
+<li><strong>Estimation universe (4-phase diagnostic)</strong> — for the held portfolio: which index each
     name sits in, point-in-time (membership); the DQ filtration funnel over the PIT S&amp;P 500 (§2·c);
     the span / high-confidence check (is each holding inside the estimation universe's factor space, by
-    Mahalanobis distance); and <strong>style-drift attribution</strong> — the book's net factor
+    Mahalanobis distance); and <strong>style-drift attribution</strong> — the portfolio's net factor
     exposure over time, with each factor's drift split into rotation (new names) vs held-name loading
     drift, to read the post-2021 tilt as intentional (→ benchmark) or not (→ hedge). See
     <code>docs/universe-diagnostics-plan.md</code>.</li>
@@ -985,19 +986,19 @@ from pre-winsor values — never unbounding the old one.</p>
 <h2>9 · Limitations the numbers inherit</h2>
 <ul>
 <li><strong>13F is a quarterly, lagged, long-only disclosure.</strong> Intra-quarter trading,
-    shorts, options and non-US listings are invisible. The book is the latest filed snapshot.</li>
+    shorts, options and non-US listings are invisible. The portfolio is the latest filed snapshot.</li>
 <li><strong>Estimation breadth.</strong> Factor-return quality and stability improve with the
     number of names in the daily regression (§2·b). A broader cross-section gives more reliable
     factors.</li>
-<li><strong>Index-seeded but US-large-cap.</strong> The estimation cross-section is the 13F book
+<li><strong>Index-seeded but US-large-cap.</strong> The estimation cross-section is the 13F portfolio
     plus the {seed_label} (§2·b). That is a real market, but it is US large-cap-tilted, so
-    small-caps and non-US names outside the book are absent. Point <code>SEED_INDEX</code> at a
+    small-caps and non-US names outside the portfolio are absent. Point <code>SEED_INDEX</code> at a
     broader benchmark (S&amp;P 1500 or Russell 3000) for a fuller market.</li>
 <li><strong>Sector and Country are free SEC-derived descriptors — neither is a factor.</strong> Sector
     comes from each filer's SEC SIC code crosswalked to the 11 GICS sectors (CIK-keyed); a handful of
     BDCs and closed-end funds have no SEC SIC and fall back to "Unknown". Country is the state of
     incorporation from the same SEC submissions JSON (US state codes → US, foreign codes → the country),
-    so ~21% of the book reads non-US (Alibaba/JD, Canadian energy/industrials, Sanofi). Both are tags
+    so ~21% of the portfolio reads non-US (Alibaba/JD, Canadian energy/industrials, Sanofi). Both are tags
     only: the model has <strong>no country or industry factor</strong>, so that exposure is carried by
     the style/market/specific loadings, not a country bet. A residual few ADRs that file a US address
     with a blank domicile (e.g. Grifols) still read US.</li>

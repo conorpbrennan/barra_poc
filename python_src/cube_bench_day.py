@@ -4,9 +4,9 @@ Round 2 of the cube optimization program targets ONE hotspot: "Scenario PnL at d
 ScenarioDay parameter hierarchy (~10 s warm / 25-50 s cold, +14 G heap; x Sector fails). This
 script stands up a FRESH cube and, on it:
 
-  * times the NEW day-facts path (`PnL at day` over the `Day` level) cold + warm, book and
-    book x Sector, sampling the JVM's RSS across each call;
-  * CHECKS CORRECTNESS: for HistFull and Evt:COVID2020, on two books, the per-day series must
+  * times the NEW day-facts path (`PnL at day` over the `Day` level) cold + warm, manager and
+    manager x Sector, sampling the JVM's RSS across each call;
+  * CHECKS CORRECTNESS: for HistFull and Evt:COVID2020, on two managers, the per-day series must
     equal the elements of `Scenario PnL vector` to 1e-12, in order, with the set's true length;
   * optionally (--with-old) times the OLD parameter-hierarchy path in the same process, for an
     apples-to-apples A/B.
@@ -27,11 +27,11 @@ import numpy as np
 import pandas as pd
 import psutil
 
-from cube_bench import RssSampler, _jvm_proc, _rss, BENCH_BOOK, SMALL_BOOK
+from cube_bench import RssSampler, _jvm_proc, _rss, BENCH_MANAGER, SMALL_MANAGER
 
 TOL = 1e-12
 CHECK_SETS = ["HistFull", "Evt:COVID2020"]
-CHECK_BOOKS = [BENCH_BOOK, SMALL_BOOK]
+CHECK_MANAGERS = [BENCH_MANAGER, SMALL_MANAGER]
 
 
 def timed(fn, jvm):
@@ -53,28 +53,28 @@ def timed(fn, jvm):
             "rows": (len(out) if hasattr(out, "__len__") else None), "error": err}, out
 
 
-def _day_series(cube, l, m, date, book, dayset, measures=("PnL at day",), with_date=True):
-    """The gated shape: the book's per-day P&L, labelled by the DayDate LEVEL (not the epoch
+def _day_series(cube, l, m, date, manager, dayset, measures=("PnL at day",), with_date=True):
+    """The gated shape: the manager's per-day P&L, labelled by the DayDate LEVEL (not the epoch
     measure — a level is read off the axis, a measure is aggregated per member)."""
     levels = [l["Day"], l["DayDate"]] if with_date else [l["Day"]]
     return cube.query(*[m[x] for x in measures], levels=levels,
-                      filter=(l["Date"] == date) & (l["Manager"] == book) & (l["DaySet"] == dayset))
+                      filter=(l["Date"] == date) & (l["Manager"] == manager) & (l["DaySet"] == dayset))
 
 
-def sector_footing(cube, l, m, date, book, dayset, days=(0, 1, 41)) -> dict:
-    """The drill must FOOT: the sector rows of a day sum to that day's book P&L."""
+def sector_footing(cube, l, m, date, manager, dayset, days=(0, 1, 41)) -> dict:
+    """The drill must FOOT: the sector rows of a day sum to that day's portfolio P&L."""
     d = cube.query(m["PnL at day"], levels=[l["Day"], l["Sector"]],
-                   filter=(l["Date"] == date) & (l["Manager"] == book) & (l["DaySet"] == dayset)
+                   filter=(l["Date"] == date) & (l["Manager"] == manager) & (l["DaySet"] == dayset)
                           & l["Day"].isin(*days))
-    book_rows = _day_series(cube, l, m, date, book, dayset, with_date=False)
+    manager_rows = _day_series(cube, l, m, date, manager, dayset, with_date=False)
     worst = 0.0
     for day in days:
         s = float(d.xs(day, level="Day")["PnL at day"].astype(float).sum())
-        b = float(book_rows.loc[day, "PnL at day"])
+        b = float(manager_rows.loc[day, "PnL at day"])
         worst = max(worst, abs(s - b))
-    rec = {"check": "sector_footing", "book": book, "set": dayset, "days": list(days),
+    rec = {"check": "sector_footing", "manager": manager, "set": dayset, "days": list(days),
            "max_abs_diff": worst, "pass": worst <= 1e-12}
-    print(f"  sector footing {book:12s} {dayset:14s} maxdiff={worst:.3e} "
+    print(f"  sector footing {manager:12s} {dayset:14s} maxdiff={worst:.3e} "
           f"-> {'PASS' if rec['pass'] else 'FAIL'}", flush=True)
     return rec
 
@@ -82,13 +82,13 @@ def sector_footing(cube, l, m, date, book, dayset, days=(0, 1, 41)) -> dict:
 def correctness(cube, l, m, date) -> list[dict]:
     """The gate: per-day values == the elements of the P&L vector, elementwise, in order."""
     out = []
-    for book in CHECK_BOOKS:
+    for manager in CHECK_MANAGERS:
         for s in CHECK_SETS:
-            rec = {"book": book, "set": s}
-            df = _day_series(cube, l, m, date, book, s,
+            rec = {"manager": manager, "set": s}
+            df = _day_series(cube, l, m, date, manager, s,
                              ("PnL at day", "Date at day (epoch)"), with_date=False).sort_index()
             vec = cube.query(m["Scenario PnL vector"], m["Scenario dates (epoch)"],
-                             filter=(l["Date"] == date) & (l["Manager"] == book)
+                             filter=(l["Date"] == date) & (l["Manager"] == manager)
                                     & (l["ScenarioSet"] == s))
             v = np.asarray(vec["Scenario PnL vector"].iloc[0], dtype="float64")
             dates_v = np.asarray(vec["Scenario dates (epoch)"].iloc[0], dtype="int64")
@@ -105,7 +105,7 @@ def correctness(cube, l, m, date) -> list[dict]:
             else:
                 rec["pass"] = False
             out.append(rec)
-            print(f"  correctness {book:12s} {s:14s} n={rec['n_days']:5d}/{rec['n_vector']:5d} "
+            print(f"  correctness {manager:12s} {s:14s} n={rec['n_days']:5d}/{rec['n_vector']:5d} "
                   f"maxdiff={rec.get('max_abs_diff', float('nan')):.3e} "
                   f"dates={rec.get('date_max_abs_diff')} -> {'PASS' if rec['pass'] else 'FAIL'}",
                   flush=True)
@@ -128,11 +128,11 @@ def main(out_path: str, with_old: bool):
 
     l, m = cube.levels, cube.measures
     D = pd.Timestamp(sorted(cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index)[-1]).date()
-    B, HF = BENCH_BOOK, "HistFull"
+    B, HF = BENCH_MANAGER, "HistFull"
     base = (l["Date"] == D) & (l["Manager"] == B)
 
     queries = {
-        # the gated shape: the book's per-day series, both measures, as a caller would ask for it
+        # the gated shape: the manager's per-day series, both measures, as a caller would ask for it
         "new_day_path": lambda: _day_series(cube, l, m, D, B, HF),
         # the same without the date label, and the OLD way of getting the date (a measure)
         "new_day_no_date": lambda: _day_series(cube, l, m, D, B, HF, with_date=False),
@@ -142,7 +142,7 @@ def main(out_path: str, with_old: bool):
         "new_day_by_sector": lambda: cube.query(m["PnL at day"], levels=[l["Day"], l["Sector"]],
                                                 filter=base & (l["DaySet"] == HF)),
         "new_day_path_covid": lambda: _day_series(cube, l, m, D, B, "Evt:COVID2020"),
-        "new_day_path_small_book": lambda: _day_series(cube, l, m, D, SMALL_BOOK, HF),
+        "new_day_path_small_book": lambda: _day_series(cube, l, m, D, SMALL_MANAGER, HF),
         # the shape the UI actually uses today (one query, whole vector) — the yardstick
         "pnl_vector_book": lambda: cube.query(m["Scenario PnL vector"], filter=base
                                               & (l["ScenarioSet"] == HF)),
@@ -183,7 +183,7 @@ def main(out_path: str, with_old: bool):
     }
     verdict["ALL"] = all(verdict.values())
     out = {"stages": stages, "queries": results, "checks": checks, "verdict": verdict,
-           "meta": {"book": B, "small_book": SMALL_BOOK, "date": str(D),
+           "meta": {"manager": B, "small_manager": SMALL_MANAGER, "date": str(D),
                     # ambient load MOVES these numbers by up to 5x (measured across attempts:
                     # the same query read 2.5 s on a quiet box and 13.7 s with a sibling cube
                     # running) — so every run records it, and runs are only compared like for like.

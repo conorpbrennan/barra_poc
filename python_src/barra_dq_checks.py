@@ -61,13 +61,13 @@ def run(frames: dict | None = None) -> list[dict]:
 
     # --- 3. value ranges -----------------------------------------------------
     pos = f["positions"]
-    # Per (Book, Date), not per Date: weights are normalised WITHIN a book, so once the
-    # multi-manager build put 11 books in the frame a per-Date sum totals 11.0 and this check
-    # FAILed on every date -- a false alarm on correct data.
+    # Per (Manager, Date), not per Date: weights are normalised WITHIN a manager's portfolio, so
+    # once the multi-manager build put 11 managers in the frame a per-Date sum totals 11.0 and
+    # this check FAILed on every date -- a false alarm on correct data.
     _wkeys = ["Manager", "Date"] if "Manager" in pos.columns else ["Date"]
     wsum = pos.groupby(_wkeys)["Weight"].sum()
     bad = wsum[(wsum - 1.0).abs() > 1e-6]
-    _label = "per (book, date)" if len(_wkeys) == 2 else "per date"
+    _label = "per (manager, date)" if len(_wkeys) == 2 else "per date"
     check("FAIL" if len(bad) else "PASS", f"positions: weights sum to 1.0 {_label}",
           f"{len(bad)} bad groups" if len(bad) else
           f"{len(wsum)} groups, max |err| {(wsum-1).abs().max():.1e}")
@@ -202,9 +202,9 @@ def run(frames: dict | None = None) -> list[dict]:
     have = ed.pivot_table(index="Position", columns="Factor", values="Loading", aggfunc="first")
     if {"Size", "Value"}.issubset(have.columns):
         prox = set(have.index[have["Size"].notna() & have["Value"].isna()])
-        # Weight share is only meaningful WITHIN a book (weights normalise per book), so score
-        # each book and report the worst. Summing across books gave 178.7% — a share above 100%,
-        # which is how this surfaced.
+        # Weight share is only meaningful WITHIN a manager's portfolio (weights normalise per
+        # manager), so score each manager and report the worst. Summing across managers gave
+        # 178.7% — a share above 100%, which is how this surfaced.
         if "Manager" in last.columns and last["Manager"].nunique() > 1:
             per = (last.assign(_p=last["Position"].isin(prox))
                        .groupby("Manager").apply(lambda g: g.loc[g["_p"], "Weight"].sum(),
@@ -213,15 +213,15 @@ def run(frames: dict | None = None) -> list[dict]:
             n = int(last.loc[last["Manager"] == worst, "Position"].isin(prox).sum())
             # Phrasing note: keep the literal "% of weight" — test_dq.py parses the share out of
             # this string with r"([\d.]+)% of weight".
-            detail = (f"worst book {worst}: {n} held names, {w:.1%} of weight priced via the "
-                      f"estimation log-ADV fit (median across {len(per)} books {per.median():.1%})")
+            detail = (f"worst manager {worst}: {n} held names, {w:.1%} of weight priced via the "
+                      f"estimation log-ADV fit (median across {len(per)} managers {per.median():.1%})")
         else:
             held = last.groupby("Position")["Weight"].sum()
             w = float(held[held.index.isin(prox)].sum())
             n = int(held.index.isin(prox).sum())
             detail = f"{n} held names, {w:.1%} of weight priced via the estimation log-ADV fit"
         check("WARN" if w > 0.25 else "PASS",
-              "size-curve proxy loadings (imputed log-mcap, held book)", detail)
+              "size-curve proxy loadings (imputed log-mcap, held portfolio)", detail)
 
     # --- 7. stock_returns (optional 9th frame, Price VaR — docs/price-var-plan.md) -------------
     if "stock_returns" in f:

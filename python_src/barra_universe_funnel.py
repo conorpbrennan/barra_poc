@@ -49,14 +49,14 @@ import barra_universe_membership as um
 
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_funnel.parquet"
-DEFAULT_BOOK = "Soros"
+DEFAULT_MANAGER = "Soros"
 
 
-def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
-    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). The default book (and
-    the book=None any-book escape hatch) keeps the legacy unsuffixed filename; any other book
-    writes universe_funnel.<Book>.parquet. risk_api resolves the suffixed file first."""
-    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_funnel.{book}.parquet"
+def artifact_path(manager: str | None = DEFAULT_MANAGER) -> pathlib.Path:
+    """Manager-suffixed artifact path (manager-aware precomputes, 2026-08-14). The default manager
+    (and the manager=None any-manager escape hatch) keeps the legacy unsuffixed filename; any other
+    manager writes universe_funnel.<Manager>.parquet. risk_api resolves the suffixed file first."""
+    return ARTIFACT if manager in (DEFAULT_MANAGER, None) else OUT / f"universe_funnel.{manager}.parquet"
 CONFIG = pathlib.Path(__file__).resolve().parent.parent / "universe_filters.json"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
@@ -165,26 +165,26 @@ def name_metrics(px: pd.DataFrame, funda: pd.DataFrame, months: pd.DatetimeIndex
     return out
 
 
-def _held_positions(pos: pd.DataFrame, book: str | None) -> set:
-    """(Date, Position) pairs held by `book` (or by ANY book if `book` is None). Pure / no I/O so
-    it's unit-testable without the network or a real positions.parquet -- split out specifically
-    to catch a cross-book regression (see `run`'s `book` docstring): with >1 book present, calling
-    this with `book=None` mixes every manager's holdings into one set, which is exactly the bug
-    Phase 3 fixed `run`'s default away from."""
-    p = pos if book is None else pos[pos["Manager"] == book]
+def _held_positions(pos: pd.DataFrame, manager: str | None) -> set:
+    """(Date, Position) pairs held by `manager` (or by ANY manager if `manager` is None). Pure / no
+    I/O so it's unit-testable without the network or a real positions.parquet -- split out
+    specifically to catch a cross-manager regression (see `run`'s `manager` docstring): with >1
+    manager present, calling this with `manager=None` mixes every manager's holdings into one set,
+    which is exactly the bug Phase 3 fixed `run`'s default away from."""
+    p = pos if manager is None else pos[pos["Manager"] == manager]
     return {(pd.Timestamp(d), pp) for d, pp in zip(p["Date"], p["Position"])}
 
 
 # --------------------------------------------------------------------------- build
-def run(write: bool = True, book: str | None = "Soros") -> dict:
-    """`book` scopes the `held` / `held_survivors` flag to ONE manager's positions (multi-manager
+def run(write: bool = True, manager: str | None = "Soros") -> dict:
+    """`manager` scopes the `held` / `held_survivors` flag to ONE manager's positions (multi-manager
     Phase 3, 2026-07-30). Default "Soros" reproduces today's behaviour exactly on today's
-    single-book `positions.parquet` (every row's Book is already "Soros", so filtering to it is a
-    no-op). With more than one book loaded, filtering is NOT optional: the old unfiltered
+    single-manager `positions.parquet` (every row's Manager is already "Soros", so filtering to it
+    is a no-op). With more than one manager loaded, filtering is NOT optional: the old unfiltered
     `held_map` silently meant "held by ANY manager", corrupting the held/held_survivors counts
-    into a cross-book union nobody asked for. Pass `book=None` to explicitly opt back into that
-    old any-book union (kept only as an escape hatch, not a default -- no caller in this repo
-    uses it)."""
+    into a cross-manager union nobody asked for. Pass `manager=None` to explicitly opt back into
+    that old any-manager union (kept only as an escape hatch, not a default -- no caller in this
+    repo uses it)."""
     cfg = load_cfg()
     print("[funnel] loading frames + PIT S&P 500 history ...", flush=True)
     sec = pd.read_parquet(OUT / "securities.parquet")
@@ -198,7 +198,7 @@ def run(write: bool = True, book: str | None = "Soros") -> dict:
              .rename("n_descriptors").reset_index())
     ndesc_map = {(pd.Timestamp(d), p): int(n) for d, p, n in
                  zip(ndesc["Date"], ndesc["Position"], ndesc["n_descriptors"])}
-    held_map = _held_positions(pos, book)
+    held_map = _held_positions(pos, manager)
 
     # in-universe S&P 500 names = securities whose canon ticker is ever in the PIT S&P 500
     ever = set().union(*[m for _, m in hist]) if hist else set()
@@ -278,7 +278,7 @@ def run(write: bool = True, book: str | None = "Soros") -> dict:
     detail = pd.DataFrame(rows)
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        art = artifact_path(book)
+        art = artifact_path(manager)
         detail.to_parquet(art, index=False)
         print(f"[funnel] wrote {art}  ({len(detail)} name-month rows)", flush=True)
 
@@ -300,4 +300,4 @@ def _f(x):
 
 if __name__ == "__main__":
     import sys
-    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)
+    run(manager=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MANAGER)

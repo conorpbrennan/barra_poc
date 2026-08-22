@@ -1,7 +1,7 @@
 """
 barra_excel_check.py
 ====================
-Excel validation workbook for a 3-position sub-book (top holdings at the latest COB).
+Excel validation workbook for a 3-position sub-portfolio (top holdings at the latest COB).
 
 Loads the cube's underlying frames and lays them out so that EVERY risk measure from
 barra_factor_risk_cube.py is recomputed with live Excel formulas, next to pandas-computed
@@ -44,9 +44,9 @@ def build() -> None:
     factor_ret, specific = f["factor_returns"], f["specific_var"]
 
     last = positions["Date"].max()
-    book = (positions[positions["Date"] == last].nlargest(N_POS, "Weight")
+    holdings = (positions[positions["Date"] == last].nlargest(N_POS, "Weight")
             .merge(securities[["Position", "Ticker", "Issuer"]], on="Position"))
-    figs = book["Position"].tolist()
+    figs = holdings["Position"].tolist()
 
     # wide factor-return history, ALL factors incl Market (leaf loading 1.0) — as build_scenarios()
     wide = (factor_ret
@@ -63,7 +63,7 @@ def build() -> None:
           .sort_values("Date").groupby("Position").last()
           .reindex(figs).rename(columns={"Date": "sv_asof", "SpecificVar": "sv"}))
 
-    wts = book.set_index("Position")["Weight"].reindex(figs)
+    wts = holdings.set_index("Position")["Weight"].reindex(figs)
 
     # ---------------- pandas reference values (mirror the Excel formulas exactly) ----
     x = L.values.T @ wts.values                                   # net exposure per factor
@@ -84,7 +84,7 @@ def build() -> None:
         h = float(sum(x[i] * shock.get(fc, 0.0) * vols[fc] for i, fc in enumerate(factors)))
         ref[name] = (-h, -h, h)
 
-    # per-issuer standalone HistFull risk: each name held at its book weight w_i, so its
+    # per-issuer standalone HistFull risk: each name held at its portfolio weight w_i, so its
     # factor net-exposure is x_i,k = w_i * L_i,k and its PnL series is wide @ x_i.
     iss_ref = {}                                                  # fig -> (VaR, worst, mean, spec_vol, total)
     for fig in figs:
@@ -95,9 +95,9 @@ def build() -> None:
         iss_ref[fig] = (v, w_, m, svol_i, float(np.sqrt(v ** 2 + (Z99 * svol_i) ** 2)))
 
     # ---- Level-2 contributions to HistFull Scenario VaR 99 (mirror the cube) ---------
-    # Tail scenario t*: the cube uses quantile_index(book_pnl, 0.01, inc/lower) -> the
+    # Tail scenario t*: the cube uses quantile_index(portfolio_pnl, 0.01, inc/lower) -> the
     # 0-based ascending index floor(0.01*(n-1)); contributions are evaluated on THAT day,
-    # so Σ contributions = book P&L at t* (≈ Scenario VaR 99). var_q is the interpolated
+    # so Σ contributions = portfolio P&L at t* (≈ Scenario VaR 99). var_q is the interpolated
     # quantile the cube divides by for "% of VaR".
     n_obs = len(pnl)
     var_rank = int(np.floor(0.01 * (n_obs - 1))) + 1              # 1-based rank for Excel SMALL()
@@ -117,12 +117,12 @@ def build() -> None:
     for c, h in enumerate(["Position", "Ticker", "Issuer", "Weight", "SpecificVar", "SV as-of"], 1):
         ws.cell(3, c, h).font = bold
     for r, fig in enumerate(figs, 4):
-        rec = book.set_index("Position").loc[fig]
+        rec = holdings.set_index("Position").loc[fig]
         ws.cell(r, 1, fig); ws.cell(r, 2, rec["Ticker"]); ws.cell(r, 3, rec["Issuer"])
         ws.cell(r, 4, float(wts[fig])).number_format = NUM
         ws.cell(r, 5, float(sv.loc[fig, "sv"])).number_format = SCI
         ws.cell(r, 6, sv.loc[fig, "sv_asof"].date()).number_format = DATE
-    ws.cell(8, 1, "Weight sum (sub-book of the full Soros book)")
+    ws.cell(8, 1, "Weight sum (sub-portfolio of the full Soros portfolio)")
     ws.cell(8, 4, "=SUM(D4:D6)").number_format = NUM
     for col, w in zip("ABCDEF", (14, 8, 26, 10, 12, 12)):
         ws.column_dimensions[col].width = w
@@ -136,12 +136,12 @@ def build() -> None:
         ws.cell(r, 1, fig)
         for c, fc in enumerate(factors, 2):
             ws.cell(r, c, float(L.loc[fig, fc])).number_format = NUM
-    ws.cell(6, 1, "Net exposure x_k (book)").font = bold
+    ws.cell(6, 1, "Net exposure x_k (portfolio)").font = bold
     for c in range(2, 2 + len(factors)):
         col = ws.cell(6, c).column_letter
         ws.cell(6, c, f"=SUMPRODUCT({col}2:{col}4,Inputs!$D$4:$D$6)").number_format = NUM
     # per-issuer net exposure x_i,k = loading_i,k * weight_i  (loading row 2+i, weight Inputs 4+i)
-    tick = book.set_index("Position")["Ticker"]
+    tick = holdings.set_index("Position")["Ticker"]
     iss_x0 = 8
     for i, fig in enumerate(figs):
         ws.cell(iss_x0 + i, 1, f"x_k {tick[fig].upper()}")
@@ -235,10 +235,10 @@ def build() -> None:
     ws.cell(sv_row, 4, "(col C = pandas reference)")
     ws.column_dimensions["A"].width = 24
 
-    # ---- per-issuer standalone risk (each name held at its book weight) -------------
-    issuer = book.set_index("Position")["Issuer"]
+    # ---- per-issuer standalone risk (each name held at its portfolio weight) --------
+    issuer = holdings.set_index("Position")["Issuer"]
     pi0 = sv_row + 3                                              # table header row
-    ws.cell(pi0 - 1, 1, "Per-issuer standalone risk — HistFull (name at its book weight)").font = bold
+    ws.cell(pi0 - 1, 1, "Per-issuer standalone risk — HistFull (name at its portfolio weight)").font = bold
     pihdr = ["Issuer", "VaR 99", "Worst loss", "Mean PnL", "Specific vol", "Total VaR 99",
              "VaR 99 (ref)", "Worst (ref)", "Mean (ref)", "Spec vol (ref)", "Total VaR (ref)"]
     for c, h in enumerate(pihdr, 1):
@@ -260,15 +260,15 @@ def build() -> None:
             ws.cell(rr, c).number_format = PCT
 
     # ---- Level-2 risk contributions to Scenario VaR 99 (HistFull) -------------------
-    # Additive decomposition: evaluate each member's P&L on the BOOK's tail scenario t*
-    # (the 1% VaR day), so the contributions sum to the book P&L at t* (= Scenario VaR 99).
+    # Additive decomposition: evaluate each member's P&L on the PORTFOLIO's tail scenario t*
+    # (the 1% VaR day), so the contributions sum to the portfolio P&L at t* (= Scenario VaR 99).
     PCT1, NUM4 = "0.0%", "0.0000"
     ct0 = pi0 + len(figs) + 2
     ws.cell(ct0, 1, "Risk contributions to Scenario VaR 99 — HistFull "
-                    "(additive; Σ = book VaR)").font = bold
+                    "(additive; Σ = portfolio VaR)").font = bold
     Lrng = f"FactorReturns!$L$2:$L${R}"
     ws.cell(ct0 + 1, 1, "VaR scenario rank (k-th worst)"); ws.cell(ct0 + 1, 2, var_rank)
-    ws.cell(ct0 + 2, 1, "Book P&L at scenario t*")
+    ws.cell(ct0 + 2, 1, "Portfolio P&L at scenario t*")
     ws.cell(ct0 + 2, 2, f"=SMALL({Lrng},B{ct0 + 1})").number_format = PCT
     ws.cell(ct0 + 3, 1, "Scenario position (MATCH)")
     ws.cell(ct0 + 3, 2, f"=MATCH(B{ct0 + 2},{Lrng},0)")
@@ -337,8 +337,8 @@ def build() -> None:
 
     wb.save(XLSX)
     print(f"wrote {XLSX}")
-    print(f"book: {', '.join(f'{t.upper()} {w:.1%}' for t, w in zip(book['Ticker'], book['Weight']))}"
-          f"  (as of {last.date()}, sub-book weight {wts.sum():.1%} of full book)")
+    print(f"holdings: {', '.join(f'{t.upper()} {w:.1%}' for t, w in zip(holdings['Ticker'], holdings['Weight']))}"
+          f"  (as of {last.date()}, sub-portfolio weight {wts.sum():.1%} of full portfolio)")
     print(f"history: {len(wide)} periods x {nfac} factors | spec vol {spec_vol:.2%}\n")
     print(pd.DataFrame(ref, index=["VaR 99", "Worst loss", "Mean PnL"]).T
           .map(lambda v: f"{v:.2%}").to_string())

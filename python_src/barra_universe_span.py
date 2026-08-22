@@ -11,13 +11,14 @@ For each month:
     exposures frame if the funnel artifact is absent).
   * each held name gets a squared **Mahalanobis distance** D² from the cloud's centre, measured in the
     cloud's own covariance. "Inside the space" = D² within the cloud's own 99th-percentile edge; beyond
-    that the book is in a region the estimation universe didn't populate, so the model extrapolates.
+    that the portfolio is in a region the estimation universe didn't populate, so the model extrapolates.
   * per-factor, we also flag which descriptors push a name out (loading beyond the cloud's 1–99th range)
     — so "high confidence vs extrapolation" is explainable, not just a number.
 
-Aggregated BY 13F WEIGHT: what fraction of the book sits inside the span each month. The prototype run
-showed ~90% inside on average, ~95% pre-2021 falling to ~85% since — a real drift of the book out of
-the S&P 500's span, toward smaller / higher-vol names. That drift is the Phase-4 question Chris raised.
+Aggregated BY 13F WEIGHT: what fraction of the portfolio sits inside the span each month. The prototype
+run showed ~90% inside on average, ~95% pre-2021 falling to ~85% since — a real drift of the portfolio
+out of the S&P 500's span, toward smaller / higher-vol names. That drift is the Phase-4 question Chris
+raised.
 
 Pure geometry (Mahalanobis, edge, extremes, weight-share) is split out for unit tests. Like the other
 phases this is a precompute step; it writes data/universe_span.parquet and /span only reads it. The
@@ -37,15 +38,15 @@ import barra_universe_membership as um
 OUT = pathlib.Path(__file__).resolve().parent.parent / "data"
 ARTIFACT = OUT / "universe_span.parquet"
 FUNNEL = OUT / "universe_funnel.parquet"
-DEFAULT_BOOK = "Soros"
+DEFAULT_MANAGER = "Soros"
 
 
-def artifact_path(book: str | None = DEFAULT_BOOK) -> pathlib.Path:
-    """Book-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default book keeps the
-    legacy unsuffixed filename; others write universe_span.<Book>.parquet. The estimation cloud
-    (funnel survivors) is book-independent, so every book's span reads the ONE legacy funnel
-    artifact — only the held-book overlay differs."""
-    return ARTIFACT if book in (DEFAULT_BOOK, None) else OUT / f"universe_span.{book}.parquet"
+def artifact_path(manager: str | None = DEFAULT_MANAGER) -> pathlib.Path:
+    """Manager-suffixed artifact path (manager-aware precomputes, 2026-08-14). Default manager keeps
+    the legacy unsuffixed filename; others write universe_span.<Manager>.parquet. The estimation
+    cloud (funnel survivors) is manager-independent, so every manager's span reads the ONE legacy
+    funnel artifact — only the held-portfolio overlay differs."""
+    return ARTIFACT if manager in (DEFAULT_MANAGER, None) else OUT / f"universe_span.{manager}.parquet"
 
 STYLE = ["Beta", "Momentum", "Size", "Value", "RateBeta", "NdxBeta",
          "Leverage", "Liquidity", "ResidVol", "EarnYield", "NonLinSize"]
@@ -77,7 +78,7 @@ def extreme_factors(vec: np.ndarray, lo: np.ndarray, hi: np.ndarray, factors: li
 
 
 def inside_share(weights: np.ndarray, inside: np.ndarray) -> float:
-    """Weight-fraction of the book that sits inside the span (rebased on covered weight)."""
+    """Weight-fraction of the portfolio that sits inside the span (rebased on covered weight)."""
     tot = float(weights.sum())
     return float(weights[inside].sum() / tot) if tot > 0 else float("nan")
 
@@ -95,20 +96,20 @@ def _cloud_positions_by_month(months) -> dict:
             for m, g in surv.groupby("month")}
 
 
-def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
-    book_name = book        # `book` is rebound to a DataFrame inside the month loop below
-    print(f"[span] loading frames ({book_name}) ...", flush=True)
+def run(write: bool = True, manager: str = DEFAULT_MANAGER) -> dict:
+    manager_name = manager   # `manager` is shadowed by a per-date DataFrame inside the month loop below
+    print(f"[span] loading frames ({manager_name}) ...", flush=True)
     exp = pd.read_parquet(OUT / "exposures.parquet")
     pos = pd.read_parquet(OUT / "positions.parquet")
     sec = pd.read_parquet(OUT / "securities.parquet")
-    # Since the multi-manager build, positions holds every book. The inside-share is aggregated BY
-    # 13F WEIGHT, and weights are normalised per book, so an unfiltered frame would both mix books
-    # and total to 11.0 per month. `book=None` keeps the any-book union as an explicit escape
-    # hatch; no caller uses it.
-    if book is not None:
-        pos = pos[pos["Manager"] == book]
+    # Since the multi-manager build, positions holds every manager. The inside-share is aggregated BY
+    # 13F WEIGHT, and weights are normalised per manager, so an unfiltered frame would both mix
+    # managers and total to 11.0 per month. `manager=None` keeps the any-manager union as an explicit
+    # escape hatch; no caller uses it.
+    if manager is not None:
+        pos = pos[pos["Manager"] == manager]
         if pos.empty:
-            raise ValueError(f"no positions for book {book!r} in {OUT / 'positions.parquet'}")
+            raise ValueError(f"no positions for manager {manager!r} in {OUT / 'positions.parquet'}")
     exp = exp[exp["Factor"].isin(STYLE)]
     months = pd.DatetimeIndex(sorted(pd.to_datetime(exp["Date"].unique())))
 
@@ -137,8 +138,8 @@ def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
         mu, Cinv, lo, hi = cloud_stats(E)
         edge = float(np.quantile(mahalanobis2(E, mu, Cinv), EDGE_Q))
 
-        book = pos[pos["Date"] == D][["Position", "Weight"]]
-        held = book[book["Position"].isin(wide.index)]
+        held_pos = pos[pos["Date"] == D][["Position", "Weight"]]
+        held = held_pos[held_pos["Position"].isin(wide.index)]
         if held.empty:
             continue
         H = wide.loc[held["Position"]].fillna(0.0).values
@@ -153,7 +154,7 @@ def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
     detail = pd.DataFrame(rows).sort_values(["month", "d2"], ascending=[True, False])
     if write:
         OUT.mkdir(parents=True, exist_ok=True)
-        art = artifact_path(book_name)
+        art = artifact_path(manager_name)
         detail.to_parquet(art, index=False)
         print(f"[span] wrote {art}  ({len(detail)} name-month rows)", flush=True)
 
@@ -161,16 +162,16 @@ def run(write: bool = True, book: str = DEFAULT_BOOK) -> dict:
     detail["yr"] = detail["month"].dt.year
     yr = detail.groupby("yr").apply(
         lambda g: inside_share(g["weight"].values, g["inside"].values), include_groups=False)
-    print("\n[span] book weight INSIDE the estimation-universe span, by year:")
+    print("\n[span] portfolio weight INSIDE the estimation-universe span, by year:")
     for y, v in yr.items():
         print(f"    {y}  {v:.1%}")
     last = detail["month"].max()
     lg = detail[detail["month"] == last]
     print(f"\n[span] latest {last.date()}: {inside_share(lg['weight'].values, lg['inside'].values):.1%} "
-          f"of book inside ({int(lg['inside'].sum())}/{len(lg)} names)")
+          f"of portfolio inside ({int(lg['inside'].sum())}/{len(lg)} names)")
     return {"detail": detail, "latest": str(last.date())}
 
 
 if __name__ == "__main__":
     import sys
-    run(book=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BOOK)
+    run(manager=sys.argv[1] if len(sys.argv) > 1 else DEFAULT_MANAGER)

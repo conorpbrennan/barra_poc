@@ -163,7 +163,7 @@ with tab_risk:
     for c, (lab, v) in zip(cols, kpis):
         c.markdown(f"<div class='kpi-w'><div class='kpi-l'>{lab}</div>"
                    f"<div class='kpi-v'>{pct(v)}</div></div>", unsafe_allow_html=True)
-    st.markdown(f"<div class='cap'>Book-level · scenario <b>{sset}</b> · as of <b>{date}</b> · "
+    st.markdown(f"<div class='cap'>Portfolio-level · scenario <b>{sset}</b> · as of <b>{date}</b> · "
                 "Total VaR = √(Factor VaR² + (2.326·Specific vol)²)</div>", unsafe_allow_html=True)
     st.write("")
 
@@ -235,13 +235,13 @@ with tab_exp:
     if len(ex):
         st.altair_chart(h_bars(ex, "Net exposure", "Factor", fmt="+.2f", diverge=True),
                         use_container_width=True)
-        st.markdown("<div class='cap'>Signed book tilt per factor (the Barra story). "
+        st.markdown("<div class='cap'>Signed portfolio tilt per factor (the Barra story). "
                     "<span style='color:#3b5e8c'>slate = long</span> · "
                     "<span style='color:#9c3a2e'>red = short</span>.</div>", unsafe_allow_html=True)
 
     st.subheader("Position detail")
     pos = pd.DataFrame(get("/attribution", date=date, set=sset, by="position"))
-    if "Net exposure" in pos:                       # held names only (non-zero book weight)
+    if "Net exposure" in pos:                       # held names only (non-zero portfolio weight)
         pos = pos[pos["Net exposure"].abs() > 0]
     if len(pos):
         labels = {(row.get("Ticker") or row["Position"]): row["Position"] for _, row in pos.iterrows()}
@@ -265,7 +265,7 @@ with tab_exp:
 with tab_val:
     st.subheader("Cube vs Excel / pandas reconciliation")
     v = get("/validation")
-    st.markdown("<div class='cap'>3-position sub-book: " +
+    st.markdown("<div class='cap'>3-position sub-portfolio: " +
                 ", ".join(f"{b['ticker'].upper()} {b['weight']*100:.1f}%" for b in v["book"]) +
                 f" · as of {v['as_of']}</div>", unsafe_allow_html=True)
     rows = []

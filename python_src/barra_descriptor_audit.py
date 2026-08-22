@@ -10,11 +10,11 @@ Tests, per factor:
      coefficients; the residual regression's factor LABELS stop being trustworthy.
   2. HIDDEN BETA — regress each held name's daily specific return on the factor's return over
      the window (univariate). The modeled loading's contribution is already removed from the
-     residual, so beta ~ 0 if loadings are right. Book-level Sum(w*beta) is the unmodeled
+     residual, so beta ~ 0 if loadings are right. Portfolio-level Sum(w*beta) is the unmodeled
      factor exposure the risk block can't see; the share of names with |t|>2 says how broad
      it is. Read alongside test 1: a hidden beta on one of a collinear pair may belong to
      either factor.
-  3. COVERAGE — held-book weight carrying a loading at the latest date; the missing names.
+  3. COVERAGE — held-portfolio weight carrying a loading at the latest date; the missing names.
 
 Pure helpers are importable for tests (test_descriptor_audit.py): _residual_betas,
 _collinear_pairs, _coverage.
@@ -49,8 +49,9 @@ def _residual_betas(resid_panel: pd.DataFrame, f: pd.Series,
     """Univariate OLS of each name's residual on one factor's daily return.
 
     resid_panel: Date x Position specific returns; f: the factor's daily return series;
-    weights: latest-book weights (only weighted names are tested).
-    Returns per-name betas/t-stats plus the book-level aggregates."""
+    weights: latest-portfolio weights (only weighted names are tested).
+    Returns per-name betas/t-stats plus the portfolio-level aggregates. NB the returned key is
+    still `book_beta` (test_descriptor_audit.py reads it by that name)."""
     rows = []
     x_all = f.dropna()
     for p in resid_panel.columns:
@@ -84,7 +85,7 @@ def _residual_betas(resid_panel: pd.DataFrame, f: pd.Series,
 
 
 def _coverage(exp_d: pd.DataFrame, held: pd.Series, factor: str) -> dict:
-    """Held-book coverage of one factor's loading on one date."""
+    """Held-portfolio coverage of one factor's loading on one date."""
     have = set(exp_d[exp_d["Factor"] == factor]["Position"])
     miss = held[~held.index.isin(have)]
     return {"weight_covered": float(held[held.index.isin(have)].sum()),
@@ -107,7 +108,7 @@ def run(window_start: str = "2025-06-30", corr_thresh: float = 0.6) -> None:
     w12 = wide.loc[wide.index >= window_start]
     factors = [c for c in wide.columns if c != "Market"]
 
-    print(f"descriptor audit — held book {d.date()}, window {window_start} → {wide.index.max().date()}")
+    print(f"descriptor audit — held portfolio {d.date()}, window {window_start} → {wide.index.max().date()}")
 
     print("\n== 1. collinearity (factor-return correlations) ==")
     full = _collinear_pairs(wide, corr_thresh)
@@ -140,7 +141,7 @@ def run(window_start: str = "2025-06-30", corr_thresh: float = 0.6) -> None:
         who = ", ".join(f"{tk.get(n['position'], n['position'])} b={n['beta']:+.2f}" for n in worst)
         print(f"   -> {f_}: largest significant carriers: {who}")
 
-    print("\n== 3. loading coverage (held book, latest date) ==")
+    print("\n== 3. loading coverage (held portfolio, latest date) ==")
     exp_d = exp[exp["Date"] == d]
     print(f"   {'factor':<10} {'covered':>8} {'missing':>8}  names")
     # industries are MUTUALLY EXCLUSIVE memberships (one sector per name), so per-industry

@@ -16,7 +16,7 @@ THE TRANSFORM (as walked through):
   4. factor_returns = the downloaded daily series VERBATIM (the scenario cache; never regressed).
 
 Frames out (identical schemas to v2):
-  exposures (Date,Position,Factor)->Loading | positions (Date,Book,Position)->Weight,MV
+  exposures (Date,Position,Factor)->Loading | positions (Date,Manager,Position)->Weight,MV
   securities | factor_meta | factor_returns (Date,Factor)->Return | specific_var (Date,Position)->SpecificVar
 
 DATA SOURCES (free):

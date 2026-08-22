@@ -135,7 +135,7 @@ def build(port: int = CUBE_PORT, *, force: bool = False):
     port = _free_port(port)
     t0 = time.perf_counter()
     session, cube = _build_cube_interrupt_safe(port)
-    # The notebook container is jailed to 2 CPUs, and on the 11-book frames the scenario-vector
+    # The notebook container is jailed to 2 CPUs, and on the 11-manager frames the scenario-vector
     # queries (e.g. an Evt window's Scenario PnL) can exceed ActivePivot's 30s default query time
     # limit there — the host API cube on all cores never hits it. Raised for this session only.
     cube.shared_context["queriesTimeLimit"] = 180
@@ -201,13 +201,13 @@ def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3, money=None)
     `pct`/`prec` mirror a view's `as_pct`/`prec` state. Every Soros 13F grid is as_pct with
     prec=3, so the defaults match; pass pct=False for a plain fixed-decimal grid.
 
-    Dollar columns — the cube's "<measure> $" twins, `Market value`, `Book MV` — are formatted
+    Dollar columns — the cube's "<measure> $" twins, `Market value`, `Manager MV` — are formatted
     as whole dollars with separators ($151,470,121) regardless of `pct`; `money` names extra
     columns to treat the same way (the UI's units=dollar view).
     """
     num = list(df.select_dtypes("number").columns)
     fmt = (f"{{:.{prec}%}}" if pct else f"{{:.{prec}f}}")
-    dollar = {c for c in num if str(c).endswith(" $") or c in ("Market value", "Book MV")}
+    dollar = {c for c in num if str(c).endswith(" $") or c in ("Market value", "Manager MV")}
     dollar |= set(money or [])
     formats = {c: ("${:,.0f}" if c in dollar else fmt) for c in num}
     return (df.style

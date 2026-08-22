@@ -87,9 +87,9 @@ def bar_spec(measures: list, yfield: str) -> dict:
 
 def pnl_path_spec() -> dict:
     """Scenario P&L PATH over the `rows=[Day, DayDate]` query records (the FAST day-facts path,
-    2026-08-15 — ~10x the old ScenarioDay parameter hierarchy): a line of the per-day book P&L
+    2026-08-15 — ~10x the old ScenarioDay parameter hierarchy): a line of the per-day portfolio P&L
     (`PnL at day`) vs its calendar date (the `DayDate` LEVEL, read off the axis), with the 99% VaR
-    rule and the worst-loss point. The VaR / worst markers are book-level CONSTANTS across the day
+    rule and the worst-loss point. The VaR / worst markers are portfolio-level CONSTANTS across the day
     rows (chart-ready, already negative), so `aggregate:min` collapses each to a single mark off the
     same query — a DaySet slice makes the query exactly the set's real days."""
     return {
@@ -130,10 +130,10 @@ def pnl_path_spec() -> dict:
 def pnl_sector_spec() -> dict:
     """Scenario P&L stacked by Sector over the `rows=[Day, DayDate, Sector]` query records (the FAST
     day-facts path — the shape the old ScenarioDay path could not serve at all): each sector's
-    per-day P&L (`PnL at day`) stacked to the book P&L. The x axis is the scenario day, sorted
-    WORST→BEST by the day's BOOK total (a Vega `sort` on the stacked sum — presentation only) so it
-    reads as the sorted loss curve, but LABELLED by date (`%d %b`). The 99% VaR rule is the BOOK
-    tail (`VaR line at day` is book-level via tt.total; `aggregate:min` -> one rule)."""
+    per-day P&L (`PnL at day`) stacked to the portfolio P&L. The x axis is the scenario day, sorted
+    WORST→BEST by the day's PORTFOLIO total (a Vega `sort` on the stacked sum — presentation only) so
+    it reads as the sorted loss curve, but LABELLED by date (`%d %b`). The 99% VaR rule is the
+    PORTFOLIO tail (`VaR line at day` is portfolio-level via tt.total; `aggregate:min` -> one rule)."""
     return {
         "$schema": VL5, "height": 260, "autosize": FIT, "padding": PAD, "config": THEME,
         "transform": [
@@ -142,7 +142,7 @@ def pnl_sector_spec() -> dict:
         "layer": [
             {"mark": {"type": "area", "opacity": 0.85, "line": {"strokeWidth": 0.4}},
              "encoding": {
-                 # ordinal day, ordered by the day's summed (book) P&L ascending = worst→best, but
+                 # ordinal day, ordered by the day's summed (portfolio) P&L ascending = worst→best, but
                  # the tick LABELS are the date (epoch-day -> ms -> %d %b), angled to fit ~80 days.
                  "x": {"field": "DayDate", "type": "ordinal",
                        "sort": {"field": "PnL at day", "op": "sum", "order": "ascending"},
@@ -200,7 +200,7 @@ if __name__ == "__main__":
 
     # COVID: TWO structurally-different pivot queries (the only difference is `rows`), each drawn by
     # its own graph. The Day/DayDate levels are the day-facts path (2026-08-15): `PnL at day` reads
-    # DaySet, the book-level markers read ScenarioSet, so the filter names the set on BOTH.
+    # DaySet, the portfolio-level markers read ScenarioSet, so the filter names the set on BOTH.
     _covid_filters = {"Manager": ["Soros"], "Date": ["2026-06-30"],
                       "ScenarioSet": ["Evt:COVID2020"], "DaySet": ["Evt:COVID2020"]}
     set_chart("scenario-p-l-covid-2020", "chart",
