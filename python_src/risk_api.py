@@ -115,7 +115,12 @@ DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
              # breakout dims, e.g. Sector) and a DaySet slice. That shape -- with or without a
              # Day/DayDate window -- is served by the VECTOR plan (`_day_vector_shape`: the cube's
              # own P&L vector unpacked, ~0.5 s any book); anything else falls to the level plan.
-             "Day", "DayDate", "DaySet"]
+             "Day", "DayDate", "DaySet",
+             # PriceSet (docs/price-var-plan.md): the Price family's switch hierarchy, mirroring
+             # ScenarioSet one-for-one (HistFull + every Evt:* window; no Hypo:* mirror). Pruned
+             # from this list at startup like the Price measures themselves if stock_returns.parquet
+             # wasn't built (see PRICE_DEP / the lifespan pruning loop).
+             "PriceSet"]
 # The Day-path measures read the DaySet hierarchy, NOT ScenarioSet, so the scenario-context warning
 # below does not cover them; they get their own (see _pivot_result). Members of Day/DayDate are the
 # union across sets, so a query with no DaySet context reads every set's days stacked -- blank
@@ -182,7 +187,15 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # dollars (2026-08-22): $ held per cell, the sliced book's 13F value, and a
                  # "<measure> $" twin of every weight-unit measure (DOLLAR_MEASURES, one list
                  # with the cube). /pivot?units=dollar swaps them in and renames back.
-                 "Market value", "Book MV"] + [f"{_x} $" for _x in DOLLAR_MEASURES]
+                 "Market value", "Book MV",
+                 # Price family (docs/price-var-plan.md): historical sim on raw stock returns, no
+                 # factor model — the model-free VaR/var_bridge compares against. v2-only; pruned
+                 # at startup like the PnL-attribution trio if stock_returns.parquet is absent.
+                 "Price VaR 95", "Price VaR 97.5", "Price VaR 99", "Price ES 97.5", "Price ES 99",
+                 "Price worst loss", "Price mean PnL", "Price PnL vol",
+                 "Marginal Price VaR 99", "% of Price VaR 99", "Incremental Price VaR 99",
+                 "Marginal Price ES 97.5", "Price coverage at tail",
+                 ] + [f"{_x} $" for _x in DOLLAR_MEASURES]
 DOLLAR_TWINS = {_x: f"{_x} $" for _x in DOLLAR_MEASURES}
 SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Total VaR 99",
             "Marginal Scenario VaR 99", "Marginal Total VaR 99", "VaR sensitivity",
@@ -202,6 +215,15 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
 SCEN_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in SCEN_DEP}
 DAY_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in DAY_DEP}
+
+# PriceSet dependency (docs/price-var-plan.md), the SAME "needs a single-set context" idiom as
+# SCEN_DEP but for the Price family's own switch hierarchy — a Price measure with no PriceSet
+# context is blank, same warning pattern _pivot_query already carries for SCEN_DEP/DAY_DEP.
+PRICE_DEP = {"Price VaR 95", "Price VaR 97.5", "Price VaR 99", "Price ES 97.5", "Price ES 99",
+            "Price worst loss", "Price mean PnL", "Price PnL vol",
+            "Marginal Price VaR 99", "% of Price VaR 99", "Incremental Price VaR 99",
+            "Marginal Price ES 97.5", "Price coverage at tail"}
+PRICE_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in PRICE_DEP}
 
 
 def _records(df: pd.DataFrame, reset: bool = True) -> list[dict]:
@@ -261,6 +283,11 @@ async def lifespan(app: FastAPI):
     live = set(cube.measures)
     for _mn in [x for x in MEASURE_NAMES if x not in live]:
         MEASURE_NAMES.remove(_mn)
+    # Same pruning for the Price family's switch DIMENSION: v1 data / a pre-Price-VaR build has
+    # no PriceSet hierarchy at all, so leaving it in DIM_NAMES would let _validate_pivot accept a
+    # dimension name the cube can't resolve (a raw KeyError, not a clean 400).
+    if "PriceSet" not in {n for _, n in cube.hierarchies} and "PriceSet" in DIM_NAMES:
+        DIM_NAMES.remove("PriceSet")
     print(f"[risk_api] cube ready on :{CUBE_PORT}; UI at {session.url}")
     _prewarm()
     yield
@@ -712,6 +739,7 @@ def _dims_response_fallback() -> dict:
     return {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
             "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
             "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
+            "price_dependent": sorted(PRICE_DEP),
             "members": members,
             "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
 
@@ -749,6 +777,7 @@ def _dims_response() -> dict:
         resp = {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
             "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
                 "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
+            "price_dependent": sorted(PRICE_DEP),
             "members": members,
                 "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
     except Exception:
@@ -923,7 +952,7 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
     builds one P&L vector per book over the whole calendar. The SAME query with a single Date is
     **0.76 s**. Nothing asks for the multi-date shape on purpose: it is what a field-list drag
     produces before the user picks a date."""
-    return (any(x in SCEN_DEP or x in DAY_DEP for x in mlist)
+    return (any(x in SCEN_DEP or x in DAY_DEP or x in PRICE_DEP for x in mlist)
             and "Manager" in axis
             and "Date" not in axis and "Date" not in fdict)
 
@@ -1155,6 +1184,11 @@ def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: boo
         warnings.append("Per-day measures (PnL at day & co.) read the DaySet hierarchy, not "
                         "ScenarioSet — put DaySet on an axis or pick a single DaySet; otherwise "
                         "the Day/DayDate axis stacks every set's days.")
+    price_ctx = ("PriceSet" in axis) or ("PriceSet" in fdict)
+    if any(x in PRICE_DEP for x in mlist) and not price_ctx:
+        warnings.append("Price measures need a PriceSet context (their own switch hierarchy, "
+                        "not ScenarioSet) — put PriceSet on an axis or pick a single set "
+                        "(HistFull / Evt:*); otherwise those cells are blank.")
     warning = " ".join(warnings) or None
     meas_objs = [m[x] for x in mnames]
     _back = dict(zip(mnames, mlist))     # PIT mirror -> the name the caller asked for (identity off PIT)
@@ -3903,6 +3937,207 @@ async def hedge(date: str | None = None, book: str = "Soros"):
     return await run_in_threadpool(run)
 
 
+# ============================================================================ Model vs Price (the bridge)
+# docs/price-var-plan.md. The MODEL prices the book on a linear factor block + a Gaussian diagonal
+# specific block; the PRICE family prices the SAME book on raw historical stock returns — no model
+# at all. Five numbers in a fixed order, each changing ONE thing, so the differences are the whole
+# gap by construction: T0 Scenario VaR 99 (factor-only) -> T1 Total VaR 99 (+ Gaussian specific) ->
+# T2 full-sim VaR (the Gaussian specific block replaced by REALIZED daily residual paths) -> T3
+# Price VaR on covered names (today's fixed loadings replaced by each day's own — r_t =
+# L_i(t)·f_t + u_i,t exactly, the model's own identity) -> T4 Price VaR 99 (names priced but
+# uncovered by the model are added). T0/T1/T4 are cube measures; T2/T3 are numpy on the SAME
+# population/calendar `_book_inputs` already uses, so every step prices the identical book.
+
+def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> dict:
+    cube = S["cube"]
+    if "Price VaR 99" not in cube.measures:
+        raise HTTPException(404, "Price family not available — rebuild with stock_returns.parquet "
+                                 "present (see barra_build_stock_returns.py / docs/price-var-plan.md).")
+    if set_ != "HistFull" and set_ not in EVENT_WINDOWS:
+        raise HTTPException(400, f"set={set_!r} has no Price mirror — /var_bridge supports HistFull "
+                                 "and Evt:* windows only (Hypo:* sets are sigma-shocks on factors, "
+                                 "not a historical window).")
+    d = date or _latest_date()
+    l, m = cube.levels, cube.measures
+    L, w, s_, R = _book_inputs(d, book)
+    if not float(np.abs(w.to_numpy()).sum()):
+        raise HTTPException(404, f"no {book} positions at {d}")
+    f = S["frames"]
+    has_book_hier = "Book" in {n for _, n in cube.hierarchies}
+
+    # T0 / T1 -- straight from the cube (ScenarioSet=set_)
+    flt_scn = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_)
+    if has_book_hier:
+        flt_scn &= (l["Book"] == book)
+    scn_row = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], filter=flt_scn)
+    if not len(scn_row):
+        raise HTTPException(404, f"no cube cell at {d} / ScenarioSet={set_}")
+    t0 = float(scn_row.iloc[0]["Scenario VaR 99"])
+    t1 = float(scn_row.iloc[0]["Total VaR 99"])
+
+    # T4 + the book's own coverage-at-tail -- straight from the cube (PriceSet=set_)
+    flt_price = (l["Date"] == _date(d)) & (l["PriceSet"] == set_)
+    if has_book_hier:
+        flt_price &= (l["Book"] == book)
+    price_row = cube.query(m["Price VaR 99"], m["Price coverage at tail"], filter=flt_price)
+    if not len(price_row):
+        raise HTTPException(404, f"no cube cell at {d} / PriceSet={set_}")
+    t4 = float(price_row.iloc[0]["Price VaR 99"])
+    coverage_at_tail = float(price_row.iloc[0]["Price coverage at tail"])
+
+    # T2 / T3 -- numpy from the frames, SAME population (L.index, w) and calendar T0/T1 used.
+    factors = list(L.columns)
+    Lv, wv = L.to_numpy(), w.to_numpy()
+    x = Lv.T @ wv
+    wide_fr = f["factor_returns"].pivot(index="Date", columns="Factor", values="Return") \
+        .dropna(how="any")[factors]
+    if set_ == "HistFull":
+        dates = wide_fr.index
+    else:
+        a, b = EVENT_WINDOWS[set_]
+        dates = wide_fr.loc[a:b].index
+    fac_pnl = wide_fr.loc[dates].to_numpy() @ x
+
+    sr = f.get("specific_returns")
+    if sr is not None and len(sr):
+        u_wide = sr.pivot_table(index="Date", columns="Position", values="SpecificReturn", aggfunc="last")
+        spec_pnl_t2 = u_wide.reindex(index=dates, columns=L.index).fillna(0.0).to_numpy() @ wv
+    else:
+        spec_pnl_t2 = np.zeros(len(dates))
+    pnl_t2 = fac_pnl + spec_pnl_t2
+    t2 = float(-np.quantile(pnl_t2, alpha))
+
+    stk = f.get("stock_returns")
+    if stk is None or not len(stk):
+        raise HTTPException(404, "stock_returns.parquet not loaded — rebuild to enable /var_bridge")
+    r_wide = stk.pivot_table(index="Date", columns="Position", values="Return", aggfunc="last")
+    r_cov = r_wide.reindex(index=dates, columns=L.index)
+    pnl_t3 = r_cov.fillna(0.0).to_numpy() @ wv
+    t3 = float(-np.quantile(pnl_t3, alpha))
+
+    # numpy verification twin of T4 (Price VaR 99, ALL priced names — /contributions' pattern)
+    pos = f["positions"]; dts = pd.Timestamp(d)
+    asof = pos[(pos["Book"] == book) & (pos["Date"] <= dts)]
+    bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
+    held = bp.set_index("Position")["Weight"] if len(bp) else pd.Series(dtype=float)
+    priced_names = set(r_wide.columns)
+    covered_names = set(L.index)
+    held_priced = [p for p in held.index if p in priced_names]
+    w_all = held.reindex(held_priced).fillna(0.0)
+    r_all = r_wide.reindex(index=dates, columns=held_priced)
+    priced_mask = r_all.notna().to_numpy()
+    pnl_t4_ref = r_all.fillna(0.0).to_numpy() @ w_all.to_numpy()
+    t4_ref = float(-np.quantile(pnl_t4_ref, alpha)) if len(pnl_t4_ref) else 0.0
+    if len(pnl_t4_ref):
+        tail_i = int(np.argsort(pnl_t4_ref)[int(np.floor(alpha * (len(pnl_t4_ref) - 1)))])
+        cov_ref = float((priced_mask[tail_i].astype(float) * w_all.to_numpy()).sum())
+        cov_series = (priced_mask.astype(float) * w_all.to_numpy()[None, :]).sum(axis=1)
+    else:
+        cov_ref = 0.0
+        cov_series = np.zeros(0)
+
+    # coverage disclosure: held names never priced at all (contribute 0 everywhere), and names
+    # priced-but-uncovered (the T3->T4 population change) — never silently absorbed, /whatif idiom.
+    tick = _ticker_map()
+    never_priced = [p for p in held.index if p not in priced_names]
+    added_by_coverage = [p for p in held_priced if p not in covered_names]
+    never_priced_weight = float(held.reindex(never_priced).abs().sum()) if never_priced else 0.0
+    added_weight = float(held.reindex(added_by_coverage).abs().sum()) if added_by_coverage else 0.0
+
+    # per-name disagreement table -- served from the cube (real numbers, never recomputed here);
+    # `likely_driver` is a per-name HEURISTIC (coverage is exact; specific vs exposure/distribution
+    # is a magnitude comparison, not a true per-name T2/T3 split — disclosed, see docs).
+    flt_names = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_) & (l["PriceSet"] == set_)
+    if has_book_hier:
+        flt_names &= (l["Book"] == book)
+    dfN = cube.query(m["Marginal Total VaR 99"], m["Marginal Price VaR 99"], m["Specific variance"],
+                     m["Net weight"],
+                     levels=[l["Position"]], filter=flt_names).reset_index()
+    iss = dict(zip(f["securities"]["Position"], f["securities"]["Issuer"]))
+    # NaN on any member the cube leaves blank (e.g. a Position with no factor loadings — Marginal
+    # Total VaR 99 is undefined there); treat as 0 so gap/specvar_term stay finite and comparable.
+    for _c in ("Marginal Total VaR 99", "Marginal Price VaR 99", "Specific variance", "Net weight"):
+        dfN[_c] = dfN[_c].astype(float).fillna(0.0)
+    dfN["gap"] = dfN["Marginal Price VaR 99"] - dfN["Marginal Total VaR 99"]
+    dfN["ticker"] = dfN["Position"].map(tick)
+    dfN["issuer"] = dfN["Position"].map(iss)
+    dfN["specvar_term"] = (_Z99 ** 2) * dfN["Specific variance"]
+    never_priced_set, added_set = set(never_priced), set(added_by_coverage)
+
+    def _driver(row) -> str:
+        p = row["Position"]
+        if p in never_priced_set:
+            return "coverage (never priced)"
+        if p in added_set:
+            return "coverage (priced, no loadings)"
+        if row["gap"] != 0.0 and abs(row["specvar_term"]) > 0.5 * abs(row["gap"]):
+            return "specific_risk_dropped"
+        return "exposure_drift_or_distribution"
+    dfN["likely_driver"] = dfN.apply(_driver, axis=1)
+    disagreements = (dfN.sort_values("gap", key=lambda s: s.abs(), ascending=False)
+                     .head(25).reset_index(drop=True)
+                     .rename(columns={"Position": "position", "Net weight": "weight"})
+                     [["position", "ticker", "issuer", "Marginal Total VaR 99",
+                       "Marginal Price VaR 99", "gap", "weight", "likely_driver"]])
+
+    terms = {"specific_risk_dropped": t1 - t0, "specific_distribution": t2 - t1,
+             "exposure_drift": t3 - t2, "coverage": t4 - t3}
+    steps = [
+        {"step": "T0", "measure": "Scenario VaR 99", "value": t0,
+         "what_changes": "— (factor-only, today's exposures)"},
+        {"step": "T1", "measure": "Total VaR 99", "value": t1,
+         "what_changes": "+ Gaussian diagonal specific block"},
+        {"step": "T2", "measure": "full-sim VaR (today's loadings + realized residuals)", "value": t2,
+         "what_changes": "the Gaussian specific block is replaced by the REALIZED daily residual "
+                         "paths (fat tails + residual correlation)"},
+        {"step": "T3", "measure": "Price VaR on covered names", "value": t3,
+         "what_changes": "today's fixed loadings are replaced by each day's OWN loadings "
+                         "(r_t = L_i(t)·f_t + u_i,t exactly, on covered names)"},
+        {"step": "T4", "measure": "Price VaR 99", "value": t4,
+         "what_changes": "names with prices but no loadings are added"},
+    ]
+    return {
+        "date": d, "book": book, "set": set_, "alpha": alpha,
+        "steps": steps, "terms": terms,
+        "coverage": {
+            "at_tail": coverage_at_tail,
+            "never_priced_weight": never_priced_weight,
+            "never_priced_names": [{"position": p, "ticker": tick.get(p, p),
+                                    "weight": float(held[p])} for p in never_priced[:25]],
+            "added_by_coverage_weight": added_weight,
+            "added_by_coverage_names": [{"position": p, "ticker": tick.get(p, p),
+                                         "weight": float(held[p])} for p in added_by_coverage[:25]],
+            # the day-by-day series for the UI sparkline — an API-served reshape of the same
+            # (dates, priced_mask, weight) arrays above, the /backtest-/drawdown vector-unpack
+            # idiom; not a cube-native Day-path measure (see barra_factor_risk_cube.py's Price
+            # family comment on the scoped-down Day path).
+            "series": {"dates": [str(pd.Timestamp(dt).date()) for dt in dates],
+                      "coverage": [float(v) for v in cov_series]},
+        },
+        "disagreements": _records(disagreements, reset=False),
+        "verification": {"price_var_99_numpy": t4_ref, "diff": abs(t4 - t4_ref),
+                         "coverage_at_tail_numpy": cov_ref,
+                         "coverage_diff": abs(coverage_at_tail - cov_ref)},
+        "note": ("Five numbers, four terms, fixed order (docs/price-var-plan.md): T1-T0 specific "
+                 "risk DROPPED (the Gaussian block itself, not yet measured against reality); "
+                 "T2-T1 specific DISTRIBUTION (fat tails + realized residual correlation — "
+                 "correlated residuals are the missing-factor signal, cf. /pnl_attribution/"
+                 "linkage's breach_comovement); T3-T2 EXPOSURE DRIFT (today's fixed loadings vs "
+                 "each day's own — rotation vs re-pricing, cf. /drift); T4-T3 COVERAGE (priced "
+                 "names the model doesn't cover). Terms sum to T4-T0 exactly by construction."),
+    }
+
+
+@app.get("/var_bridge")
+async def var_bridge(date: str | None = None, book: str = "Soros", set: str = "HistFull",
+                     alpha: float = 0.01):
+    """The Model-vs-Price bridge (docs/price-var-plan.md): T0 Scenario VaR 99 -> T1 Total VaR 99
+    -> T2 full-sim (realized residuals) -> T3 Price VaR on covered names -> T4 Price VaR 99, the
+    four sequential differences, coverage on the book's own Price-VaR tail day, the per-name
+    disagreement table, and a numpy verification twin of T4 (like /contributions)."""
+    return await run_in_threadpool(_var_bridge_result, date, book, set, alpha)
+
+
 # ---- factor portfolio inspector (ch 07: a factor return IS a portfolio return, f̂ = Pr) ----
 
 @app.get("/factor_portfolio")
@@ -4115,6 +4350,17 @@ block. Read the measures as follows:
   Additive; Realized = Σ factor contributions + Specific. FORWARD-month convention: the value at
   Date d0 is the PnL over the month AFTER d0. Specific PnL is per-name (it fans out by Factor —
   read it in by-name or book views). No ScenarioSet needed.
+- Price VaR/ES family (Price VaR 95/97.5/99, Price ES 97.5/99, Price worst loss, Price mean PnL,
+  Price PnL vol, Marginal/Incremental Price VaR 99, Price coverage at tail): the MODEL-FREE twin of
+  the Scenario family — historical simulation on raw daily STOCK returns, no factor model at all.
+  Reads a PriceSet context (its own switch hierarchy, mirroring ScenarioSet: HistFull + Evt:*
+  only — Hypo:* sets don't apply). The `/var_bridge` endpoint (not a pivot view) explains the gap
+  between Total VaR 99 (model) and Price VaR 99 (price) in four terms, in order: specific risk
+  dropped (the Gaussian block itself), specific distribution (realized fat tails + residual
+  correlation — the strongest missing-factor signal when large), exposure drift (today's loadings
+  vs each day's own — rotation vs re-pricing, see /drift), and coverage (priced names the model
+  doesn't span). If a `bridge` block is present in the payload, read it in that order and lead
+  with whichever term is largest.
 
 Scenario sets (the shock source):
 - HistFull: full historical simulation. Evt:* : a past window replayed (COVID2020, Rates2022,
@@ -4780,6 +5026,92 @@ async def whatchanged_analysis(body: WhatChangedBody):
     return StreamingResponse(gen(), media_type="text/markdown")
 
 
+# ============================================================================ Model vs Price (LLM)
+# /var_bridge/analysis narrates the deterministic bridge above — same plain Messages-API, no-tools
+# pattern as /whatchanged/analysis: compute the tidy bridge, hand it to the model, stream markdown.
+
+BRIDGE_SYSTEM = CHRIS_VOICE + """
+You are writing a short "Model vs Price" read for a Barra-style equity
+factor-risk model. The MODEL prices the book on a linear factor block + a Gaussian diagonal
+specific block; the PRICE family prices the SAME book on raw historical stock returns — no model
+at all, pure historical simulation. You receive only the tidy bridge between them; reason ONLY
+from it and cite the figures. Never invent a position, issuer, date, or value.
+
+The payload has:
+- `steps`: five numbers in a FIXED order, each changing ONE thing from the previous: T0 Scenario
+  VaR 99 (factor-only) -> T1 Total VaR 99 (+ Gaussian specific) -> T2 full-sim VaR (the Gaussian
+  specific block replaced by REALIZED daily residual paths) -> T3 Price VaR on covered names
+  (today's fixed loadings replaced by each day's own — the model's own identity r_t = L_i(t)·f_t +
+  u_i,t) -> T4 Price VaR 99 (names priced but not covered by the model are added). All are losses,
+  positive fractions of book value.
+- `terms`: the four sequential differences (T1-T0, T2-T1, T3-T2, T4-T3) — they sum to T4-T0
+  EXACTLY, by construction. `specific_risk_dropped` is the Gaussian specific block itself (not yet
+  tested against reality). `specific_distribution` is fat tails + REALIZED RESIDUAL CORRELATION —
+  large here is the missing-factor signal (correlated residuals across names that a single
+  Gaussian diagonal block cannot represent). `exposure_drift` is today's loadings vs each day's
+  own realized loadings — large here means the book's exposures moved a lot over the window
+  (rotation, if deliberate → update the benchmark; re-pricing, if not → update the hedge; the
+  /drift endpoint has the rotation-vs-loading-drift split). `coverage` is priced names the model
+  doesn't span (no factor loadings that date) — large here is a model BLIND SPOT, not a risk
+  number to act on directly.
+- `coverage`: `at_tail` is the weight share that was actually priced on the book's own Price-VaR
+  tail day (below 100% means part of the book's worst day is imputed as zero return, understating
+  that day); `never_priced_weight`/`never_priced_names` are held names with NO price history at
+  all (contribute nothing to either VaR); `added_by_coverage_weight`/`_names` are held names with a
+  price but no factor loading (the T3→T4 population change).
+- `disagreements`: the largest per-name gaps between Marginal Total VaR 99 (model) and Marginal
+  Price VaR 99 (price), with a `likely_driver` label — "coverage (...)" is an exact population
+  fact; "specific_risk_dropped" and "exposure_drift_or_distribution" are a MAGNITUDE HEURISTIC on
+  that one name, not a certainty — say so if you lean on it.
+- `verification`: the numpy cross-check of T4 and the tail-day coverage; `diff`/`coverage_diff`
+  should read near zero — flag only if they don't.
+
+Hard rules:
+- LEAD with which term is LARGEST and what that means (see the `terms` guidance above). If the
+  gap is small end to end (T4 close to T0), say the model and the raw tape roughly agree — that is
+  itself a useful, reportable read.
+- If `specific_distribution` is the largest term, name it as the strongest missing-factor
+  candidate the desk has and point at the residual-correlation diagnostics in /pnl_attribution.
+- If `coverage.never_priced_weight` or `added_by_coverage_weight` is non-trivial (say, above a few
+  percent), name the actual position(s) from the list — don't just cite the aggregate.
+- Cite the top 2-3 disagreement names with their gap and driver label; qualify the heuristic label
+  as noted above.
+- Write plainly: direct, short sentences, tight GitHub-flavoured markdown. No preamble."""
+
+
+class VarBridgeBody(BaseModel):
+    date: str | None = None
+    book: str = "Soros"
+    set: str = "HistFull"
+    alpha: float = 0.01
+    notes: str | None = None
+
+
+@app.post("/var_bridge/analysis")
+async def var_bridge_analysis(body: VarBridgeBody):
+    """Streamed 'Model vs Price' read of the deterministic bridge (/var_bridge) — same plain
+    Messages-API, no-tools pattern as /whatchanged/analysis. The model gets the bridge and
+    nothing else."""
+    _rate_limit()
+    client = _anthropic()          # 502 before the work if there's no key
+    bridge = await run_in_threadpool(_var_bridge_result, body.date, body.book, body.set, body.alpha)
+    payload = json.dumps({**bridge, "desk_notes": body.notes or ""}, default=str)
+
+    def gen():
+        try:
+            with client.messages.stream(
+                model="claude-opus-5", max_tokens=4000,
+                thinking={"type": "adaptive"},
+                system=[{"type": "text", "text": BRIDGE_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": payload}],
+            ) as stream:
+                yield from stream.text_stream
+        except anthropic.APIError as e:
+            yield f"\n\n_[analysis failed: {e.__class__.__name__}]_"
+    return StreamingResponse(gen(), media_type="text/markdown")
+
+
 # ---------------------------------------------------------------- Step 10: scoped Q&A drill-down
 # The first LLM endpoint with a tool. The model gets EXACTLY ONE tool — query_cube — which is the
 # /pivot allowlist behind _validate_pivot + _pivot_result. So it can pull its own slices to answer a
@@ -4867,6 +5199,13 @@ How to use the cube:
 - Factor contribution / Specific PnL / Realized PnL (if listed): REALIZED monthly PnL attribution,
   additive (Realized = factor + specific). Forward-month convention: the value at Date d0 is the PnL
   over the month AFTER d0. No ScenarioSet needed; read Specific PnL in by-name or book views.
+- Price VaR/ES (if listed): the MODEL-FREE twin of Scenario VaR/ES — historical sim on raw daily
+  stock returns, no factor model. Needs a PriceSet context (its own hierarchy: HistFull or Evt:*
+  only, no Hypo:*). Not a pivot measure but relevant if asked "does the model agree with the raw
+  tape": the /var_bridge endpoint (not reachable via query_cube) explains Total VaR 99 vs Price
+  VaR 99 in four ordered terms — specific risk dropped, specific distribution (fat tails +
+  residual correlation — a missing-factor signal when large), exposure drift (today's loadings vs
+  each day's own), coverage (priced names outside the model). Say so and point at it if asked.
 - EVERY scenario measure is blank unless you slice ScenarioSet to ONE set. Sets: HistFull (full
   historical sim), Evt:* (a past window — COVID2020, Rates2022, Selloff2018), Hypo:* (hand-set sigma
   shocks — ValueRotation, RiskOff, MomentumCrash). Slice Date to one month for a point-in-time read.
