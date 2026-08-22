@@ -10,7 +10,7 @@ import type {
   PnlAttributionResult, PnlResidualResult, PnlLinkageResult, ContributionsResult,
   ValidationResult, RegressionResult, FactorCovResult,
   HedgeResult, ExposureProfileResult, FactorPortfolioResult, PnlNamesResult,
-  BookMismatch,
+  BookMismatch, VarBridgeResult,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -209,6 +209,15 @@ export function useFactorCov(date?: string) {
   return useQuery({
     queryKey: ["factor_cov", date ?? ""],
     queryFn: () => apiGet<FactorCovResult>("/factor_cov", { date }),
+    ...common,
+  });
+}
+
+export function useVarBridge(date: string, book = "Soros", set = "HistFull") {
+  return useQuery({
+    queryKey: ["var_bridge", date, book, set],
+    queryFn: () => apiGet<VarBridgeResult>("/var_bridge", { date, book, set }),
+    enabled: !!date,
     ...common,
   });
 }

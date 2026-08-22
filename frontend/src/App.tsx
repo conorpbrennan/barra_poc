@@ -16,6 +16,7 @@ import { Changes } from "./routes/Changes";
 import { Ask } from "./routes/Ask";
 import { Checks } from "./routes/Checks";
 import { Model } from "./routes/Model";
+import { ModelVsPrice } from "./routes/ModelVsPrice";
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="/changes" element={<Changes />} />
             <Route path="/ask" element={<Ask />} />
             <Route path="/model" element={<Model />} />
+            <Route path="/model-vs-price" element={<ModelVsPrice />} />
             <Route path="/checks" element={<Checks />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

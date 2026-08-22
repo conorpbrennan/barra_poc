@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "Model vs Price — book",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-08-22T00:00:00Z",
+  "updated": "2026-08-22T00:00:00Z",
+  "state": {
+    "cols": [],
+    "slice_dims": [
+      "Manager",
+      "Date",
+      "ScenarioSet",
+      "PriceSet"
+    ],
+    "filters": {
+      "Manager": [
+        "Soros"
+      ],
+      "Date": [
+        "2026-06-30"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ],
+      "PriceSet": [
+        "HistFull"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": true,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": false,
+    "prec": 3,
+    "rows": [
+      "Position"
+    ],
+    "measures": [
+      "Marginal Total VaR 99",
+      "Marginal Price VaR 99",
+      "Price coverage at tail"
+    ],
+    "sort": [
+      {
+        "colId": "Marginal Price VaR 99",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ],
+    "description": "Model (Total VaR 99, factor + Gaussian specific) vs Price (historical sim on raw stock returns, no model) risk contribution per name. Needs BOTH ScenarioSet and PriceSet sliced to the same set — the two families are independent switch hierarchies. See the Model vs Price lens for the full bridge (/var_bridge)."
+  }
+}

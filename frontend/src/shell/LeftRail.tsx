@@ -13,6 +13,7 @@ const LENSES: { to: string; label: string }[] = [
   { to: "/attribution", label: "Attribution" },
   { to: "/changes", label: "Changes" },
   { to: "/model", label: "Model" },
+  { to: "/model-vs-price", label: "Model vs Price" },
   { to: "/checks", label: "Checks" },
   { to: "/ask", label: "Ask" },
 ];

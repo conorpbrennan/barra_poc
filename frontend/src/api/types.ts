@@ -372,6 +372,36 @@ export interface HedgeResult {
   market_hedge: { h_star: number; vol_after: number; vol_reduction: number } | null;
   note: string;
 }
+
+// ---- Model vs Price (/var_bridge, docs/price-var-plan.md) ----
+export interface VarBridgeStep {
+  step: "T0" | "T1" | "T2" | "T3" | "T4";
+  measure: string; value: number; what_changes: string;
+}
+export interface VarBridgeTerms {
+  specific_risk_dropped: number; specific_distribution: number;
+  exposure_drift: number; coverage: number;
+}
+export interface VarBridgeNameEntry { position: string; ticker: string; weight: number }
+export interface VarBridgeCoverage {
+  at_tail: number;
+  never_priced_weight: number; never_priced_names: VarBridgeNameEntry[];
+  added_by_coverage_weight: number; added_by_coverage_names: VarBridgeNameEntry[];
+  series: { dates: string[]; coverage: number[] };
+}
+export interface VarBridgeDisagreement {
+  position: string; ticker: string; issuer: string;
+  "Marginal Total VaR 99": number; "Marginal Price VaR 99": number;
+  gap: number; weight: number; likely_driver: string;
+}
+export interface VarBridgeResult {
+  date: string; book: string; set: string; alpha: number;
+  steps: VarBridgeStep[]; terms: VarBridgeTerms; coverage: VarBridgeCoverage;
+  disagreements: VarBridgeDisagreement[];
+  verification: { price_var_99_numpy: number; diff: number;
+                 coverage_at_tail_numpy: number; coverage_diff: number };
+  note: string;
+}
 export interface ExposureProfileResult {
   factor: string; date: string; book: string; recipe: string; n_names: number;
   quantiles: Record<string, number>;

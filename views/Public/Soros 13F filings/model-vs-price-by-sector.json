@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "name": "Model vs Price — by sector",
+  "path": "Public/Soros 13F filings",
+  "created": "2026-08-22T00:00:00Z",
+  "updated": "2026-08-22T00:00:00Z",
+  "state": {
+    "cols": [],
+    "slice_dims": [
+      "Manager",
+      "Date",
+      "ScenarioSet",
+      "PriceSet"
+    ],
+    "filters": {
+      "Manager": [
+        "Soros"
+      ],
+      "Date": [
+        "2026-06-30"
+      ],
+      "ScenarioSet": [
+        "HistFull"
+      ],
+      "PriceSet": [
+        "HistFull"
+      ]
+    },
+    "row_tot": false,
+    "col_tot": true,
+    "as_pct": true,
+    "hide_empty": true,
+    "heat": true,
+    "prec": 3,
+    "rows": [
+      "Sector"
+    ],
+    "measures": [
+      "Marginal Total VaR 99",
+      "Marginal Price VaR 99"
+    ],
+    "sort": [
+      {
+        "colId": "Marginal Price VaR 99",
+        "sort": "desc",
+        "sortIndex": 0
+      }
+    ],
+    "description": "Each GICS sector's additive contribution to Total VaR 99 (model) alongside Price VaR 99 (raw historical stock returns, no model) — where the two disagree by sector. Both families are additive (Euler tail-day contributions), so each column sums to its own book total."
+  }
+}
