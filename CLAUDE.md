@@ -1240,6 +1240,22 @@ one arbitrary book's column), pointing the caller at `barra_pnl_attribution.py`'
 precompute for correct per-book attribution instead. Single-book behaviour is byte-identical to
 before.
 
+**The Vite reconcile drawers read `/pnl_attribution/drill` instead (2026-08-22).** The
+Attribution lens's `PositionDrawer`/`FactorDrawer` used to query `/pivot` for the trio and hit
+this guard's 400 on the 123-book build. `GET /pnl_attribution/drill?T=&to=&book=&position=|factor=`
+computes the SAME forward-month-convention math live from `S["frames"]` for the requested book's
+own as-of weights (`_drill_contrib`, which mirrors `_name_attr`/`/pnl_attribution/linkage` exactly
+— same per-month loop, factor axis kept instead of collapsed), so it works on ANY loaded book: no
+artifact, no `_book_guard` (there is nothing to mismatch — it reads the live per-book frames
+directly, unlike the single-book-precompute-backed `/universe`/`/funnel`/`/span`/`/drift`/other
+`/pnl_attribution*` routes). `position=` mode returns that name's per-factor contribution over
+the window + specific PnL + T-date loadings, tying to `/pnl_attribution/linkage`'s
+`positions[].realized` to float precision by construction; `factor=` mode returns the inverse
+who-carried-it view by Issuer. `/pivot` still rejects the trio outright once >1 book is loaded
+(unchanged), and the trio is pruned from `/dims` there too — the Vite drawers' "open in Pivot →"
+deep links (which still target the trio, correct and further-drillable in the single-book case)
+are hidden whenever `/dims` doesn't offer all three measures.
+
 **Per-book guards on single-book artifacts.** `/universe`, `/funnel`, `/span`, `/drift` and the
 four `/pnl_attribution*` routes each read a precomputed artifact or live frame built for exactly
 one book, with no per-book scoping of their own. A `_book_guard`/`_artifact_book` pair (Phase 3)
