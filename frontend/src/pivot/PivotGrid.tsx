@@ -160,8 +160,13 @@ export function PivotGrid({
   // expanded/drill state (flat), so drilling within a view does NOT remount and keeps scroll/expansion.
   const gridKey = `${cfg.rows.join(",")}|${measures.join(",")}|${colMembers.join(",")}`;
 
+  // Size the grid to its rows (capped at 70vh) so the pinned Total row sits directly under the
+  // last data row instead of at the foot of an empty viewport.
+  const ROW = 26, HEADER = 30;
+  const height = `min(70vh, ${HEADER + ROW * (rowData.length + pinnedBottomRowData.length) + 18}px)`;
+
   return (
-    <div className="ag-theme-balham" style={{ height: "70vh", width: "100%" }}>
+    <div className="ag-theme-balham" style={{ height, width: "100%" }}>
       <AgGridReact<GridRow>
         key={gridKey}
         rowData={rowData}
