@@ -66,7 +66,7 @@ The liquidity note remains open (lens parked).
 - **PIT:* truncated-history sets** — one per month-end (≥60 obs), hidden from `/meta`/`/dims`
   dropdowns (served as `pit_sets`). Identities: PIT:last == HistFull (1e-15); 2019 PIT vol ≠
   the anachronistic full-history read; per-factor PIT vol == numpy std(history ≤ t) at 5e-12.
-  `_pred_book_vols` (the /calibration engine) is cube-served from them — 103/108 months, numpy
+  `_pred_manager_vols` (the /calibration engine) is cube-served from them — 103/108 months, numpy
   F(≤t) cross-check ~1e-17 pinned per-cache (the stash is last-writer-wins; /residual shares
   the function). Follow-up available: the linkage bands' σ(≤T) is the same estimator.
 
@@ -117,7 +117,7 @@ lifecycle, cleanup, concurrency of parallel what-ifs); do it after 1–3 prove u
 |---|---|---|
 | `/backtest` | rolling equal/EWMA/FHS VaR thresholds, Kupiec, Basel | rolling windows + sequential EWMA recursion — not array algebra; the CLAUDE.md exception class verbatim |
 | `/drawdown` | cumprod equity curve, running max | **NARROWED**: `tt.array.prefix_sum` exists (a scan primitive), so a cumulative-P&L curve IS expressible — the missing piece is specifically a running-MAX over the vector, which max-drawdown needs. Still Python |
-| `/calibration` | rolling bias stat, `_pred_book_vols` | rolling window + **point-in-time covariance** (F built on history ≤ t; the cube's scenario vector is deliberately the full history — Date slices exposures, not the shock cache) |
+| `/calibration` | rolling bias stat, `_pred_manager_vols` | rolling window + **point-in-time covariance** (F built on history ≤ t; the cube's scenario vector is deliberately the full history — Date slices exposures, not the shock cache) |
 | `/pnl_attribution` + `/residual` | Cariño linking, IR, autocorrelation, residual-vs-factor regression, bias stats | time-series reductions and regressions — the designed split; the additive drill already lives in the cube |
 | `/pnl_attribution/linkage` | bands `|x_k|·σ_k(≤T)·√h`, `_stressed_cov`, driver reads | same point-in-time-covariance reason (band σ at T ≠ full-history σ), plus the ρ-blend matrix op; the *realized* side already ties to the cube's attribution measures |
 | `/stress` conditional | `E[f|s] = F[:,S]F[S,S]⁻¹s` | matrix solve |
