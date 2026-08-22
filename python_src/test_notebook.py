@@ -18,7 +18,7 @@ import pandas as pd
 import notebook_helpers as N
 
 _NB_DIR = pathlib.Path(__file__).resolve().parent.parent / "notebooks"
-NOTEBOOKS = {                        # Book in the cube -> the notebook that reads that book
+NOTEBOOKS = {                        # Manager in the cube -> the notebook that reads that book
     "Soros":    _NB_DIR / "soros_13f_risk.ipynb",
     "Vanguard": _NB_DIR / "vanguard_13f_risk.ipynb",
 }
@@ -59,8 +59,8 @@ def t_latest_cob_is_D(cube, book, D, NOTEBOOK):
 @_test
 def t_l1_book_summary(cube, book, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
-    df = cube.query(m["Total VaR 99"], m["Scenario VaR 99"], m["Specific vol"], levels=[l["Book"]],
-                    filter=(l["Book"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "HistFull"))
+    df = cube.query(m["Total VaR 99"], m["Scenario VaR 99"], m["Specific vol"], levels=[l["Manager"]],
+                    filter=(l["Manager"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "HistFull"))
     assert len(df) == 1, len(df)
     row = df.iloc[0].astype(float)                          # long-equity book: ~3.5% daily 99% VaR,
     assert 0.02 < row["Total VaR 99"] < 0.06, row["Total VaR 99"]
@@ -71,7 +71,7 @@ def t_l1_book_summary(cube, book, D, NOTEBOOK):
 def t_var_trend_series(cube, book, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], m["Specific vol"], levels=[l["Date"]],
-                    filter=(l["Book"] == book) & (l["ScenarioSet"] == "HistFull"))
+                    filter=(l["Manager"] == book) & (l["ScenarioSet"] == "HistFull"))
     assert len(df) > 50, len(df)                            # the full monthly calendar, 2016 -> D
     assert {"Scenario VaR 99", "Total VaR 99", "Specific vol"} <= set(df.columns)
 
@@ -80,7 +80,7 @@ def t_var_trend_series(cube, book, D, NOTEBOOK):
 def t_stress_board_all_sets(cube, book, D, NOTEBOOK):
     l, m = cube.levels, cube.measures
     df = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], m["Total VaR 99"],
-                    levels=[l["ScenarioSet"]], filter=(l["Book"] == book) & (l["Date"] == D))
+                    levels=[l["ScenarioSet"]], filter=(l["Manager"] == book) & (l["Date"] == D))
     assert {"HistFull", "Evt:COVID2020"} <= set(df.index), set(df.index)
 
 
@@ -90,7 +90,7 @@ def t_covid_path_unpacks_vector(cube, book, D, NOTEBOOK):
     `PnL at day` sliced by DaySet, the calendar date off the DayDate LEVEL, the book VaR marker
     (lifted, reads ScenarioSet) constant along the rows."""
     l, m = cube.levels, cube.measures
-    covid = ((l["Book"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
+    covid = ((l["Manager"] == book) & (l["Date"] == D) & (l["ScenarioSet"] == "Evt:COVID2020")
              & (l["DaySet"] == "Evt:COVID2020"))
     df = cube.query(m["PnL at day"], m["VaR line at day"],
                     levels=[l["Day"], l["DayDate"]], filter=covid).reset_index()
@@ -104,7 +104,7 @@ def t_covid_path_unpacks_vector(cube, book, D, NOTEBOOK):
 def t_covid_sector_rank_is_monotonic(cube, book, D, NOTEBOOK):
     """The graph-2 loss-curve ordering computed in the DataFrame is monotonic in book-total P&L."""
     l, m = cube.levels, cube.measures
-    covid = (l["Book"] == book) & (l["Date"] == D) & (l["DaySet"] == "Evt:COVID2020")
+    covid = (l["Manager"] == book) & (l["Date"] == D) & (l["DaySet"] == "Evt:COVID2020")
     sector = cube.query(m["PnL at day"],
                         levels=[l["Day"], l["DayDate"], l["Sector"]], filter=covid).reset_index()
     sector["PnL at day"] = sector["PnL at day"].astype(float)

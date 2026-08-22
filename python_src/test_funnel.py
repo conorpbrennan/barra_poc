@@ -105,11 +105,11 @@ def t_buffer_hysteresis():
 def t_held_positions_scoped_to_one_book():
     """Multi-manager Phase 3: `_held_positions` (which `run()`'s held_map now delegates to) must
     only count the REQUESTED book's holdings, not every manager's. Regression guard for the
-    pre-fix bug where `held_map` had no Book filter at all -- with >1 book that silently meant
+    pre-fix bug where `held_map` had no Manager filter at all -- with >1 book that silently meant
     'held by ANY manager'."""
     pos = pd.DataFrame({
         "Date": pd.to_datetime(["2024-01-31", "2024-01-31", "2024-01-31", "2024-02-29"]),
-        "Book": ["Soros", "Soros", "Bridgewater", "Soros"],
+        "Manager": ["Soros", "Soros", "Bridgewater", "Soros"],
         "Position": ["AAA", "BBB", "CCC", "AAA"],
     })
     soros_held = uf._held_positions(pos, "Soros")
@@ -131,7 +131,7 @@ def t_run_book_param_default_matches_single_book_behaviour():
     exists."""
     pos_single_book = pd.DataFrame({
         "Date": pd.to_datetime(["2024-01-31", "2024-02-29"]),
-        "Book": ["Soros", "Soros"],
+        "Manager": ["Soros", "Soros"],
         "Position": ["AAA", "BBB"],
     })
     assert uf._held_positions(pos_single_book, "Soros") == uf._held_positions(pos_single_book, None)

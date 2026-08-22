@@ -128,13 +128,13 @@ def t_pivot_whatif_param():
     trades = [{"position": top["position"], "weight": 0}]
     res = _whatif(trades)
     q = {"rows": "ScenarioSet", "measures": "Model vol",
-         "filters": _json.dumps({"Book": ["Soros"], "Date": [j["date"]],
+         "filters": _json.dumps({"Manager": ["Soros"], "Date": [j["date"]],
                                  "ScenarioSet": ["HistFull"]}),
          "whatif": _json.dumps(trades)}
     p = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
     mv = p["records"][0]["Model vol"]
     assert abs(mv - res["after"]["model_vol_1d"]) < 5e-10, (mv, res["after"]["model_vol_1d"])
-    q2 = dict(q); q2["filters"] = _json.dumps({"Book": ["Soros"], "ScenarioSet": ["HistFull"]})
+    q2 = dict(q); q2["filters"] = _json.dumps({"Manager": ["Soros"], "ScenarioSet": ["HistFull"]})
     assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=30).status_code == 400
     q3 = dict(q); q3["whatif"] = _json.dumps([{"position": "NOPE", "weight": 0.1}])
     assert requests.get(f"{API}/pivot?{urllib.parse.urlencode(q3)}", timeout=30).status_code == 400

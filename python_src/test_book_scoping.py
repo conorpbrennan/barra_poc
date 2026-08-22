@@ -1,6 +1,6 @@
 """Every book-aware endpoint must actually honour `book`.
 
-The bug this exists to catch has no error and no stack trace: a cube query that omits the Book
+The bug this exists to catch has no error and no stack trace: a cube query that omits the Manager
 slice returns the no-book grand total, which is NOT a portfolio — `single_value` refuses to pick
 between two books' differing weights for a shared name, so the aggregate collapses. Measured on
 the 11-book build, /risk read Scenario VaR 99 = 0.0013 unsliced against 0.0352 for Soros: a 26x

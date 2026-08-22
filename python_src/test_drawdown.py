@@ -85,7 +85,7 @@ def t_drawdown_histfull_sane():
     assert len(d["path"]) == d["n"], (len(d["path"]), d["n"])
     # drawdown accumulates -> |max drawdown| >= the worst single-day loss
     q = {"rows": "ScenarioSet", "measures": "Scenario worst loss",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})}
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})}
     wl = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
     worst = wl["records"][0]["Scenario worst loss"]
     assert abs(d["max_drawdown"]) >= worst - 1e-9, (d["max_drawdown"], worst)

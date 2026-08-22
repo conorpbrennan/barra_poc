@@ -110,12 +110,13 @@ def t_meta_serves_managers():
     mgrs = j.get("managers")
     assert mgrs and isinstance(mgrs, list), mgrs
     books = {m["book"] for m in mgrs}
-    # Asserted against the cube's own Book members rather than a hardcoded {"Soros"}: production
+    # Asserted against the cube's own Manager members rather than a hardcoded {"Soros"}: production
     # was single-book when this test was written and is 11-book since the multi-manager build, so
     # a literal expectation just goes stale again on the next scope change. ("N/A" is atoti's
     # default member for exposure rows no book holds — not a manager.)
     dims = requests.get(f"{API}/dims", timeout=60).json()
-    # the pivot layer exposes the Book level under its user-facing name "Manager" (2026-08-14)
+    # the cube's level is named Manager (physically renamed from Book on 2026-08-22; the API
+    # surface has said "Manager" since 2026-08-14)
     assert books == {b for b in dims["members"]["Manager"] if b != "N/A"}, \
         (books, dims["members"]["Manager"])
     for m in mgrs:
@@ -135,7 +136,7 @@ def t_managers_meta_degrades_without_managers_frame():
     import pandas as pd
     saved = risk_api.S.get("frames")
     risk_api.S["frames"] = {"positions": pd.DataFrame({
-        "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]), "Book": ["Soros", "TigerGlobal"],
+        "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]), "Manager": ["Soros", "TigerGlobal"],
         "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
     })}   # no "managers" key at all
     try:
@@ -160,11 +161,11 @@ def t_managers_meta_uses_managers_frame_when_present():
     saved = risk_api.S.get("frames")
     risk_api.S["frames"] = {
         "positions": pd.DataFrame({
-            "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]), "Book": ["Soros", "Elliott"],
+            "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]), "Manager": ["Soros", "Elliott"],
             "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
         }),
         "managers": pd.DataFrame({
-            "Book": ["Soros"], "CIK": [1029160], "EntityName": ["SOROS FUND MANAGEMENT LLC"],
+            "Manager": ["Soros"], "CIK": [1029160], "EntityName": ["SOROS FUND MANAGEMENT LLC"],
             "FirmType": ["hedge_fund"], "n_positions_distinct": [42],
         }),
     }
@@ -205,7 +206,7 @@ def t_pivot_shocks_param():
     body = {"shocks": {"Momentum": -3.0}}
     s = requests.post(f"{API}/stress", json=body, timeout=60).json()
     q = {"rows": "Factor", "measures": "Custom stress PnL",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [s["date"]],
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [s["date"]],
                                 "ScenarioSet": ["HistFull"]}),
          "shocks": json.dumps(body["shocks"])}
     j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
@@ -233,7 +234,7 @@ def t_corr_stress_served_from_cube():
     assert cs["stressed_vol_1d"] > cs["base_vol_1d"]
     d = s["date"]
     q = {"rows": "ScenarioSet", "measures": "Stressed model vol,Model vol",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [d], "ScenarioSet": ["HistFull"]})}
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [d], "ScenarioSet": ["HistFull"]})}
     j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
     r = j["records"][0]                      # Base scenario: mult 1, blend 0
     assert abs(r["Stressed model vol"] - r["Model vol"]) < 1e-15, r
@@ -252,7 +253,7 @@ def t_stress_matches_cube_hypo():
     s = requests.post(f"{API}/stress", json={"shocks": {"Momentum": -3}}, timeout=30).json()
     # match /stress's date (it defaults to the latest) — without it the cube aggregates all dates
     q = {"rows": "ScenarioSet", "measures": "Scenario mean PnL",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [s["date"]],
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [s["date"]],
                                 "ScenarioSet": ["Hypo:MomentumCrash"]})}
     cube = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=30).json()
     cube_pnl = cube["records"][0]["Scenario mean PnL"]

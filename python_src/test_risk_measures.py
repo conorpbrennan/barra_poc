@@ -49,7 +49,7 @@ def _backend_up():
 
 def _pivot(rows, measures, book="Soros", scen="HistFull"):
     import requests
-    filters = {"Book": [book], "Date": [DATE], "ScenarioSet": [scen]}
+    filters = {"Manager": [book], "Date": [DATE], "ScenarioSet": [scen]}
     q = {"rows": rows, "measures": ",".join(measures),
          "filters": json.dumps(filters), "totals": "true"}
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
@@ -179,21 +179,21 @@ def t_scenario_pnl_filters_scope_the_path():
     """/scenario_pnl honors the generic `filters` JSON: a Book scope returns the full path; an
     Issuer drill is a non-empty subset on the SAME date axis; Date/ScenarioSet inside `filters`
     are ignored (they're the fixed path axis, taken from date=/set=)."""
-    book = _scenario_pnl({"Book": ["Soros"]})
+    book = _scenario_pnl({"Manager": ["Soros"]})
     assert book["n"] > 0 and book["var99"] > 0, book
 
     # a held issuer -> non-empty path, same length (date axis) as the book
     import requests, urllib.parse
     q = {"rows": "Issuer", "measures": "Net exposure",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})}
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})}
     recs = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()["records"]
     issuer = next(r["Issuer"] for r in recs if r.get("Net exposure"))
-    iss = _scenario_pnl({"Book": ["Soros"], "Issuer": [issuer]})
+    iss = _scenario_pnl({"Manager": ["Soros"], "Issuer": [issuer]})
     assert iss["n"] == book["n"], (iss["n"], book["n"])
     assert iss["var99"] > 0, iss
 
     # Date/ScenarioSet in `filters` must be stripped (path axis comes from the date/set params)
-    bogus = _scenario_pnl({"Book": ["Soros"], "Date": ["1999-01-01"], "ScenarioSet": ["HistFull"]})
+    bogus = _scenario_pnl({"Manager": ["Soros"], "Date": ["1999-01-01"], "ScenarioSet": ["HistFull"]})
     assert abs(bogus["var99"] - book["var99"]) < 1e-12, (bogus["var99"], book["var99"])
 
 
@@ -202,7 +202,7 @@ def t_scenario_pnl_returns_chart_datasets():
     """/scenario_pnl exposes ready-to-bind `datasets` for a JSON chart spec: a `points` feed
     (with a READABLE ISO scenario date + pnl) and a one-row `stat` feed (var / worst markers)."""
     import datetime as _dt
-    d = _scenario_pnl({"Book": ["Soros"]})
+    d = _scenario_pnl({"Manager": ["Soros"]})
     ds = d["datasets"]
     assert ds["points"] and {"date", "pnl"} <= set(ds["points"][0]), ds["points"][:1]
     _dt.date.fromisoformat(ds["points"][0]["date"])          # readable calendar date, not epoch int
@@ -222,9 +222,9 @@ def t_scenario_pnl_stats_come_from_cube():
     """var99 / worst / mean in /scenario_pnl are the CUBE measures (no numpy), so they equal the
     cube's Scenario VaR 99 / worst loss / mean PnL queried via /pivot to the last digit."""
     import requests, urllib.parse
-    d = _scenario_pnl({"Book": ["Soros"]}, sset="Evt:COVID2020")
-    q = {"rows": "Book", "measures": "Scenario VaR 99,Scenario worst loss,Scenario mean PnL",
-         "filters": json.dumps({"Book": ["Soros"], "Date": [DATE],
+    d = _scenario_pnl({"Manager": ["Soros"]}, sset="Evt:COVID2020")
+    q = {"rows": "Manager", "measures": "Scenario VaR 99,Scenario worst loss,Scenario mean PnL",
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE],
                                 "ScenarioSet": ["Evt:COVID2020"]})}
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()["records"][0]
     assert abs(d["var99"] - r["Scenario VaR 99"]) < 1e-12, (d["var99"], r["Scenario VaR 99"])
@@ -237,7 +237,7 @@ def t_scenario_pnl_sector_breakout_stacks_to_book():
     """breakout=Sector returns the loss curve decomposed by sector (each sector's per-day P&L is a
     CUBE aggregation); at the worst scenario the sectors sum to the book worst loss (they stack)."""
     import requests, urllib.parse
-    q = {"date": DATE, "set": "Evt:COVID2020", "filters": json.dumps({"Book": ["Soros"]}),
+    q = {"date": DATE, "set": "Evt:COVID2020", "filters": json.dumps({"Manager": ["Soros"]}),
          "breakout": "Sector"}
     d = requests.get(f"{API}/scenario_pnl?{urllib.parse.urlencode(q)}", timeout=60).json()
     st = d["datasets"]["dist_stacked"]
@@ -261,7 +261,7 @@ def t_day_path_markers_tie_book_cells_and_legacy_is_pruned():
     does not cover it); and the legacy ScenarioDay names are OFF the allowlist (400), round 3."""
     import requests, urllib.parse
     import pandas as pd
-    base = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
+    base = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
     new_f = {**base, "DaySet": ["Evt:COVID2020"]}
     def piv(rows, measures, flt, **extra):
         q = {"rows": rows, "measures": measures, "filters": json.dumps(flt), "totals": "false", **extra}
@@ -326,7 +326,7 @@ def t_day_vector_plan_ties_level_plan():
     for book, date in (("Soros", DATE), ("Vanguard", "2026-06-30")):
         for st in ("HistFull", "Evt:COVID2020"):
             ctx = (book, st)
-            f = {"Book": [book], "Date": [date], "ScenarioSet": [st], "DaySet": [st]}
+            f = {"Manager": [book], "Date": [date], "ScenarioSet": [st], "DaySet": [st]}
             vec = piv("Day,DayDate", MEAS, f)
             lev = piv("Day,DayDate", MEAS, f, plan="levels")
             assert vec.get("plan") == "vector" and lev.get("plan") == "levels", (ctx, vec.get("plan"), lev.get("plan"))
@@ -336,7 +336,7 @@ def t_day_vector_plan_ties_level_plan():
             for a, b in zip(vr, lr):
                 same(a, b, ctx)
             # DaySet-only filter (no ScenarioSet) is the same shape
-            v2 = piv("Day,DayDate", "PnL at day", {"Book": [book], "Date": [date], "DaySet": [st]})
+            v2 = piv("Day,DayDate", "PnL at day", {"Manager": [book], "Date": [date], "DaySet": [st]})
             assert v2.get("plan") == "vector" and len(v2["records"]) == len(vr), ctx
             for a, b in zip(v2["records"], vr):
                 assert abs(a["PnL at day"] - b["PnL at day"]) < 1e-12, (ctx, a, b)
@@ -353,7 +353,7 @@ def t_day_vector_plan_ties_level_plan():
                     tot = sum(r["PnL at day"] for r in vs["records"] if r["Day"] == day)
                     assert abs(tot - vr[day]["PnL at day"]) < 1e-12, (ctx, day, tot, vr[day]["PnL at day"])
     # no DaySet is the one Day shape the vector plan still declines: level plan + its warning
-    f = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
+    f = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["Evt:COVID2020"]}
     r = piv("Day,DayDate", "PnL at day", f)
     assert r.get("plan") == "levels" and r["warning"] and "DaySet" in r["warning"], (r.get("plan"), r["warning"])
     # TWO breakouts (2026-08-21): vector, and record-for-record equal to the level plan
@@ -435,7 +435,7 @@ def t_book_mv_is_the_13f_value_and_dollar_twin_is_measure_times_it():
     `Scenario VaR 99 $` == Scenario VaR 99 × Book MV; Market value by Issuer sums to Book MV."""
     import pandas as pd, pathlib
     pos = pd.read_parquet(pathlib.Path(__file__).resolve().parent.parent / "data" / "positions.parquet")
-    frame_mv = float(pos[(pos.Book == "Soros") & (pos.Date == DATE)].MV.sum())
+    frame_mv = float(pos[(pos.Manager == "Soros") & (pos.Date == DATE)].MV.sum())
     r = _pivot("Manager", ["Book MV", "Scenario VaR 99", "Scenario VaR 99 $", "Model vol $", "Model vol"])
     rec = r["records"][0]
     assert abs(rec["Book MV"] - frame_mv) <= 1e-6 * frame_mv, (rec["Book MV"], frame_mv)
@@ -452,7 +452,7 @@ def t_pivot_units_dollar_round_trips_names():
     """/pivot?units=dollar prices the weight-unit measures in $ under the original names and
     leaves ratios as they are; units=weight (default) is byte-identical to before."""
     import requests
-    filters = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
+    filters = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
     q = {"rows": "Sector", "measures": "Marginal Total VaR 99,% of Total VaR 99",
          "filters": json.dumps(filters), "totals": "true", "units": "dollar"}
     d = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
@@ -470,6 +470,26 @@ def t_pivot_units_dollar_round_trips_names():
         assert r["% of Total VaR 99"] == base["% of Total VaR 99"]
     assert abs(d["grand"]["Marginal Total VaR 99"] - w["grand"]["Marginal Total VaR 99"] * mv) <= 1e-9 * mv
     assert "units" in w and w["units"] == "weight"
+
+
+@test
+def t_book_alias_accepted_forever():
+    """The ONE alias regression test (CLAUDE.md: "Book" must remain accepted on INPUT forever —
+    saved views, old URLs, tests, book=/Book query params and filter keys — even though the
+    cube's physical level and every other test fixture in this suite now say "Manager"). Both a
+    `filters={"Book": [...]}` value and a `rows=Book` axis must resolve identically to their
+    `Manager` equivalents; the response always emits "Manager", never "Book"."""
+    import requests
+    canon = _pivot("Manager", ["Net exposure"])
+    q = {"rows": "Book", "measures": "Net exposure",
+         "filters": json.dumps({"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}),
+         "totals": "true"}
+    aliased = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
+    aliased.raise_for_status()
+    aliased = aliased.json()
+    assert aliased["rows"] == ["Manager"], aliased["rows"]           # never echoes "Book" back
+    assert aliased["records"] == canon["records"], (aliased["records"], canon["records"])
+    assert aliased["grand"] == canon["grand"]
 
 
 if __name__ == "__main__":

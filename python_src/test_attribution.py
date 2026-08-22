@@ -253,7 +253,7 @@ def _toy_frames():
     positions = pd.DataFrame(
         [(d, "Soros", "AAA", 0.6, 60.0, None) for d in (m1, m2)] +
         [(d, "Soros", "BBB", 0.4, 40.0, None) for d in (m1, m2)],
-        columns=["Date", "Book", "Position", "Weight", "MV", "ADV"])
+        columns=["Date", "Manager", "Position", "Weight", "MV", "ADV"])
     securities = pd.DataFrame({"Position": ["AAA", "BBB"], "Ticker": ["aaa", "bbb"]})
     return {"exposures": exposures, "factor_returns": factor_returns,
             "specific_returns": specific_returns, "positions": positions,
@@ -371,15 +371,15 @@ def t_cube_measures_foot():
     """Σ Factor contribution over Factor rows == the grand total (additive), and at book level
     Realized PnL == Factor contribution + Specific PnL.
 
-    SINGLE-BOOK ONLY. These three measures are baked columns on tables keyed without Book, so on
+    SINGLE-BOOK ONLY. These three measures are baked columns on tables keyed without Manager, so on
     a multi-book cube `_validate_pivot` rejects them outright (BOOK_INDEPENDENT_MEASURES) rather
     than serve one arbitrary book's numbers under every book's label — see
     barra_factor_risk_cube.py and t_book_independent_measures_guarded_when_multi_book, which pins
     that rejection. So on multi-book data the identity is not reachable through /pivot BY DESIGN,
     and this asserts the rejection instead of asserting nothing."""
     import requests
-    q2 = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
-          "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
+    q2 = {"rows": "Manager", "measures": "Factor contribution,Specific PnL,Realized PnL",
+          "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
     r2 = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q2)}", timeout=60)
     if len(_books()) > 1:
         assert r2.status_code == 400, r2.text
@@ -388,7 +388,7 @@ def t_cube_measures_foot():
               "guard rejection asserted instead; per-book truth is barra_pnl_attribution.py)")
         return
     q = {"rows": "Factor", "measures": "Factor contribution", "totals": "true",
-         "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
+         "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
     j = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
     s = sum(r["Factor contribution"] for r in j["records"] if r.get("Factor contribution") is not None)
     assert abs(s - j["grand"]["Factor contribution"]) < 1e-9
@@ -448,8 +448,8 @@ def t_book_independent_measures_inert_with_one_book():
     if len(_books()) > 1:
         print("    (multi-book cube: the guard is meant to fire here — see the unit test)")
         return
-    q = {"rows": "Book", "measures": "Factor contribution,Specific PnL,Realized PnL",
-         "filters": json.dumps({"Book": ["Soros"], "Date": ["2024-11-30"]})}
+    q = {"rows": "Manager", "measures": "Factor contribution,Specific PnL,Realized PnL",
+         "filters": json.dumps({"Manager": ["Soros"], "Date": ["2024-11-30"]})}
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
     assert r.status_code == 200, r.text
 
@@ -467,7 +467,7 @@ def t_book_independent_measures_guarded_when_multi_book():
     saved = risk_api.S.get("frames")
     risk_api.S["frames"] = {"positions": pd.DataFrame({
         "Date": pd.to_datetime(["2024-01-31", "2024-01-31"]),
-        "Book": ["AQR", "Bridgewater"], "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
+        "Manager": ["AQR", "Bridgewater"], "Position": ["p1", "p2"], "Weight": [1.0, 1.0],
     })}
     try:
         assert risk_api._multi_book_cube() is True
@@ -494,7 +494,7 @@ def t_book_independent_measures_allowed_with_one_book():
     import pandas as pd
     saved = risk_api.S.get("frames")
     risk_api.S["frames"] = {"positions": pd.DataFrame({
-        "Date": pd.to_datetime(["2024-01-31"]), "Book": ["Soros"], "Position": ["p1"],
+        "Date": pd.to_datetime(["2024-01-31"]), "Manager": ["Soros"], "Position": ["p1"],
         "Weight": [1.0],
     })}
     try:

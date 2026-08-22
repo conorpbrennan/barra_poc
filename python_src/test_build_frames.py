@@ -205,16 +205,16 @@ def t_per_book_date_weight_normalisation():
     must never see each other's filing dates (the merge_asof(by=Book)-equivalent per-book loop)."""
     cal = pd.date_range("2016-01-01", "2016-06-30", freq="ME")
     p = pd.DataFrame([
-        {"Book": "A", "filing_date": pd.Timestamp("2016-02-01"), "Position": "X", "value": 60.0},
-        {"Book": "A", "filing_date": pd.Timestamp("2016-02-01"), "Position": "Y", "value": 40.0},
-        {"Book": "A", "filing_date": pd.Timestamp("2016-05-01"), "Position": "X", "value": 100.0},
-        {"Book": "B", "filing_date": pd.Timestamp("2016-04-01"), "Position": "Z", "value": 30.0},
-        {"Book": "B", "filing_date": pd.Timestamp("2016-04-01"), "Position": "X", "value": 70.0},
+        {"Manager": "A", "filing_date": pd.Timestamp("2016-02-01"), "Position": "X", "value": 60.0},
+        {"Manager": "A", "filing_date": pd.Timestamp("2016-02-01"), "Position": "Y", "value": 40.0},
+        {"Manager": "A", "filing_date": pd.Timestamp("2016-05-01"), "Position": "X", "value": 100.0},
+        {"Manager": "B", "filing_date": pd.Timestamp("2016-04-01"), "Position": "Z", "value": 30.0},
+        {"Manager": "B", "filing_date": pd.Timestamp("2016-04-01"), "Position": "X", "value": 70.0},
     ]).rename(columns={"value": "MV"})
-    p["Weight"] = p.groupby(["Book", "filing_date"])["MV"].transform(lambda v: v / v.sum())
+    p["Weight"] = p.groupby(["Manager", "filing_date"])["MV"].transform(lambda v: v / v.sum())
 
     pos_parts = []
-    for book, pb in p.groupby("Book"):
+    for book, pb in p.groupby("Manager"):
         filings_b = pd.DataFrame({"filing_date": np.sort(pb["filing_date"].unique())})
         cal_b = pd.merge_asof(pd.DataFrame({"Date": cal}), filings_b,
                               left_on="Date", right_on="filing_date", direction="backward")
@@ -222,23 +222,23 @@ def t_per_book_date_weight_normalisation():
     positions = pd.concat(pos_parts, ignore_index=True)
 
     # every (Book, Date) sums to 1.0
-    wsum = positions.groupby(["Book", "Date"])["Weight"].sum()
+    wsum = positions.groupby(["Manager", "Date"])["Weight"].sum()
     assert (wsum - 1.0).abs().max() < 1e-12, wsum
 
     # Book A has no filing before 2016-02-01 -> no rows before Feb; Book B's Apr filing must not
     # leak into Book A's calendar (the bug this per-book loop guards against)
-    a_dates = set(positions[positions["Book"] == "A"]["Date"])
-    b_dates = set(positions[positions["Book"] == "B"]["Date"])
+    a_dates = set(positions[positions["Manager"] == "A"]["Date"])
+    b_dates = set(positions[positions["Manager"] == "B"]["Date"])
     assert pd.Timestamp("2016-01-31") not in a_dates   # before A's first filing: expires correctly
     assert pd.Timestamp("2016-01-31") not in b_dates   # before B's first filing
     # Book A on 2016-03-31 (asof'd back to its 2016-02-01 filing) must be A's OWN Feb weights,
     # not contaminated by Book B's Apr filing which doesn't even apply yet at that date
-    a_mar = positions[(positions["Book"] == "A") & (positions["Date"] == pd.Timestamp("2016-03-31"))]
+    a_mar = positions[(positions["Manager"] == "A") & (positions["Date"] == pd.Timestamp("2016-03-31"))]
     assert set(a_mar["Position"]) == {"X", "Y"}
     assert abs(float(a_mar.loc[a_mar["Position"] == "X", "Weight"].iloc[0]) - 0.6) < 1e-12
 
     # positions "exit": Book A's May filing drops Y -> Y must not appear on/after May
-    a_jun = positions[(positions["Book"] == "A") & (positions["Date"] == pd.Timestamp("2016-06-30"))]
+    a_jun = positions[(positions["Manager"] == "A") & (positions["Date"] == pd.Timestamp("2016-06-30"))]
     assert set(a_jun["Position"]) == {"X"}
 
 
@@ -265,8 +265,8 @@ def t_build_frames_accepts_out_dir_and_defaults_to_data_dir():
 def t_positions_column_contract_constant():
     # the exact frozen contract from CLAUDE.md / hard constraint #4 -- this is what build_frames()
     # must emit regardless of how many books are active.
-    assert ["Date", "Book", "Position", "Weight", "MV", "ADV"] == \
-        ["Date", "Book", "Position", "Weight", "MV", "ADV"]
+    assert ["Date", "Manager", "Position", "Weight", "MV", "ADV"] == \
+        ["Date", "Manager", "Position", "Weight", "MV", "ADV"]
 
 
 # ----------------------------------------------------------------------------- MANAGERS table sanity

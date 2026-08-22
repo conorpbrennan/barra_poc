@@ -267,15 +267,15 @@ _LINE_SPEC = {"$schema": _VL5, "mark": {"type": "line"},
 
 
 _SEED_QUERY = {"name": "Q1", "rows": ["Date"], "cols": [], "measures": ["Net exposure"],
-               "filters": {"Book": ["Soros"], "ScenarioSet": ["HistFull"]}}
+               "filters": {"Manager": ["Soros"], "ScenarioSet": ["HistFull"]}}
 
 
 def _seed_chart_view(name, slug_unused=None):
     import views_repo as R
     R.save_view(name, "Public", {
         "rows": ["Date"], "cols": [], "measures": ["Net exposure"],
-        "slice_dims": ["Book", "ScenarioSet"],
-        "filters": {"Book": ["Soros"], "ScenarioSet": ["HistFull"]},
+        "slice_dims": ["Manager", "ScenarioSet"],
+        "filters": {"Manager": ["Soros"], "ScenarioSet": ["HistFull"]},
         "row_tot": False, "col_tot": False, "as_pct": True, "hide_empty": True,
         "heat": True, "prec": 3, "sort": [],
         "render": "chart", "queries": [dict(_SEED_QUERY)], "chart": _LINE_SPEC})
@@ -295,11 +295,11 @@ def t_scenario_day_chart_renders_records():
             "mark": {"type": "line"},
             "encoding": {"x": {"field": "date", "type": "temporal"},
                          "y": {"field": "PnL at day", "type": "quantitative"}}}
-    covid = {"Book": ["Soros"], "Date": ["2024-12-31"], "ScenarioSet": ["Evt:COVID2020"],
+    covid = {"Manager": ["Soros"], "Date": ["2024-12-31"], "ScenarioSet": ["Evt:COVID2020"],
              "DaySet": ["Evt:COVID2020"]}
     R.save_view("Scen Day", "Public", {
         "rows": ["Day", "DayDate"], "cols": [], "measures": ["PnL at day"],
-        "slice_dims": ["Book", "Date", "ScenarioSet", "DaySet"], "filters": covid,
+        "slice_dims": ["Manager", "Date", "ScenarioSet", "DaySet"], "filters": covid,
         "row_tot": False, "col_tot": False, "as_pct": True, "hide_empty": True, "heat": True,
         "prec": 3, "sort": [], "render": "chart",
         "queries": [{"name": "Path", "rows": ["Day", "DayDate"], "cols": [],
@@ -461,7 +461,7 @@ def t_date_format_applies_to_all_graphs_at_render():
     (like the COVID sector loss curve) has that quoted format rewritten — both off the live setting."""
     import streamlit as st
     import views_repo as R
-    flt = {"Book": ["Soros"], "ScenarioSet": ["HistFull"]}
+    flt = {"Manager": ["Soros"], "ScenarioSet": ["HistFull"]}
     q = {"name": "Q", "rows": ["Date"], "cols": [], "measures": ["Net exposure"], "filters": flt}
     temporal = {"$schema": _VL5, "source": "Q", "mark": {"type": "line"},
                 "encoding": {"x": {"field": "Date", "type": "temporal"},
@@ -472,7 +472,7 @@ def t_date_format_applies_to_all_graphs_at_render():
                             "y": {"field": "Net exposure", "type": "quantitative"}}}
     R.save_view("All Fmt", "Public", {
         "rows": ["Date"], "cols": [], "measures": ["Net exposure"],
-        "slice_dims": ["Book", "ScenarioSet"], "filters": flt,
+        "slice_dims": ["Manager", "ScenarioSet"], "filters": flt,
         "row_tot": False, "col_tot": False, "as_pct": True, "hide_empty": True, "heat": True,
         "prec": 3, "sort": [], "render": "chart", "date_fmt": "%d %b %Y",
         "queries": [q], "chart": [temporal, ordinal]})

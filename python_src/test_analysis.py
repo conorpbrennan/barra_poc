@@ -97,7 +97,7 @@ def t_validate_requires_rows_and_measures():
 def t_validate_accepts_good_spec():
     """A valid spec passes the guard cleanly (no exception)."""
     import risk_api
-    risk_api._validate_pivot(["ScenarioSet"], [], ["Scenario VaR 99"], {"Book": ["Soros"]})
+    risk_api._validate_pivot(["ScenarioSet"], [], ["Scenario VaR 99"], {"Manager": ["Soros"]})
 
 
 @unit
@@ -146,7 +146,7 @@ def t_pivot_refactor_regression():
     """After extracting _pivot_result, /pivot still returns the same shape: the requested measure
     present in non-empty records, plus the rows/measures/warning envelope."""
     import requests
-    filters = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
+    filters = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
     q = {"rows": "ScenarioSet", "measures": "Scenario VaR 99",
          "filters": json.dumps(filters), "totals": "true"}
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
@@ -164,7 +164,7 @@ def t_analysis_rejects_bad_measure_no_llm():
     """POST /analysis with an off-allowlist measure -> 400, BEFORE any model call (free to probe)."""
     import requests
     body = {"rows": "ScenarioSet", "measures": "Not A Real Measure",
-            "filters": json.dumps({"Book": ["Soros"], "Date": [DATE]})}
+            "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE]})}
     r = requests.post(f"{API}/analysis", json=body, timeout=30)
     assert r.status_code == 400, f"expected 400, got {r.status_code}: {r.text[:200]}"
 
@@ -174,7 +174,7 @@ def t_analysis_rejects_bad_dim_no_llm():
     """POST /analysis with an off-allowlist dimension -> 400 (the guard is shared with /pivot)."""
     import requests
     body = {"rows": "NotADim", "measures": "Net exposure",
-            "filters": json.dumps({"Book": ["Soros"], "Date": [DATE]})}
+            "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE]})}
     r = requests.post(f"{API}/analysis", json=body, timeout=30)
     assert r.status_code == 400, f"expected 400, got {r.status_code}: {r.text[:200]}"
 
@@ -185,7 +185,7 @@ def t_analysis_streams_markdown():
     """End-to-end: /analysis streams non-empty markdown for a real view. Costs a few cents."""
     import requests
     body = {"rows": "ScenarioSet", "measures": "Risk HHI",
-            "filters": json.dumps({"Book": ["Soros"], "Date": [DATE]}),
+            "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE]}),
             "name": "Concentration — Risk HHI (test)"}
     r = requests.post(f"{API}/analysis", json=body, stream=True, timeout=180)
     r.raise_for_status()

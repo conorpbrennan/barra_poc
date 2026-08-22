@@ -44,9 +44,9 @@ def t_prior_filing_date():
     import pandas as pd
     import risk_api
     # monthly as-of book: {A,B} held Mar & Apr (same filing), {A,C} from Jun (new filing)
-    rows = ([{"Book": "Soros", "Date": pd.Timestamp("2024-03-31"), "Position": p} for p in "AB"]
-            + [{"Book": "Soros", "Date": pd.Timestamp("2024-04-30"), "Position": p} for p in "AB"]
-            + [{"Book": "Soros", "Date": pd.Timestamp("2024-06-30"), "Position": p} for p in "AC"])
+    rows = ([{"Manager": "Soros", "Date": pd.Timestamp("2024-03-31"), "Position": p} for p in "AB"]
+            + [{"Manager": "Soros", "Date": pd.Timestamp("2024-04-30"), "Position": p} for p in "AB"]
+            + [{"Manager": "Soros", "Date": pd.Timestamp("2024-06-30"), "Position": p} for p in "AC"])
     bpos = pd.DataFrame(rows)
     prev = risk_api._prior_filing_date(bpos, pd.Timestamp("2024-06-30"))
     assert prev == pd.Timestamp("2024-04-30"), prev          # latest date whose set != {A,C}

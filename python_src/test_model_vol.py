@@ -51,7 +51,7 @@ def _pivot(rows="", measures="", filters=None):
 
 def _book_cell(measures, scen="HistFull"):
     j = _pivot(rows="ScenarioSet", measures=measures,
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": [scen]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": [scen]})
     assert j["records"], j
     return j["records"][0]
 
@@ -90,7 +90,7 @@ def t_model_vol_drills_and_is_subadditive():
     """Per-sector Model vol: every cell positive, and the book vol <= the sum of sector vols
     (diversification — vol is sub-additive, unlike the additive marginal measures)."""
     j = _pivot(rows="Sector", measures="Model vol",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     vols = [float(r["Model vol"]) for r in j["records"] if r.get("Model vol") is not None]
     assert len(vols) >= 5, f"expected sector drill, got {len(vols)} cells"
     assert all(v > 0 for v in vols)
@@ -131,7 +131,7 @@ def t_marginal_model_vol_is_euler():
     """Marginal Model vol is the Euler decomposition: sector marginals sum EXACTLY to the book
     Model vol, and '% of Model vol' sums to 100%."""
     j = _pivot(rows="Sector", measures="Marginal Model vol,% of Model vol",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     marg = [float(r["Marginal Model vol"]) for r in j["records"]
             if r.get("Marginal Model vol") is not None]
     shares = [float(r["% of Model vol"]) for r in j["records"]
@@ -148,7 +148,7 @@ def t_marginal_model_vol_equals_ctr():
     import requests
     c = requests.get(f"{API}/contributions", params={"date": DATE}, timeout=60).json()
     j = _pivot(rows="Position", measures="Marginal Model vol",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     cube = {r["Position"]: float(r["Marginal Model vol"]) for r in j["records"]
             if r.get("Marginal Model vol") is not None}
     for p in c["positions"][:5]:
@@ -166,7 +166,7 @@ def t_incremental_model_vol_ties_to_whatif():
     c = requests.get(f"{API}/contributions", params={"date": DATE}, timeout=60).json()
     top = c["positions"][0]
     j = _pivot(rows="Position", measures="Incremental Model vol",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     cube = {r["Position"]: float(r["Incremental Model vol"]) for r in j["records"]
             if r.get("Incremental Model vol") is not None}
     w = requests.post(f"{API}/whatif",
@@ -185,7 +185,7 @@ def t_factor_return_vol_identity():
     Factor return vol (std(x·f) = |x|·std(f)) — pins the raw-vol measure that /stress and
     /reverse_stress now consume via _factor_vols."""
     j = _pivot(rows="Factor", measures="Scenario PnL vol,Net exposure,Factor return vol",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     checked = 0
     for r in j["records"]:
         if any(r.get(k) is None for k in ("Scenario PnL vol", "Net exposure", "Factor return vol")):
@@ -225,7 +225,7 @@ def t_top5_risk_share_cube():
     top5 = float(_book_cell("Top-5 risk share")["Top-5 risk share"])
     assert 0 < top5 <= 1, top5
     j = _pivot(rows="Position", measures="% of Total VaR 99",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     shares = sorted((float(r["% of Total VaR 99"]) for r in j["records"]
                      if r.get("% of Total VaR 99") is not None), reverse=True)
     assert abs(top5 - sum(shares[:5])) < 1e-12, (top5, sum(shares[:5]))
@@ -246,7 +246,7 @@ def t_gross_net_weight_measures():
     net, gross = float(r["Net weight"]), float(r["Gross weight"])
     assert gross >= abs(net) - 1e-12, (net, gross)
     j = _pivot(rows="Factor", measures="Net exposure",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     mkt = next(float(x["Net exposure"]) for x in j["records"] if x["Factor"] == "Market")
     assert abs(net - mkt) < 1e-12, (net, mkt)
     w = requests.post(f"{API}/whatif", json={"trades": []}, timeout=120).json()
@@ -277,7 +277,7 @@ def t_exceedance_rate_cube():
     hypo = _book_cell("Exceedance rate 2s", scen="Hypo:MomentumCrash").get("Exceedance rate 2s")
     assert hypo is None or (isinstance(hypo, float) and hypo != hypo), hypo
     j = _pivot(rows="Sector", measures="Exceedance rate 2s",
-               filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+               filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     cells = [float(x["Exceedance rate 2s"]) for x in j["records"]
              if x.get("Exceedance rate 2s") is not None]
     assert len(cells) >= 5 and all(0 <= c <= 1 for c in cells)
@@ -300,9 +300,9 @@ def t_pit_sets_identities():
     # earlier month: PIT vol must differ from the anachronistic full-history read
     t_mid = "2019-12-31"
     hist_mid = _pivot(rows="ScenarioSet", measures="Model vol",
-                      filters={"Book": ["Soros"], "Date": [t_mid], "ScenarioSet": ["HistFull"]})
+                      filters={"Manager": ["Soros"], "Date": [t_mid], "ScenarioSet": ["HistFull"]})
     pit_mid = _pivot(rows="ScenarioSet", measures="Model vol",
-                     filters={"Book": ["Soros"], "Date": [t_mid],
+                     filters={"Manager": ["Soros"], "Date": [t_mid],
                               "ScenarioSet": [f"PIT:{t_mid}"]})
     hv = float(hist_mid["records"][0]["Model vol"])
     pv = float(pit_mid["records"][0]["Model vol"])
@@ -316,7 +316,7 @@ def t_pit_sets_identities():
     upto = [v for d_, v in pnl if d_ <= t_mid]
     ref = statistics.stdev(upto)
     q = _pivot(rows="Factor", measures="Scenario PnL vol",
-               filters={"Book": ["Soros"], "Date": [t_mid], "ScenarioSet": [f"PIT:{t_mid}"]})
+               filters={"Manager": ["Soros"], "Date": [t_mid], "ScenarioSet": [f"PIT:{t_mid}"]})
     mom = next(float(r["Scenario PnL vol"]) for r in q["records"] if r["Factor"] == "Momentum")
     assert abs(mom - ref) < 5e-12, (mom, ref)
 

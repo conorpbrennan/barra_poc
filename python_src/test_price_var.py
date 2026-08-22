@@ -63,7 +63,7 @@ def _pivot(rows="", measures="", filters=None):
 
 def _book_cell(measures, price_set="HistFull"):
     j = _pivot(rows="PriceSet", measures=measures,
-              filters={"Book": ["Soros"], "Date": [DATE], "PriceSet": [price_set]})
+              filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": [price_set]})
     assert j["records"], j
     return j["records"][0]
 
@@ -89,7 +89,7 @@ def t_price_var_needs_priceset_context():
     if not _has_price_family():
         return
     j = _pivot(rows="ScenarioSet", measures="Price VaR 99",
-              filters={"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
+              filters={"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]})
     assert j.get("warning") and "PriceSet" in j["warning"], j.get("warning")
 
 
@@ -111,7 +111,7 @@ def t_price_var_euler_sums():
     if not _has_price_family():
         return
     j = _pivot(rows="Position", measures="Marginal Price VaR 99",
-              filters={"Book": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]}, )
+              filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]}, )
     total = sum(float(r["Marginal Price VaR 99"]) for r in j["records"] if r.get("Marginal Price VaR 99") is not None)
     book = float(_book_cell("Price VaR 99")["Price VaR 99"])
     assert abs(total - book) < 5e-4, (total, book)      # additive read-off vs interpolated quantile
@@ -122,7 +122,7 @@ def t_price_var_pct_sums_to_one():
     if not _has_price_family():
         return
     j = _pivot(rows="Position", measures="% of Price VaR 99",
-              filters={"Book": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]})
+              filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]})
     total = sum(float(r["% of Price VaR 99"]) for r in j["records"] if r.get("% of Price VaR 99") is not None)
     assert abs(total - 1.0) < 1e-6, total
 
@@ -142,7 +142,7 @@ def t_price_var_set_semantics():
         return
     hist = float(_book_cell("Price VaR 99", "HistFull")["Price VaR 99"])
     j = _pivot(rows="PriceSet", measures="Price VaR 99",
-              filters={"Book": ["Soros"], "Date": [DATE], "PriceSet": ["Evt:COVID2020"]})
+              filters={"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["Evt:COVID2020"]})
     if not j["records"]:      # the event window may not exist on every book's calendar
         return
     covid = float(j["records"][0]["Price VaR 99"])
