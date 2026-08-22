@@ -5,14 +5,14 @@ Atoti factor-risk cube (two-block historical model) + unified scenario/stress la
 
 Pairs with barra_build_frames.py. Seven input frames, plus one optional 8th (Phase 2):
   exposures        (Date, Position, Factor) -> Loading        <-- GRANULAR LEAF
-  positions        (Date, Book, Position)   -> Weight, MV      <-- multi-manager 13F overlay
+  positions        (Date, Manager, Position) -> Weight, MV      <-- multi-manager 13F overlay
   securities       (Position)               -> Ticker, CIK, CUSIP, Issuer, Sector, Country
   factor_meta      (Factor)                 -> FactorGroup
   factor_returns   (Date, Factor)           -> Return          <-- source of every scenario set
   specific_var     (Date, Position)         -> SpecificVar     <-- diagonal block
   specific_returns (Date, Position)         -> SpecificReturn  <-- daily WLS residual (attribution);
                                                                     v2-only, optional
-  managers         (Book)                   -> CIK, EntityName, FirmType, ETP-drop disclosure;
+  managers         (Manager)                -> CIK, EntityName, FirmType, ETP-drop disclosure;
                                                                     optional, Phase 2 entity dim
 
 ALL THREE SCENARIO MODES ARE ONE OPERATION:  dPnL = sum_k x_k * df_k
@@ -259,7 +259,7 @@ class _DeferredMeasures:
         self.defs, self.formats = {}, {}
 FRAME_NAMES = ["exposures", "positions", "securities", "factor_meta", "factor_returns", "specific_var"]
 # specific_returns: v2-only (PnL attribution); v1 data degrades gracefully.
-# managers: multi-manager entity metadata (Phase 2, keyed on Book); absent on any build before it
+# managers: multi-manager entity metadata (Phase 2, keyed on Manager); absent on any build before it
 # existed (incl. all v1 data) -- degrades gracefully, no entity dimension, nothing else affected.
 OPTIONAL_FRAMES = ["specific_returns", "managers",
                    # specific_pnl: the OPTIONAL precomputed (Date, Position) -> SpecPnL frame. Not
@@ -274,10 +274,10 @@ OPTIONAL_FRAMES = ["specific_returns", "managers",
 
 # The Positions columns the CUBE needs: everything a measure reads, and nothing else. The frames
 # dict keeps the full width (MV/ADV) for the API -- this list only bounds what crosses into the JVM.
-POSITION_CUBE_COLS = ["Date", "Book", "Position", "Weight", "MV"]   # MV (dollars) since 2026-08-22
+POSITION_CUBE_COLS = ["Date", "Manager", "Position", "Weight", "MV"]   # MV (dollars) since 2026-08-22
 
 # Weight-unit measures (fractions of book value) that get a DOLLAR twin "<name> $" =
-# measure × Book MV (the sliced book's 13F market value at the cell's Date). One list, shared
+# measure × Book MV (the sliced manager's 13F market value at the cell's Date). One list, shared
 # with risk_api's allowlist and /pivot?units=dollar. Ratios (% of …, HHI, Top-5, sensitivity),
 # variances, factor-unit measures, dates/counts and the book-independent attribution trio are
 # deliberately NOT here — a dollar version of them is meaningless or wrong.
@@ -557,21 +557,21 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #
     # KNOWN LIMITATION (Phase 2, multi-manager): FactorPnL/SpecPnL below are BOOK-INDEPENDENT --
     # exactly as in the single-book (Soros-only) era -- because they are baked physical columns
-    # on tables keyed WITHOUT Book (deliberately: attribution must stay immune to the what-if
+    # on tables keyed WITHOUT Manager (deliberately: attribution must stay immune to the what-if
     # trades branch, which lives on the Positions table's `scenarios[...]`, so these columns
     # cannot read Positions' live/branchable Weight at query time the way Net exposure does).
-    # Making them genuinely per-book would need Book as a SECOND reused hierarchy dual on the
+    # Making them genuinely per-book would need Manager as a SECOND reused hierarchy dual on the
     # same side table alongside Factor (reused from Exposures) -- tried and reverted: every join
-    # topology (single edge either way, or a two-edge "diamond" mapping Book via Positions AND
+    # topology (single edge either way, or a two-edge "diamond" mapping Manager via Positions AND
     # Factor via Exposures) left one of the two axes as an unresolvable ambiguous duplicate
-    # hierarchy (`Disambiguate 'Book' to ... [('Positions','Book','Book'), ('FactorPnL','Book',
-    # 'Book')]`), confirmed empirically, not merely suspected. `w` is deduped below to a SINGLE,
+    # hierarchy (`Disambiguate 'Manager' to ... [('Positions','Manager','Manager'), ('FactorPnL','Manager',
+    # 'Manager')]`), confirmed empirically, not merely suspected. `w` is deduped below to a SINGLE,
     # deterministic Weight per (Date, Position) (first book alphabetically) purely so the merge
     # can no longer silently create a duplicate-keyed row for a name held by more than one book
     # (a genuine data-corruption risk with the raw multi-book Positions frame) -- but the
     # resulting Factor contribution / Specific PnL / Realized PnL are NOT reliable for per-book
     # analysis when a name is held by more than one book; they read one arbitrary book's weight
-    # for that name regardless of which Book is sliced. Disclosed, not silently fixed. Follow-up:
+    # for that name regardless of which Manager is sliced. Disclosed, not silently fixed. Follow-up:
     # either confirm an Atoti-supported way to alias a table's column onto an EXISTING hierarchy
     # from a different table, or build N book-keyed tables in a loop over the active books.
     #
@@ -583,8 +583,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     prebuilt_factor_pnl = "FactorPnL" in exposures.columns
     prebuilt_spec_pnl = frames.get("specific_pnl")
     if not prebuilt_factor_pnl:
-        w = (positions[["Date", "Position", "Book", "Weight"]]
-             .sort_values(["Date", "Position", "Book"])
+        w = (positions[["Date", "Position", "Manager", "Weight"]]
+             .sort_values(["Date", "Position", "Manager"])
              .drop_duplicates(subset=["Date", "Position"], keep="first")
              [["Date", "Position", "Weight"]])
         exposures = exposures.merge(w, on=["Date", "Position"], how="left")
@@ -679,7 +679,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # frames on S["frames"], which keep their full width. Measured: 6.6s -> 5.0s on this table.
     positions_cube = positions[POSITION_CUBE_COLS]
     t_pos = session.read_pandas(positions_cube.head(SEED_ROWS),
-                                keys={"Date", "Book", "Position"},               table_name="Positions")
+                                keys={"Date", "Manager", "Position"},            table_name="Positions")
     t_sv  = session.read_pandas(specific.head(SEED_ROWS),
                                 keys={"Date", "Position"},                       table_name="SpecificVar")
     _mark("load.seeds")
@@ -699,7 +699,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
                                 table_name="SpecificPnL")
             if has_attribution else None)
     _mark("load.SpecificPnL")
-    t_mgr = (session.read_pandas(managers, keys={"Book"}, table_name="Managers")
+    t_mgr = (session.read_pandas(managers, keys={"Manager"}, table_name="Managers")
              if has_managers else None)
     _mark("load.Managers")
     # Price family tables (docs/price-var-plan.md): StockReturns mirrors the "big table, seeded
@@ -739,11 +739,11 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         # 7 members instead of 130. Only the honest-vol measures are mirrored onto it (below).
         t_exp.join(t_pit, t_exp["Factor"] == t_pit["Factor"])
     if t_mgr is not None:
-        # Entity metadata for the Book dimension (Phase 2). PARTIAL join on Book only, off the
-        # SAME Positions table whose un-mapped Book key already makes Book a hierarchy -- so this
-        # degrades cleanly when managers.parquet is absent (v1 data / any pre-Phase-2 build has
-        # no entity dimension, nothing else affected).
-        t_pos.join(t_mgr, t_pos["Book"] == t_mgr["Book"])
+        # Entity metadata for the Manager dimension (Phase 2). PARTIAL join on Manager only, off
+        # the SAME Positions table whose un-mapped Manager key already makes Manager a hierarchy --
+        # so this degrades cleanly when managers.parquet is absent (v1 data / any pre-Phase-2 build
+        # has no entity dimension, nothing else affected).
+        t_pos.join(t_mgr, t_pos["Manager"] == t_mgr["Manager"])
     if t_price is not None:
         # Second copy of the Scenario partial-join trick: PriceSet becomes its own switch
         # hierarchy off the un-mapped key -- but mapping POSITION only (Price PnL has no Factor
@@ -770,27 +770,30 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # (cube RSS measured at 1.1 GB on this dataset, against 62 GB on the box).
     cube.shared_context["queriesResultLimit.intermediateLimit"] = 20_000_000
     cube.shared_context["queriesResultLimit.transientLimit"] = 200_000_000
-    # 124-book expansion (2026-08-14): an all-books query (Book on rows, scenario measures) is 123
+    # 124-book expansion (2026-08-14): an all-books query (Manager on rows, scenario measures) is 123
     # per-book P&L vectors in one plan and blows ActivePivot's 30s default; single-book slices run
     # ~3s. Raised so cross-book comparison queries can complete rather than 500.
     cube.shared_context["queriesTimeLimit"] = 120
 
     # ONE `update()` for every explicit hierarchy: `h[name] = ...` runs its own GraphQL mutation
-    # batch and a cube refresh per call, so the four (five with Manager) assignments cost five
+    # batch and a cube refresh per call, so the four (five with Entity) assignments cost five
     # refreshes. Same hierarchies, same levels -- one round of mutations.
     #   Security     — the browse dimension.
     #   PositionRank — FLAT position hierarchy for GLOBAL cross-member ranking (tt.rank ranks
     #                  siblings; under Security a position's siblings are its issuer's positions).
     #                  Level named PositionR so the plain l["Position"] lookups stay unambiguous;
     #                  hidden — rank plumbing, not a browse dim.
-    #   Manager      — entity dimension (Phase 2): a SEPARATE hierarchy, not extra levels grafted
-    #                  onto "Book", so the pre-existing auto-created single-level "Book" hierarchy
-    #                  (and every filter/level lookup against it elsewhere, incl. risk_api.py) is
-    #                  untouched. Manager is 1:1 with Book (same t_pos->t_mgr row), so filtering by
-    #                  either stays consistent. It's never passed to a lift/OriginScope call,
-    #                  exactly like Book itself -- so it always reads whatever book is currently
-    #                  sliced, and is blank/ambiguous at the no-book grand total (same as any other
-    #                  book-scoped attribute; see the grand-total note near Net exposure).
+    #   Entity       — entity dimension (Phase 2, renamed from "Manager" on the physical rename
+    #                  2026-08-22 to stop clashing with the auto-created Manager hierarchy that
+    #                  the Positions table's Manager key now produces): a SEPARATE hierarchy, not
+    #                  extra levels grafted onto "Manager", so the pre-existing auto-created
+    #                  single-level "Manager" hierarchy (and every filter/level lookup against it
+    #                  elsewhere, incl. risk_api.py) is untouched. Entity is 1:1 with Manager (same
+    #                  t_pos->t_mgr row), so filtering by either stays consistent. It's never
+    #                  passed to a lift/OriginScope call, exactly like Manager itself -- so it
+    #                  always reads whatever manager is currently sliced, and is blank/ambiguous
+    #                  at the no-manager grand total (same as any other manager-scoped attribute;
+    #                  see the grand-total note near Net exposure).
     _hiers = {
         "Security": {"Country": t_sec["Country"], "Sector": t_sec["Sector"],
                      "Issuer": t_sec["Issuer"], "Position": t_exp["Position"]},
@@ -799,8 +802,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         "Date": {"Date": t_exp["Date"]},
     }
     if t_mgr is not None:
-        _hiers["Manager"] = {"FirmType": t_mgr["FirmType"], "EntityName": t_mgr["EntityName"],
-                             "CIK": t_mgr["CIK"]}
+        _hiers["Entity"] = {"FirmType": t_mgr["FirmType"], "EntityName": t_mgr["EntityName"],
+                            "CIK": t_mgr["CIK"]}
     _mark("hierarchies.build_spec")
     h.update(_hiers)
     _mark("hierarchies.update")
@@ -808,12 +811,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         h["PositionRank"].visible = False
     except Exception:
         pass
-    # Book and ScenarioSet are NOT created manually: they are the un-mapped key columns of the
-    # partial joins (Positions, Scenarios). In manual cube mode atoti auto-creates their
+    # Manager and ScenarioSet are NOT created manually: they are the un-mapped key columns of
+    # the partial joins (Positions, Scenarios). In manual cube mode atoti auto-creates their
     # hierarchies once the mapped key columns (Date, Position, Factor) have hierarchies.
     _mark("hierarchies.hide_rank")
     _hier_names = {n for _, n in h}
-    assert {"Book", "ScenarioSet"} <= _hier_names, sorted(_hier_names)
+    assert {"Manager", "ScenarioSet"} <= _hier_names, sorted(_hier_names)
     if t_pit is not None:
         assert "PITSet" in _hier_names, sorted(_hier_names)
     if has_price:
@@ -831,8 +834,9 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m.fmt("Net exposure", "DOUBLE[0.000]")
 
     # ---- entity dimension measures (Phase 2): the managers.parquet disclosure fields, read at
-    # whatever Book is currently sliced (single_value over the Book-keyed Managers table joined
-    # via Positions -- see the Manager hierarchy note above). Blank/ambiguous with no Book slice.
+    # whatever Manager is currently sliced (single_value over the Manager-keyed Managers table
+    # joined via Positions -- see the Entity hierarchy note above). Blank/ambiguous with no
+    # manager slice.
     if t_mgr is not None:
         m["Manager ETP dropped value share"] = tt.agg.single_value(t_mgr["dropped_value_share_latest"])
         m.fmt("Manager ETP dropped value share", "DOUBLE[0.00%]")
@@ -987,7 +991,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # compatibility only (the notebook idiom) and is ~40x slower.
     #
     #   book path      cube.query(m["PnL at day"], levels=[l["Day"], l["DayDate"]],
-    #                             filter=(l["Date"] == d) & (l["Book"] == b) & (l["DaySet"] == "HistFull"))
+    #                             filter=(l["Date"] == d) & (l["Manager"] == b) & (l["DaySet"] == "HistFull"))
     #   day x sector   ... levels=[l["Day"], l["Sector"]]  (the shape the old path could not do at all)
     #
     # Take the calendar date off the `DayDate` LEVEL (1:1 with Day, so it adds no rows) rather than
@@ -1171,7 +1175,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # P&L vector). A member's contribution is its OWN P&L on that SAME book scenario, so the
     # contributions are additive: Σ_member Component = book P&L at t* = Scenario VaR 99.
     #   book_pnl_vec  -> the full-book P&L vector regardless of the current Factor/Security cell
-    #                    (tt.total lifts those hierarchies to their top; Date/Book/ScenarioSet
+    #                    (tt.total lifts those hierarchies to their top; Date/Manager/ScenarioSet
     #                    stay on the current slice, so the tail is the sliced book's tail).
     #   tail_idx      -> index of that book vector's 1% quantile (the VaR scenario).
     book_pnl_vec = tt.total(m["Scenario PnL vector"], h["Security"], h["FactorDim"], h["PositionRank"])
