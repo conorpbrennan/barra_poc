@@ -120,6 +120,16 @@ describe("Pivot — loading a saved view", () => {
     expect(screen.getByDisplayValue("Public")).toBeInTheDocument();
   });
 
+  it("shows the display options (decimals etc.) in the builder's Display zone", async () => {
+    renderPivot();
+    await waitFor(() => expect(screen.getByText("Financials")).toBeInTheDocument());
+    expect(screen.getByText("Display")).toBeInTheDocument();
+    const dec = screen.getByLabelText(/decimals/) as HTMLInputElement;
+    expect(dec.value).toBe("3");
+    expect(screen.getByLabelText(/hide empty/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/total row/)).toBeInTheDocument();
+  });
+
   it("updates the Fields section (R/C/F/M) to the loaded view", async () => {
     renderPivot();
     await waitFor(() => expect(screen.getByText("Financials")).toBeInTheDocument());

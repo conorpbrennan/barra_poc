@@ -219,6 +219,25 @@ export function Pivot() {
     ...hypoParams(cfg),
   };
 
+  // the view's display options — Streamlit's sidebar set — shown in the builder's Display zone
+  const display = (
+    <div className="small" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem 0.6rem" }}>
+      <label className="row"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
+      <label className="row"><input type="checkbox" checked={cfg.asPct} onChange={(e) => setCfg((c) => ({ ...c, asPct: e.target.checked }))} /> as %</label>
+      <label className="row" title="Total row — the cube's grand / per-column margin, pinned at the bottom">
+        <input type="checkbox" checked={cfg.totals} onChange={(e) => { const next = { ...cfg, totals: e.target.checked }; setCfg(next); reload(next); }} /> total row</label>
+      <label className="row" title="Total column — the cube's per-row margin across the column dim (needs a column field)"
+        style={{ opacity: cfg.cols.length ? 1 : 0.45 }}>
+        <input type="checkbox" checked={cfg.rowTot} disabled={!cfg.cols.length}
+          onChange={(e) => { const next = { ...cfg, rowTot: e.target.checked }; setCfg(next); reload(next); }} /> total column</label>
+      <label className="row" title="Drop rows / columns that are entirely blank; totals are kept">
+        <input type="checkbox" checked={cfg.hideEmpty} onChange={(e) => setCfg((c) => ({ ...c, hideEmpty: e.target.checked }))} /> hide empty</label>
+      <label className="row" title="Decimals shown (of the percent when % is on)">
+        decimals <input type="number" min={0} max={6} value={cfg.prec} style={{ width: "3rem" }}
+          onChange={(e) => setCfg((c) => ({ ...c, prec: Math.max(0, Math.min(6, Number(e.target.value) || 0)) }))} /></label>
+    </div>
+  );
+
   return (
     <main className="lens" style={{ paddingRight: "1rem" }}>
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -232,19 +251,6 @@ export function Pivot() {
           <button onClick={() => setShowRepo((s) => !s)}>{showRepo ? "Hide" : "Views"}</button>
           <button className={hypoActive ? "primary" : ""} onClick={() => setShowHypo((s) => !s)}>
             Hypothetical{hypoActive ? " ●" : ""}</button>
-          <label className="row small"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
-          <label className="row small"><input type="checkbox" checked={cfg.asPct} onChange={(e) => setCfg((c) => ({ ...c, asPct: e.target.checked }))} /> %</label>
-          <label className="row small" title="Total row — the cube's grand / per-column margin, pinned at the bottom">
-            <input type="checkbox" checked={cfg.totals} onChange={(e) => { const next = { ...cfg, totals: e.target.checked }; setCfg(next); reload(next); }} /> total row</label>
-          <label className="row small" title="Total column — the cube's per-row margin across the column dim (needs a column field)"
-            style={{ opacity: cfg.cols.length ? 1 : 0.45 }}>
-            <input type="checkbox" checked={cfg.rowTot} disabled={!cfg.cols.length}
-              onChange={(e) => { const next = { ...cfg, rowTot: e.target.checked }; setCfg(next); reload(next); }} /> total column</label>
-          <label className="row small" title="Drop rows / columns that are entirely blank; totals are kept">
-            <input type="checkbox" checked={cfg.hideEmpty} onChange={(e) => setCfg((c) => ({ ...c, hideEmpty: e.target.checked }))} /> hide empty</label>
-          <label className="row small" title="Decimals shown (of the percent when % is on)">
-            decimals <input type="number" min={0} max={6} value={cfg.prec} style={{ width: "3.2rem" }}
-              onChange={(e) => setCfg((c) => ({ ...c, prec: Math.max(0, Math.min(6, Number(e.target.value) || 0)) }))} /></label>
         </div>
       </div>
 
@@ -258,7 +264,7 @@ export function Pivot() {
       <QueryState q={dimsQ}>
         {(dims) => (
           <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", marginTop: "0.6rem" }}>
-            <FieldList cfg={cfg} setCfg={setCfg} dims={dims} onApply={() => reload()} />
+            <FieldList cfg={cfg} setCfg={setCfg} dims={dims} onApply={() => reload()} display={display} />
             <div style={{ flex: 1, minWidth: 0 }}>
               {loading && <div className="spin">querying cube…</div>}
               {mode === "grid" ? (

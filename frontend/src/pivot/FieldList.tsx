@@ -41,8 +41,9 @@ function Zone({ title, children }: { title: string; children: React.ReactNode })
 }
 
 export function FieldList({
-  cfg, setCfg, dims, onApply,
-}: { cfg: PivotConfig; setCfg: (u: (c: PivotConfig) => PivotConfig) => void; dims: Dims; onApply: () => void }) {
+  cfg, setCfg, dims, onApply, display,
+}: { cfg: PivotConfig; setCfg: (u: (c: PivotConfig) => PivotConfig) => void; dims: Dims; onApply: () => void;
+     display?: React.ReactNode }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [filterDim, setFilterDim] = useState<string>("");
 
@@ -106,6 +107,7 @@ export function FieldList({
           <Chip key={d} id={d} label={`${d}=${v.length > 1 ? `${v.length}` : v[0]}`} onRemove={() => setFilter(d, [])} />
         ))}
       </Zone>
+      {display && <Zone title="Display">{display}</Zone>}
 
       {scenMeasureNoCtx && (
         <div className="small rag-amber" style={{ marginBottom: "0.5rem" }}>
