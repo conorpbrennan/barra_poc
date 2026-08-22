@@ -141,32 +141,71 @@ inline (`> 🔎 query_cube …`) so the grounding is visible. UI "💬 Ask the r
 400; live full loop opt-in via `RUN_LLM=1`, asserts a `query_cube` marker appears). Step 10 of the
 risk-tooling roadmap.
 
-## Dollars in the cube (`Book MV`, `<measure> $`, `/pivot?units=dollar`) — 2026-08-22
+## Dollars in the cube — the `Units` context (`Book MV`, `/pivot?units=dollar`) — 2026-08-22
 
-Every risk measure is in **weight units** (fractions of book value). The 13F market value now
-also lives in the cube: `POSITION_CUBE_COLS` carries `MV` (dollars), **`Market value`** = $ held in
-the cell (one term per (Date, Position), the Specific-variance idiom), **`Book MV`** = the sliced
-book's value, lifted over every non-book hierarchy incl. the Day path, and a **`"<measure> $"`
-twin = measure × Book MV** for every weight-unit measure in `DOLLAR_MEASURES` (one list in
-`barra_factor_risk_cube.py`, imported by `risk_api.py`; ratios, variances, factor-unit measures,
-dates/counts and the book-independent attribution trio deliberately have no twin). **Unit fix in
-the builder**: 13F values were filed in $ thousands until the SEC's 2023 amendment (filings made
+Every risk measure is in **weight units** (fractions of book value) by default. The 13F market
+value lives in the cube: `POSITION_CUBE_COLS` carries `MV` (dollars), **`Market value`** = $ held
+in the cell (one term per (Date, Position), the Specific-variance idiom), **`Book MV`** = the
+sliced book's value, lifted over every non-book hierarchy incl. the Day path. **Unit fix in the
+builder**: 13F values were filed in $ thousands until the SEC's 2023 amendment (filings made
 on/after `THIRTEENF_DOLLARS_FROM` = 2023-01-03 are whole dollars) — `_parse_infotable` normalises
 to dollars; `barra_refresh_positions_mv.py` rewrote only the `MV` column of the existing
 `positions.parquet` from the cached filings (row set asserted identical; Weight/ADV untouched) so
 no 60-min rebuild was needed. A what-if branch moves Weight, not MV, so a hypothetical's $ figures
 are priced on the base book size — disclosed, not fixed.
 
-`GET /pivot?units=dollar` swaps each requested measure for its `$` twin, runs the same guarded
-pivot, and returns the records **under the original names** with `units: "dollar"` and
-`dollar_measures` (the ones converted); default `units=weight` is unchanged (+ `units: "weight"`).
-`/dims.measures` hides the twins from the picker (`Market value`/`Book MV` stay) and publishes
-`dollar_measures`. Vite: the Pivot builder's Display zone has `units: % / fraction / $` (the first
-two are formats of the same numbers; `$` re-queries), saved as the view's `units`; `$` cells render
-whole dollars with separators (`money()`), ignoring `prec`. Notebooks: query the twins directly
-(`m["Total VaR 99 $"]`), `style_grid` formats `… $`/`Market value`/`Book MV` columns as money; both
-demo notebooks carry an "L1 in dollars" cell. Tests: `test_risk_measures.py` (pure `_undollar`,
-Book MV == parquet MV, twin == measure × Book MV, `/pivot?units` round trip); `PivotGrid.test.ts`.
+**Units is a CONTEXT you slice, not a second vocabulary of measure names** (replaced the original
+`"<measure> $"` twin design the same day it shipped — a 40-measure twin family the desk decided
+was the wrong shape). A global `create_parameter_simulation("Units", measures={"Dollar on": 0.0})`
+carries one static scenario, `"$"` (`Dollar on = 1.0`), appended at build time; Base (`Dollar on =
+0.0`) is the default. `_DeferredMeasures.dollarable(name, expr)` (in `barra_factor_risk_cube.py`)
+is how a weight-unit measure opts in: it publishes the raw `expr` under a **hidden** `"<name>
+(wt)"` measure and republishes `name` itself as `tt.where(Dollar on == 1, "<name> (wt)" × Book MV,
+"<name> (wt)")` — so the EXISTING measure name reads weight units on Base and dollars on the `$`
+slice. `DOLLAR_MEASURES` (still one list in `barra_factor_risk_cube.py`, imported by
+`risk_api.py`) now means "responds to Units", not "has a twin"; ratios, variances, factor-unit
+measures, dates/counts and the book-independent attribution trio are deliberately not on it.
+`Market value` / `Book MV` are never wrapped — they're always dollars, and (along with the Units
+simulation itself) are hoisted to just after the hierarchies are created, before the first
+measure flush, since every `dollarable()` call downstream needs `Book MV`.
+
+**The ratio-reference audit.** Because `Units` is an ambient context (not a per-measure switch),
+ANY formula that reads a dollarable measure by its public name would silently inherit the `$`
+slice too — including formulas that aren't themselves dollarable (every `% of …` ratio, `Risk
+HHI`, `Top-5 risk share`, `VaR sensitivity`, `Min-variance hedge ratio`, `Exceedance rate 2s`) and
+a dollarable measure's OWN internals (e.g. `Total VaR 99`'s formula reads `Scenario VaR 99` and
+`Specific vol`). Every such internal reference was rewritten to read the raw `"<name> (wt)"`
+measure instead, so a ratio never double-scales and a dollarable measure's raw value is built from
+other raw values, not from the ambient-sliced public name. The raw `"(wt)"` measures are hidden
+(`.visible = False`) after the final publish — they're plumbing, not something a UI should list.
+
+`GET /pivot?units=dollar` ANDs `l["Units"] == "$"` into the query filter and reads the SAME
+measure names the caller asked for — no rename round trip. The response contract is UNCHANGED:
+records under the plain measure names, `units: "dollar"|"weight"`, and `dollar_measures` (which
+requested measures are on `DOLLAR_MEASURES`); default `units=weight`. A legacy `"<name> $"`
+measure name (the pre-refactor twin) 400s with a clear pointer at `units=dollar` instead of an
+opaque "unknown measure" (`_LEGACY_DOLLAR_NAMES`). `filters` also accepts an **unadvertised**
+`{"Units": ["$"|"Base"]}` alias (`_units_filter_is_dollar`) for saved-view round-tripping; `Units`
+itself never appears in `DIM_NAMES`/`/dims.dimensions`. `/dims.measures` is the plain
+`MEASURE_NAMES` list (62 measures — no twins to filter out any more) and publishes
+`dollar_measures` (self-pruned to `DOLLAR_MEASURES` members that exist, e.g. the Price family when
+`stock_returns.parquet` is absent).
+
+**Every saved report defaults to dollars.** Every JSON view under `views/` carries `"units":
+"dollar"` in `state` (`author_chart_views.py` never touches that key, so a rerun preserves it);
+the Vite Pivot lens's default config and `loadViewState`'s fallback are both `"dollar"` — an
+explicit `"weight"` in a saved view still wins. The Pivot builder's Display zone still has `units:
+% / fraction / $` (the first two are formats of the same weight-unit numbers; `$` re-queries the
+cube's Units context), saved as the view's `units`; `$` cells render whole dollars with separators
+(`money()`), ignoring `prec`. Notebooks: query the SAME measure names under `l["Units"] == "$"`
+(e.g. `m["Total VaR 99"]` sliced to `$`, not a `"Total VaR 99 $"` measure that no longer exists);
+`style_grid` still auto-money-formats `Market value`/`Book MV`, and takes an explicit `money=[...]`
+list for whichever other measures a cell queried under the `$` slice. Both demo notebooks carry an
+"L1 in dollars" cell on this pattern. Tests: `test_risk_measures.py` (pure `_units_is_dollar`/
+`_units_filter_is_dollar`/the legacy-name 400/no `"<name> $"` left in `MEASURE_NAMES`; Base values
+pinned byte-identical to the pre-refactor twins; a `$`-sliced value == the weight value × Book MV
+under the SAME name; ratio invariance under the slice is exact equality; the `/pivot?units` round
+trip), `test_price_var.py` (the Price family's own dollar test), `PivotGrid.test.ts`.
 
 ## Price VaR — historical simulation on raw stock returns, and the Model-vs-Price bridge (`/var_bridge`) — 2026-08-22
 
