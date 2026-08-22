@@ -978,24 +978,24 @@ different source APIs; they are resolved to a single FIGI before frames are emit
 | Frame | Key | Payload | Role |
 |---|---|---|---|
 | `exposures` | (Date, Position, Factor) | Loading | the granular leaf |
-| `positions` | (Date, Book, Position) | Weight, MV, ADV | multi-manager 13F weight overlay (Phase 1, 2026-07-30) — one `Book` per manager in `MANAGERS`; weights normalise per **(Book, filing_date)**, as-of joined PER BOOK against that book's own filing calendar (ADV = trailing-63d $ vol, for `/liquidity`) |
+| `positions` | (Date, Manager, Position) | Weight, MV, ADV | multi-manager 13F weight overlay (Phase 1, 2026-07-30) — one `Manager` row per manager in `MANAGERS`; weights normalise per **(Manager, filing_date)**, as-of joined PER BOOK against that book's own filing calendar (ADV = trailing-63d $ vol, for `/liquidity`) |
 | `securities` | (Position) | Ticker, CIK, CUSIP, Issuer, Sector, Country | dimension |
 | `factor_meta` | (Factor) | FactorGroup | dimension |
 | `factor_returns` | (Date, Factor) | Return | the shared scenario cache |
 | `specific_var` | (Date, Position) | SpecificVar | diagonal idiosyncratic block |
 | `specific_returns` | (Date, Position) | SpecificReturn | daily WLS residual `u` (PnL attribution); **v2-only, optional** — v1 doesn't emit it and the cube/API degrade gracefully (attribution measures/endpoints absent) |
-| `managers` | (Book) | CIK, EntityName, FirmType, filing/coverage stats, ETP-drop disclosure | **optional 8th frame** (Phase 2, 2026-07-30), dimension-like, NOT part of the seven-frame contract — absent on any pre-Phase-2 build (incl. all v1 data); the cube's `Manager` hierarchy + its three disclosure measures degrade cleanly to absent, same pattern as `specific_returns` |
+| `managers` | (Manager) | CIK, EntityName, FirmType, filing/coverage stats, ETP-drop disclosure | **optional 8th frame** (Phase 2, 2026-07-30), dimension-like, NOT part of the seven-frame contract — absent on any pre-Phase-2 build (incl. all v1 data); the cube's `Entity` hierarchy (see the physical-rename note below) + its three disclosure measures degrade cleanly to absent, same pattern as `specific_returns` |
 
 Two risk blocks only: a linear **factor P&L** block (driven by `factor_returns`) and a
 **diagonal specific-risk** block (`specific_var`). No full specific covariance matrix.
 
 Each book's 13F filings are a quarterly weight overlay **as-of joined** onto the monthly/COB
 calendar (lagged by filing date via `pd.merge_asof(..., direction="backward")`), one join **PER
-BOOK** against that book's own filing calendar (`for book, pb in p.groupby("Book")`, not one
-global `merge_asof` across books — simpler to reason about than `merge_asof(..., by="Book")`;
+BOOK** against that book's own filing calendar (`for book, pb in p.groupby("Manager")`, not one
+global `merge_asof` across books — simpler to reason about than `merge_asof(..., by="Manager")`;
 both were permitted, this one was chosen). The as-of join selects the latest *filing* per
 calendar date and takes only the names in that filing — exited positions expire on the next
-filing, so weights sum to 1.0 on every (Book, Date), not just every Date.
+filing, so weights sum to 1.0 on every (Manager, Date), not just every Date.
 
 ## The cube's central design: scenarios as one operation
 
@@ -1092,9 +1092,14 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   `scenario_pnl` feed migration (`_queries_from_state`, mirrors ScenarioSet onto DaySet), the two
   demo notebooks (source rewritten; re-run to refresh outputs), `test_notebook.py`,
   `test_pivot_app.py`, the Vite `ChartMode` fixtures, `cube_bench.py`'s `day_path_*` entries.
-- **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface;
-  `Book` remains a permanent input alias, the cube level itself is still named `Book` — see
-  `DIM_ALIASES`/`DIM_LEVELS`/`_lvl` in `risk_api.py`). The context bar says "Manager".
+- **The pivot dimension is exposed as `Manager`** (renamed from `Book` at the API surface
+  2026-08-14; **the cube's physical level/column followed on 2026-08-22** — `positions.parquet`
+  and `managers.parquet` now carry a `Manager` column, and `l["Manager"]` is the direct cube
+  lookup everywhere, incl. `risk_api.py`. `Book` remains a permanent INPUT alias (saved views,
+  old URLs, `book=`/`Book` filter keys) via `DIM_ALIASES = {"Book": "Manager"}` and `_canon_dim`
+  — unchanged; `DIM_LEVELS` collapsed from `{"Manager": "Book"}` to `{}` since there is no
+  longer a name to map to, and `_lvl` is now just alias resolution + indexing). The context bar
+  says "Manager".
 - **Precomputes are manager-aware**: all five single-book precompute scripts take a book (CLI
   arg / `run(book=)`) and write `<stem>.<Book>.parquet` (legacy unsuffixed = Soros);
   `_resolve_artifact` serves a book's own artifact first, else the Phase-3 guard applies. Every
@@ -1166,23 +1171,29 @@ comfortably above the measured union, not just above whatever the current build 
 need.
 
 **The entity dimension (Phase 2, cube).** The optional `managers` frame joins onto `Positions`
-via a **partial join on `Book`** and backs a separate `Manager` hierarchy
-(`FirmType`/`EntityName`/`CIK`) plus three measures (`Manager ETP dropped value share`,
-`Manager n filings`, `Manager n positions`) — deliberately **NOT** grafted onto the existing
-auto-created single-level `Book` hierarchy, so every existing `l["Book"]` lookup elsewhere
-(including all of `risk_api.py`) is untouched. `Manager` is 1:1 with `Book`; like `Book` itself
-it's never passed to a lift/`OriginScope` call, so it reads whatever book is currently sliced
-and is blank/ambiguous with no book slice (same as any other book-scoped measure).
+via a **partial join on `Manager`** and backs a separate hierarchy (`FirmType`/`EntityName`/
+`CIK`) plus three measures (`Manager ETP dropped value share`, `Manager n filings`, `Manager n
+positions`) — deliberately **NOT** grafted onto the auto-created single-level `Manager`
+hierarchy that `Positions`'s own un-mapped key produces. That entity hierarchy was itself named
+`Manager` through 2026-08-21 (the auto-created key hierarchy was still `Book` back then, so the
+two names didn't clash); **the 2026-08-22 physical rename swapped that — `Positions`'s key
+column (and its auto-created hierarchy) became `Manager`, so the pre-existing explicit entity
+hierarchy was renamed to `Entity` in the same commit** to avoid the clash. Every existing
+`l["Manager"]` lookup elsewhere (including all of `risk_api.py`) reads the (now-renamed)
+key hierarchy, unaffected by the entity hierarchy's rename. `Entity` is 1:1 with `Manager`; like
+`Manager` itself it's never passed to a lift/`OriginScope` call, so it reads whatever book is
+currently sliced and is blank/ambiguous with no book slice (same as any other book-scoped
+measure).
 
 **The book-independent attribution limitation.** `Factor contribution`, `Specific PnL` and
-`Realized PnL` are baked physical columns on tables keyed WITHOUT Book — deliberately, so
+`Realized PnL` are baked physical columns on tables keyed WITHOUT Manager — deliberately, so
 attribution stays immune to the what-if trades branch (which lives on the Positions table's
 live weight, not a static column). With more than one book loaded, a name held by several
 managers reads **one arbitrary book's weight** (first alphabetically, after a deterministic
-dedupe) under every book's label. The proper fix — Book as a second reused hierarchy dual
+dedupe) under every book's label. The proper fix — Manager as a second reused hierarchy dual
 alongside Factor — was tried and **empirically blocked by atoti 0.9.15**: every join topology
-tried (single edge either way, a two-edge "diamond" mapping Book via Positions and Factor via
-Exposures) left one axis an unresolvable ambiguous `Book` hierarchy. So `_validate_pivot` — the
+tried (single edge either way, a two-edge "diamond" mapping Manager via Positions and Factor via
+Exposures) left one axis an unresolvable ambiguous `Manager` hierarchy. So `_validate_pivot` — the
 ONE chokepoint `/pivot`, `/analysis`, and `/ask`'s `query_cube` tool all share — now **rejects
 these three measures whenever more than one book is loaded** (`BOOK_INDEPENDENT_MEASURES`,
 unconditional on whether the query is book-sliced, since even an unsliced query hits the same
@@ -1210,7 +1221,7 @@ additive only, no restructuring into per-book limit sets. **Thresholds remain So
 and are NOT per-book yet.**
 
 **`/meta.managers`** is the UI's one source for the entity list (`_managers_meta()`, following
-the `hypo_shocks` precedent) — sourced from the live `positions` frame's `Book` column (never a
+the `hypo_shocks` precedent) — sourced from the live `positions` frame's `Manager` column (never a
 hardcoded list, so it reflects whatever `ACTIVE_MANAGERS` scope actually ran), decorated with
 `EntityName`/`FirmType`/`CIK`/`n_positions_distinct` from the `managers` frame when present. The
 Vite context bar's book field renders **plain text for one manager** (a `<select>` with one

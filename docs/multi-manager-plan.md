@@ -141,6 +141,11 @@ table, backing a new `Manager` hierarchy (`FirmType`/`EntityName`/`CIK`) and thr
 **separate** hierarchy rather than extra levels on the pre-existing, auto-created, single-level `Book`
 hierarchy — every `l["Book"]` lookup in the rest of the cube and in `risk_api.py` stays untouched.
 
+**2026-08-22 update:** the physical rename made `Positions`'s key (and its auto-created hierarchy)
+`Manager` — clashing with this section's `Manager` entity hierarchy, which was renamed to `Entity`
+in the same commit. Read `Book` below as `Manager` and this section's `Manager` hierarchy as
+`Entity`; see CLAUDE.md's "pivot dimension is exposed as `Manager`" note for the current state.
+
 Two things that looked like they might be landmines were investigated and found to be correct as-is,
 with no code change needed:
 
