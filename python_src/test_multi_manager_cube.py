@@ -252,7 +252,7 @@ def main():
         assert "managers" not in frames2
         session2, cube2 = C.build_cube(frames2, port=PORT + 1)
         h2, l2, m2 = cube2.hierarchies, cube2.levels, cube2.measures
-        assert "Manager" not in {n for _, n in h2}, sorted(n for _, n in h2)
+        assert "Entity" not in {n for _, n in h2}, sorted(n for _, n in h2)
         assert "Manager ETP dropped value share" not in m2
         managers = sorted(cube2.query(m2["contributors.COUNT"], levels=[l2["Manager"]]).index)
         assert managers == ["MgrA", "MgrB"], managers
