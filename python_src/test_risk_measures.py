@@ -47,11 +47,13 @@ def _backend_up():
         return False
 
 
-def _pivot(rows, measures, book="Soros", scen="HistFull"):
+def _pivot(rows, measures, book="Soros", scen="HistFull", dollar=False):
     import requests
     filters = {"Manager": [book], "Date": [DATE], "ScenarioSet": [scen]}
     q = {"rows": rows, "measures": ",".join(measures),
          "filters": json.dumps(filters), "totals": "true"}
+    if dollar:
+        q["units"] = "dollar"
     r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60)
     r.raise_for_status()
     return r.json()
@@ -404,53 +406,83 @@ def main():
 
 
 
-# ---- dollars (2026-08-22): MV in the cube, Book MV, the "<measure> $" twins, /pivot?units ----
+# ---- dollars (2026-08-22, Units-context refactor): MV in the cube, Book MV, the cube's `Units`
+# parameter simulation (weight <-> $ on the SAME measure names), /pivot?units ---------------------
 
 @test
-def t_undollar_renames_twins_back():
-    """Pure: the units=dollar payload comes back under the ORIGINAL names, the converted set
-    named, untouched measures left alone (no cube needed)."""
+def t_units_helpers_and_legacy_name_400():
+    """Pure: `_units_is_dollar`/`_units_filter_is_dollar` accept the documented spellings and
+    reject junk with a 400; a legacy "<name> $" measure name (removed 2026-08-22) 400s pointing
+    at units=dollar rather than falling through to an opaque 'unknown measure' (no cube needed)."""
     import risk_api as R
-    mlist = ["Scenario VaR 99", "% of Scenario VaR 99"]
-    qlist = [R.DOLLAR_TWINS.get(x, x) for x in mlist]
-    assert qlist == ["Scenario VaR 99 $", "% of Scenario VaR 99"]
-    data = {"measures": qlist, "records": [{"Manager": "Soros", "Scenario VaR 99 $": 1.5e8,
-                                            "% of Scenario VaR 99": 1.0}],
-            "grand": {"Scenario VaR 99 $": 1.5e8, "% of Scenario VaR 99": 1.0}, "per_row": []}
-    out = R._undollar(data, mlist, qlist)
-    assert out["records"][0] == {"Manager": "Soros", "Scenario VaR 99": 1.5e8, "% of Scenario VaR 99": 1.0}
-    assert out["grand"] == {"Scenario VaR 99": 1.5e8, "% of Scenario VaR 99": 1.0}
-    assert out["measures"] == mlist and out["units"] == "dollar"
-    assert out["dollar_measures"] == ["Scenario VaR 99"]
     assert R._units_is_dollar(None) is False and R._units_is_dollar("$") is True
+    assert R._units_is_dollar("dollar") is True and R._units_is_dollar("weight") is False
     try:
         R._units_is_dollar("euro"); assert False, "bad units must 400"
     except Exception as e:
         assert getattr(e, "status_code", None) == 400
+    assert R._units_filter_is_dollar(None) is False and R._units_filter_is_dollar(["$"]) is True
+    assert R._units_filter_is_dollar(["Base"]) is False
+    try:
+        R._units_filter_is_dollar(["euro"]); assert False, "bad Units filter must 400"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 400
+    assert "Scenario VaR 99 $" in R._LEGACY_DOLLAR_NAMES
+    assert not any(x.endswith(" $") for x in R.MEASURE_NAMES), \
+        f"no '<name> $' twin should remain in MEASURE_NAMES: {[x for x in R.MEASURE_NAMES if x.endswith(' $')]}"
 
 
 @test
-def t_book_mv_is_the_13f_value_and_dollar_twin_is_measure_times_it():
+def t_pivot_rejects_legacy_dollar_measure_name():
+    """/pivot?measures=Scenario VaR 99 $ (the removed twin) 400s with a clear pointer at
+    units=dollar, not an opaque 'unknown measure(s)'."""
+    import requests
+    filters = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
+    q = {"rows": "Manager", "measures": "Scenario VaR 99 $", "filters": json.dumps(filters)}
+    r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=30)
+    assert r.status_code == 400, r.text
+    assert "units=dollar" in r.text, r.text
+
+
+@test
+def t_base_identity_pinned():
+    """Base (weight-unit) values are BYTE-IDENTICAL to the pre-Units-context twin design — the
+    refactor changes HOW $ is served, never the weight-unit numbers. Pinned Soros/HistFull."""
+    r = _pivot("Manager", ["Total VaR 99", "Scenario VaR 99", "Book MV"])
+    rec = r["records"][0]
+    if DATE == "2026-06-30":
+        assert abs(rec["Total VaR 99"] - 0.03576148156351585) < 1e-12, rec["Total VaR 99"]
+        assert abs(rec["Scenario VaR 99"] - 0.03523562876608036) < 1e-12, rec["Scenario VaR 99"]
+        assert abs(rec["Book MV"] - 4298665482.0) < 1.0, rec["Book MV"]
+    assert rec["Book MV"] > 1e9, "Soros book is billions of dollars, not thousands — unit fix"
+
+
+@test
+def t_book_mv_ties_to_parquet_and_dollar_slice_is_measure_times_it():
     """Book MV == the positions frame's dollar MV for the book/date (tie-out to the parquet);
-    `Scenario VaR 99 $` == Scenario VaR 99 × Book MV; Market value by Issuer sums to Book MV."""
+    every DOLLAR_MEASURES member read under units=dollar == its weight-unit value × Book MV
+    (the SAME measure name in both slices — no more "<name> $" twin); Market value by Issuer
+    sums to Book MV."""
     import pandas as pd, pathlib
     pos = pd.read_parquet(pathlib.Path(__file__).resolve().parent.parent / "data" / "positions.parquet")
     frame_mv = float(pos[(pos.Manager == "Soros") & (pos.Date == DATE)].MV.sum())
-    r = _pivot("Manager", ["Book MV", "Scenario VaR 99", "Scenario VaR 99 $", "Model vol $", "Model vol"])
-    rec = r["records"][0]
-    assert abs(rec["Book MV"] - frame_mv) <= 1e-6 * frame_mv, (rec["Book MV"], frame_mv)
+    base = _pivot("Manager", ["Book MV", "Scenario VaR 99", "Model vol"])["records"][0]
+    assert abs(base["Book MV"] - frame_mv) <= 1e-6 * frame_mv, (base["Book MV"], frame_mv)
+    dollar = _pivot("Manager", ["Scenario VaR 99", "Model vol"], dollar=True)["records"][0]
+    mv = base["Book MV"]
     # dollar values are ~1e8: compare at relative precision, not an absolute 1e-3
-    assert abs(rec["Scenario VaR 99 $"] - rec["Scenario VaR 99"] * rec["Book MV"]) <= 1e-9 * rec["Book MV"]
-    assert abs(rec["Model vol $"] - rec["Model vol"] * rec["Book MV"]) <= 1e-9 * rec["Book MV"]
-    assert rec["Book MV"] > 1e9, "Soros book is billions of dollars, not thousands — unit fix"
+    assert abs(dollar["Scenario VaR 99"] - base["Scenario VaR 99"] * mv) <= 1e-9 * mv
+    assert abs(dollar["Model vol"] - base["Model vol"] * mv) <= 1e-9 * mv
     by_issuer = _pivot("Issuer", ["Market value"])
     assert abs(_col_sum(by_issuer["records"], "Market value") - frame_mv) <= 1e-6 * frame_mv
 
 
 @test
-def t_pivot_units_dollar_round_trips_names():
-    """/pivot?units=dollar prices the weight-unit measures in $ under the original names and
-    leaves ratios as they are; units=weight (default) is byte-identical to before."""
+def t_pivot_units_dollar_round_trip_unchanged_contract():
+    """/pivot?units=dollar prices every DOLLAR_MEASURES member in $ UNDER ITS OWN NAME (no
+    rename any more) and leaves ratios exactly as they are (the raw "(wt)" internals mean a
+    ratio never double-scales); the contract (units + dollar_measures keys, records under the
+    plain measure names) is unchanged; units=weight (default) is byte-identical to before."""
     import requests
     filters = {"Manager": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
     q = {"rows": "Sector", "measures": "Marginal Total VaR 99,% of Total VaR 99",
@@ -467,9 +499,12 @@ def t_pivot_units_dollar_round_trips_names():
     for r in d["records"]:
         base = wd[dims(r)]
         assert abs(r["Marginal Total VaR 99"] - base["Marginal Total VaR 99"] * mv) <= 1e-9 * mv, r
+        # ratio invariance under the Units slice: EXACTLY unchanged, not just close
         assert r["% of Total VaR 99"] == base["% of Total VaR 99"]
     assert abs(d["grand"]["Marginal Total VaR 99"] - w["grand"]["Marginal Total VaR 99"] * mv) <= 1e-9 * mv
+    assert d["grand"]["% of Total VaR 99"] == w["grand"]["% of Total VaR 99"]
     assert "units" in w and w["units"] == "weight"
+    assert "dollar_measures" not in w
 
 
 @test

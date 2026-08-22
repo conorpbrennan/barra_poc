@@ -7,7 +7,7 @@ test_price_var.py — the Price VaR family + /var_bridge (docs/price-var-plan.md
       returns a sane number, close in magnitude to Total VaR 99.
     * Euler: Σ Marginal Price VaR 99 (by Position) == Price VaR 99 (book, additive read-off).
     * `%` sums to 1: Σ % of Price VaR 99 (by Position) == 1.
-    * $ twin: Price VaR 99 $ == Price VaR 99 × Book MV.
+    * Units context: /pivot?units=dollar on Price VaR 99 == Price VaR 99 (weight) × Book MV.
     * Set semantics: an Evt:* PriceSet reads a DIFFERENT number from HistFull (a real window).
     * /var_bridge: the four terms sum to T4 - T0 exactly; verification diff is tiny; coverage is a
       fraction in [0, 1]; a Hypo:* set 400s (no Price mirror).
@@ -128,11 +128,22 @@ def t_price_var_pct_sums_to_one():
 
 
 @integ
-def t_price_var_dollar_twin():
+def t_price_var_dollar_units():
+    """Units context (2026-08-22): units=dollar slices the SAME measure name to Book MV × base —
+    there is no more "Price VaR 99 $" measure name to ask for."""
     if not _has_price_family():
         return
-    cell = _book_cell("Price VaR 99,Price VaR 99 $,Book MV")
-    var99, dollar, mv = (float(cell["Price VaR 99"]), float(cell["Price VaR 99 $"]), float(cell["Book MV"]))
+    base_cell = _book_cell("Price VaR 99,Book MV")
+    var99, mv = float(base_cell["Price VaR 99"]), float(base_cell["Book MV"])
+    import requests
+    q = {"rows": "PriceSet", "measures": "Price VaR 99", "units": "dollar",
+         "filters": json.dumps({"Manager": ["Soros"], "Date": [DATE], "PriceSet": ["HistFull"]})}
+    r = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=120)
+    r.raise_for_status()
+    jd = r.json()
+    assert jd["units"] == "dollar", jd.get("units")
+    assert "Price VaR 99" in (jd.get("dollar_measures") or []), jd.get("dollar_measures")
+    dollar = float(jd["records"][0]["Price VaR 99"])
     assert abs(dollar - var99 * mv) < max(1.0, abs(var99 * mv) * 1e-9), (dollar, var99, mv)
 
 
