@@ -247,6 +247,19 @@ class _DeferredMeasures:
         """Deferred `m[name].formatter = formatter` (each of those is its own mutation)."""
         self.formats[name] = formatter
 
+    def dollarable(self, name: str, definition) -> None:
+        """Publish `name` as a measure that responds to the `Units` context (2026-08-22): the
+        RAW weight-unit `definition` is stashed under a hidden `"<name> (wt)"` measure, and
+        `name` itself becomes a toggle — raw, or raw × Book MV when the Units simulation's `$`
+        scenario is sliced (`Dollar on == 1`). `Book MV`/`Dollar on` must already be defined
+        (hoisted to just after the hierarchies, before the first flush) since `__getitem__`
+        resolves them unchecked. Any OTHER definition that reads `name` internally must read
+        `name + " (wt)"` instead — see the DOLLAR_MEASURES ratio-reference audit — so a formula
+        never inherits the ambient Units slice a second time."""
+        self[name + " (wt)"] = definition
+        self[name] = tt.where(self["Dollar on"] == 1, self[name + " (wt)"] * self["Book MV"],
+                              self[name + " (wt)"])
+
     def flush(self) -> None:
         """Publish everything collected since the last flush (a no-op when nothing is pending)."""
         if not self.defs and not self.formats:
@@ -276,11 +289,16 @@ OPTIONAL_FRAMES = ["specific_returns", "managers",
 # dict keeps the full width (MV/ADV) for the API -- this list only bounds what crosses into the JVM.
 POSITION_CUBE_COLS = ["Date", "Manager", "Position", "Weight", "MV"]   # MV (dollars) since 2026-08-22
 
-# Weight-unit measures (fractions of book value) that get a DOLLAR twin "<name> $" =
-# measure × Book MV (the sliced manager's 13F market value at the cell's Date). One list, shared
-# with risk_api's allowlist and /pivot?units=dollar. Ratios (% of …, HHI, Top-5, sensitivity),
-# variances, factor-unit measures, dates/counts and the book-independent attribution trio are
-# deliberately NOT here — a dollar version of them is meaningless or wrong.
+# Weight-unit measures (fractions of book value) that RESPOND TO THE UNITS CONTEXT (2026-08-22):
+# each is published via `m.dollarable(name, expr)`, which stores the raw `expr` as a hidden
+# "<name> (wt)" measure and re-publishes `name` as a `Units` (Dollar on) toggle between that raw
+# value and raw × Book MV (the sliced manager's 13F market value at the cell's Date). One list,
+# shared with risk_api's allowlist and /pivot?units=dollar. Ratios (% of …, HHI, Top-5,
+# sensitivity), variances, factor-unit measures, dates/counts and the book-independent
+# attribution trio are deliberately NOT here — a dollar version of them is meaningless or wrong.
+# Each keeps its existing formatter (e.g. a "%" percent spec) regardless of Units — under the "$"
+# slice that formatter mis-renders a dollar figure, but only in the unused atoti web app; risk_api
+# always re-formats for the real UIs, so this is left as-is rather than parameterizing formatters.
 DOLLAR_MEASURES = [
     "Net exposure", "Net weight", "Gross weight",
     "Scenario VaR 95", "Scenario VaR 97.5", "Scenario VaR 99", "Scenario ES 97.5", "Scenario ES 99",
@@ -821,16 +839,46 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         assert "PITSet" in _hier_names, sorted(_hier_names)
     if has_price:
         assert "PriceSet" in _hier_names, sorted(_hier_names)
+    assert {"DaySet", "Day", "DayDate"} <= _hier_names, sorted(_hier_names)
     _mark("hierarchies.assert")
+
+    # ---- Units context (2026-08-22): $ becomes a SLICE, not a second measure name -------------
+    # Replaces the old "<measure> $" twin family: a global parameter simulation (no levels — one
+    # scalar per scenario). The Base member reads `Dollar on = 0.0` (weight units, today's
+    # behaviour, unchanged); ONE static scenario named "$" is appended here at build time with
+    # `Dollar on = 1.0`. `m.dollarable(name, expr)` (defined on `_DeferredMeasures` above) is how
+    # every weight-unit measure in DOLLAR_MEASURES opts in — it stashes the raw `expr` under a
+    # hidden "<name> (wt)" measure and republishes `name` itself as a toggle on `Dollar on`, so
+    # the EXISTING measure name reads weight units on Base and dollars on the "$" slice.
+    cube.create_parameter_simulation("Units", measures={"Dollar on": 0.0})
+    session.tables["Units"].append(("$", 1.0))
+    _mark("param_sim.Units")
+
+    # ---- dollars: the 13F market value joins the cube -------------------------------------
+    # Hoisted here (2026-08-22, the Units-context refactor) because every `dollarable()` call
+    # below needs `Book MV`, and a forward reference cannot cross the first measure flush a few
+    # lines down. Market value = $ held in the cell (one term per (Date, Position), the
+    # Specific-variance idiom — never a columnar sum across the factor fan-out). Book MV lifts it
+    # to the sliced book over every non-book hierarchy (incl. the Day path, so "PnL at day" reads
+    # dollars too). A what-if branch moves Weight, not MV, so a hypothetical's $ figures are
+    # priced on the base book size — disclosed, not fixed.
+    _day_h = (h["DaySet"], h["Day"], h["DayDate"])
+    _mv = tt.agg.single_value(t_pos["MV"])
+    m["Market value"] = tt.agg.sum(_mv, scope=tt.OriginScope({l["Date"], l["Position"]}))
+    m["Book MV"] = tt.total(m["Market value"], h["Security"], h["FactorDim"], h["PositionRank"],
+                            *_day_h)
+    for _mn in ("Market value", "Book MV"):
+        m.fmt(_mn, "DOUBLE[#,##0]")
+    _mark("measures.dollars_hoist")
 
     # ---- additive exposures (drill/slice; independent of ScenarioSet) -------------------------
     # MEASURE-LEVEL product of the leaf Loading and the JOINED Positions Weight (see the leaf-
     # products note at the top of build_cube): reads the weight at query time, so scenario
     # branches on Positions flow through this and every chained measure. Benchmarked at parity
     # with the old physical column.
-    m["Net exposure"] = tt.agg.sum(
+    m.dollarable("Net exposure", tt.agg.sum(
         tt.agg.single_value(t_exp["Loading"]) * tt.agg.single_value(t_pos["Weight"]),
-        scope=tt.OriginScope({l["Date"], l["Position"], l["Factor"]}))
+        scope=tt.OriginScope({l["Date"], l["Position"], l["Factor"]})))
     m.fmt("Net exposure", "DOUBLE[0.000]")
 
     # ---- entity dimension measures (Phase 2): the managers.parquet disclosure fields, read at
@@ -847,8 +895,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #      vector once, sum K vectors -> P&L vector for the sliced ScenarioSet. (Confirm tt.array.*
     #      helper names in your SDK; validate the OriginScope pins step-2 to one vector per Factor.)
     #      NB: query risk measures sliced to a SINGLE ScenarioSet -- vector lengths differ across sets.
+    # NB Net exposure reads the RAW "(wt)" measure — the ambient Units slice must not leak into a
+    # formula computed in exposure units (see the DOLLAR_MEASURES ratio-reference audit).
     m["Scenario PnL vector"] = tt.agg.sum(
-        m["Net exposure"] * tt.agg.single_value(t_scn["ShockVec"]),
+        m["Net exposure (wt)"] * tt.agg.single_value(t_scn["ShockVec"]),
         scope=tt.OriginScope({l["Factor"]}))
     # ---- index -> date DUAL of the P&L vector: aligned 1:1 with "Scenario PnL vector". --------
     # DateVec[i] is the date that produced PnL vector[i] (epoch days; one row per set, so
@@ -861,7 +911,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # measures stay down with Model vol; only the vector is hoisted, for the same publish reason.
     if t_pit is not None:
         m["PIT Scenario PnL vector"] = tt.agg.sum(
-            m["Net exposure"] * tt.agg.single_value(t_pit["ShockVec"]),
+            m["Net exposure (wt)"] * tt.agg.single_value(t_pit["ShockVec"]),
             scope=tt.OriginScope({l["Factor"]}))
     # ---- Price family's raw vectors: second copy of the leaf-product idiom, but PER POSITION
     # (Price PnL has no Factor structure at all) — the same OriginScope({Date, Position}) trick
@@ -881,9 +931,9 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # expressions that consume them. Everything else -- ~50 measures -- goes in the final flush.
     m.flush()
     _mark("measures.flush_vectors")
-    m["Scenario mean PnL"]   = tt.array.mean(m["Scenario PnL vector"])     # hypo: the shock P&L; hist: ~0
-    m["Scenario VaR 99"]     = -tt.array.quantile(m["Scenario PnL vector"], 0.01)
-    m["Scenario worst loss"] = -tt.array.min(m["Scenario PnL vector"])     # worst single scenario
+    m.dollarable("Scenario mean PnL",   tt.array.mean(m["Scenario PnL vector"]))     # hypo: the shock P&L; hist: ~0
+    m.dollarable("Scenario VaR 99",     -tt.array.quantile(m["Scenario PnL vector"], 0.01))
+    m.dollarable("Scenario worst loss", -tt.array.min(m["Scenario PnL vector"]))     # worst single scenario
     for k in ("Scenario mean PnL", "Scenario VaR 99", "Scenario worst loss"):
         m.fmt(k, "DOUBLE[0.00%]")
     m["Scenario n"] = tt.array.len(m["Scenario PnL vector"])   # THIS set's vector length
@@ -897,15 +947,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # MEASURE: k = ceil(alpha * n) worst observations and ES = -mean of the k lowest P&L. n_lowest
     # accepts a measure for n, so one definition serves every ragged scenario set (k >= 1 always:
     # ceil of a positive number; k <= n since alpha < 1, so never indexes past the vector).
-    m["Scenario VaR 95"]   = -tt.array.quantile(m["Scenario PnL vector"], 0.05)
-    m["Scenario VaR 97.5"] = -tt.array.quantile(m["Scenario PnL vector"], 0.025)
+    m.dollarable("Scenario VaR 95",   -tt.array.quantile(m["Scenario PnL vector"], 0.05))
+    m.dollarable("Scenario VaR 97.5", -tt.array.quantile(m["Scenario PnL vector"], 0.025))
     _k975 = tt.math.ceil(0.025 * m["Scenario n"])     # tail size for 97.5% ES
     _k99  = tt.math.ceil(0.01  * m["Scenario n"])     # tail size for 99% ES
-    m["Scenario ES 97.5"] = -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k975))
-    m["Scenario ES 99"]   = -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k99))
+    m.dollarable("Scenario ES 97.5", -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k975)))
+    m.dollarable("Scenario ES 99",   -tt.array.mean(tt.array.n_lowest(m["Scenario PnL vector"], _k99)))
     # plain dispersion of the scenario P&L (per-observation sigma, same units as the returns): the
     # non-tail risk number that pairs with VaR/ES and feeds the diversification read below.
-    m["Scenario PnL vol"] = tt.array.std(m["Scenario PnL vector"])
+    m.dollarable("Scenario PnL vol", tt.array.std(m["Scenario PnL vector"]))
     # ---- exceedance rate (ch-08's simple calibration diagnostic, per CELL so it drills) ------
     # share of scenario days beyond ±2 of the cell's own vol. There is no elementwise compare
     # or abs for array measures, but elementwise / IS supported, so the exact 0/1 indicator is
@@ -914,7 +964,9 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # NB negative_values/positive_values are LENGTH-PRESERVING (zero-fill, not filter) — a
     # len()-based count reads n and is wrong. Normal tails ≈ 4.6%; fatter reads higher.
     # Degenerate (blank) on length-1 Hypo sets (sample vol undefined).
-    _v2 = 2.0 * m["Scenario PnL vol"]
+    # Reads the RAW (wt) vol — Exceedance rate is not itself dollarable and must not inherit the
+    # ambient Units slice (the DOLLAR_MEASURES ratio-reference audit).
+    _v2 = 2.0 * m["Scenario PnL vol (wt)"]
     _up = m["Scenario PnL vector"] - _v2
     _dn = m["Scenario PnL vector"] + _v2
     m["Exceedance rate 2s"] = (
@@ -975,8 +1027,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # the query to its real days). VaR/worst are lifted to BOOK level (tt.total) so the rule/point are
     # the book's, identical whether or not Sector is on the axis; signs are baked for the chart (the
     # loss threshold and worst P&L are negative). Used by the COVID view's two graphs.
-    _book_var  = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
-    _book_loss = tt.total(m["Scenario worst loss"], h["Security"], h["FactorDim"], h["PositionRank"])
+    # (wt) refs: this legacy per-day family is NOT in DOLLAR_MEASURES and must stay weight-unit
+    # regardless of the ambient Units slice (the DOLLAR_MEASURES ratio-reference audit).
+    _book_var  = tt.total(m["Scenario VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])
+    _book_loss = tt.total(m["Scenario worst loss (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])
     m["Scenario VaR line at day"]           = tt.where(_in, -_book_var, None)
     m["Scenario worst pnl at day"]          = tt.where(_in, -_book_loss, None)
     m["Scenario worst date at day (epoch)"] = tt.where(_in, m["Scenario worst date (epoch)"], None)
@@ -1011,10 +1065,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # same code). `tt.total(..., h["DaySet"], h["Day"])` lifts the day hierarchies to their top
     # INSIDE the exposure term, so the book's 23 factor exposures are computed ONCE at the
     # day-independent context and every day member reuses them; only the shock scalar varies.
-    _exp_ex_day = tt.total(m["Net exposure"], h["DaySet"], h["Day"], h["DayDate"])
-    m["PnL at day"] = tt.agg.sum(
+    _exp_ex_day = tt.total(m["Net exposure (wt)"], h["DaySet"], h["Day"], h["DayDate"])
+    m.dollarable("PnL at day", tt.agg.sum(
         _exp_ex_day * tt.agg.single_value(t_days["ShockAtDay"]),
-        scope=tt.OriginScope({l["Factor"]}))
+        scope=tt.OriginScope({l["Factor"]})))
     m.fmt("PnL at day", "DOUBLE[0.00%]")   # deferred: the batched publish owns formatters
     # The date dual, epoch days like `Scenario dates (epoch)`. MAX, not SUM: the epoch is the same
     # on every factor row of a (DaySet, Day), so max reads it once instead of fanning out 23x (the
@@ -1026,11 +1080,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # re-deriving the book vector per day member -- the same lift that makes `PnL at day` fast.
     # No in-range gate needed: Day members are per-set real days once DaySet is sliced. Signs are
     # baked for the chart (loss threshold and worst P&L negative), same as the legacy markers.
-    _day_h = (h["DaySet"], h["Day"], h["DayDate"])
-    m["VaR line at day"] = -tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"],
-                                     h["PositionRank"], *_day_h)
-    m["Worst pnl at day"] = -tt.total(m["Scenario worst loss"], h["Security"], h["FactorDim"],
-                                      h["PositionRank"], *_day_h)
+    # (`_day_h` was hoisted next to `Book MV`, near the hierarchies.) Both are dollarable and
+    # read the RAW (wt) VaR/worst-loss so the ambient Units slice isn't applied twice.
+    m.dollarable("VaR line at day", -tt.total(m["Scenario VaR 99 (wt)"], h["Security"], h["FactorDim"],
+                                              h["PositionRank"], *_day_h))
+    m.dollarable("Worst pnl at day", -tt.total(m["Scenario worst loss (wt)"], h["Security"], h["FactorDim"],
+                                               h["PositionRank"], *_day_h))
     m["Worst date at day (epoch)"] = tt.total(m["Scenario worst date (epoch)"], h["Security"],
                                               h["FactorDim"], h["PositionRank"], *_day_h)
     for _mn in ("VaR line at day", "Worst pnl at day"):
@@ -1043,13 +1098,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Specific variance"] = tt.agg.sum(
         wgt * wgt * tt.agg.single_value(t_sv["SpecificVar"]),
         scope=tt.OriginScope({l["Date"], l["Position"]}))
-    m["Specific vol"] = tt.math.sqrt(m["Specific variance"])
+    m.dollarable("Specific vol", tt.math.sqrt(m["Specific variance"]))
     # gross/net book weight from the JOINED Positions Weight (branch-sensitive like everything
     # else; one term per (Date, Position) like Specific variance). In-cube identity: Net weight
     # == Net exposure at Factor=Market (the unit Market loading makes x_Market = Σ weights).
-    m["Net weight"] = tt.agg.sum(wgt, scope=tt.OriginScope({l["Date"], l["Position"]}))
-    m["Gross weight"] = tt.agg.sum(tt.math.abs(wgt),
-                                   scope=tt.OriginScope({l["Date"], l["Position"]}))
+    m.dollarable("Net weight", tt.agg.sum(wgt, scope=tt.OriginScope({l["Date"], l["Position"]})))
+    m.dollarable("Gross weight", tt.agg.sum(tt.math.abs(wgt),
+                                            scope=tt.OriginScope({l["Date"], l["Position"]})))
     for _mn in ("Net weight", "Gross weight"):
         m.fmt(_mn, "DOUBLE[0.000]")
     # ---- model vol: THE reference risk number (2026-07-03), sigma = sqrt(x'Fx + w'dw) ---------
@@ -1058,8 +1113,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # (_risk_from_weights / _euler_contributions tie out to float precision). On Evt:* it reads
     # as the window (regime) vol; on length-1 Hypo:* the sample std is degenerate — blank.
     # Computed per cell (each slice's own vector + own specific block), so it drills by
-    # sector/name/factor like the VaR measures.
-    m["Model vol"] = tt.math.sqrt(m["Scenario PnL vol"] ** 2 + m["Specific variance"])
+    # sector/name/factor like the VaR measures. Reads the RAW (wt) vol (the ratio-reference audit).
+    m.dollarable("Model vol", tt.math.sqrt(m["Scenario PnL vol (wt)"] ** 2 + m["Specific variance"]))
     m.fmt("Model vol", "DOUBLE[0.00%]")
     _mark("measures.specific_and_modelvol")
 
@@ -1078,15 +1133,17 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
             m.fmt(_mn, "DOUBLE[0.00%]")
     _mark("measures.pit_mirror")
     # approximate total tail: factor scenario VaR with an independent idiosyncratic tail (z=2.326)
-    m["Total VaR 99"] = tt.math.sqrt(m["Scenario VaR 99"] * m["Scenario VaR 99"]
-                                     + (2.326 * m["Specific vol"]) ** 2)
+    # (wt) refs throughout: Total VaR 99/Total ES 97.5 are themselves dollarable, so their raw
+    # formula must be built from raw components (the ratio-reference audit).
+    m.dollarable("Total VaR 99", tt.math.sqrt(m["Scenario VaR 99 (wt)"] * m["Scenario VaR 99 (wt)"]
+                                              + (2.326 * m["Specific vol (wt)"]) ** 2))
     m.fmt("Specific vol", "DOUBLE[0.00%]")
     m.fmt("Total VaR 99", "DOUBLE[0.00%]")
     # Expected-Shortfall analogue of Total VaR: factor-ES combined in quadrature with the
     # idiosyncratic tail. For a normal tail the ES97.5 multiplier is phi(z)/(1-a) = 2.338 (~ the
     # 2.326 used for 99% VaR -- ES97.5 == VaR99 under normality), applied to the specific vol.
-    m["Total ES 97.5"] = tt.math.sqrt(m["Scenario ES 97.5"] * m["Scenario ES 97.5"]
-                                      + (2.338 * m["Specific vol"]) ** 2)
+    m.dollarable("Total ES 97.5", tt.math.sqrt(m["Scenario ES 97.5 (wt)"] * m["Scenario ES 97.5 (wt)"]
+                                               + (2.338 * m["Specific vol (wt)"]) ** 2))
     m.fmt("Total ES 97.5", "DOUBLE[0.00%]")
 
     # ---- Price family: historical simulation on RAW STOCK RETURNS, no factor model ------------
@@ -1103,29 +1160,30 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         book_price_vec = tt.total(m["Price PnL vector"], h["Security"], h["FactorDim"], h["PositionRank"])
         price_tail_idx = tt.array.quantile_index(book_price_vec, 0.01, interpolation="lower")
 
-        m["Price mean PnL"]   = tt.array.mean(m["Price PnL vector"])
-        m["Price VaR 95"]     = -tt.array.quantile(m["Price PnL vector"], 0.05)
-        m["Price VaR 97.5"]   = -tt.array.quantile(m["Price PnL vector"], 0.025)
-        m["Price VaR 99"]     = -tt.array.quantile(m["Price PnL vector"], 0.01)
-        m["Price worst loss"] = -tt.array.min(m["Price PnL vector"])
+        m.dollarable("Price mean PnL",   tt.array.mean(m["Price PnL vector"]))
+        m.dollarable("Price VaR 95",     -tt.array.quantile(m["Price PnL vector"], 0.05))
+        m.dollarable("Price VaR 97.5",   -tt.array.quantile(m["Price PnL vector"], 0.025))
+        m.dollarable("Price VaR 99",     -tt.array.quantile(m["Price PnL vector"], 0.01))
+        m.dollarable("Price worst loss", -tt.array.min(m["Price PnL vector"]))
         _price_n = tt.array.len(m["Price PnL vector"])                 # this set's vector length
         _pk975 = tt.math.ceil(0.025 * _price_n)                        # tail size for 97.5% ES
         _pk99  = tt.math.ceil(0.01  * _price_n)                        # tail size for 99% ES
-        m["Price ES 97.5"] = -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk975))
-        m["Price ES 99"]   = -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk99))
-        m["Price PnL vol"] = tt.array.std(m["Price PnL vector"])
+        m.dollarable("Price ES 97.5", -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk975)))
+        m.dollarable("Price ES 99",   -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk99)))
+        m.dollarable("Price PnL vol", tt.array.std(m["Price PnL vector"]))
         for _mn in ("Price mean PnL", "Price VaR 95", "Price VaR 97.5", "Price VaR 99",
                     "Price worst loss", "Price ES 97.5", "Price ES 99", "Price PnL vol"):
             m.fmt(_mn, "DOUBLE[0.00%]")
 
         # --- Marginal Price VaR 99: the SAME tail-day Euler as Marginal Scenario VaR 99 — this
         #     cell's OWN P&L on the BOOK's 1% tail scenario. ADDITIVE: Σ_member = Price VaR 99.
-        m["Marginal Price VaR 99"] = -m["Price PnL vector"][price_tail_idx]
-        m["% of Price VaR 99"] = (m["Marginal Price VaR 99"]
-            / tt.total(m["Marginal Price VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
+        m.dollarable("Marginal Price VaR 99", -m["Price PnL vector"][price_tail_idx])
+        # NOT dollarable (a ratio) — reads the RAW (wt) marginal (the ratio-reference audit).
+        m["% of Price VaR 99"] = (m["Marginal Price VaR 99 (wt)"]
+            / tt.total(m["Marginal Price VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
         _pk975_book = tt.math.ceil(0.025 * tt.array.len(book_price_vec))
         _price_book_tail_idx = tt.array.n_lowest_indices(book_price_vec, _pk975_book)
-        m["Marginal Price ES 97.5"] = -tt.array.mean(m["Price PnL vector"][_price_book_tail_idx])
+        m.dollarable("Marginal Price ES 97.5", -tt.array.mean(m["Price PnL vector"][_price_book_tail_idx]))
         for _mn in ("Marginal Price VaR 99", "Marginal Price ES 97.5"):
             m.fmt(_mn, "DOUBLE[0.00%]")
         m.fmt("% of Price VaR 99", "DOUBLE[0.0%]")
@@ -1136,7 +1194,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         price_pnl_ex = book_price_vec - m["Price PnL vector"]
         price_tail_idx_ex = tt.array.quantile_index(price_pnl_ex, 0.01, interpolation="lower")
         price_var_ex = -price_pnl_ex[price_tail_idx_ex]
-        m["Incremental Price VaR 99"] = price_var_book - price_var_ex
+        m.dollarable("Incremental Price VaR 99", price_var_book - price_var_ex)
         m.fmt("Incremental Price VaR 99", "DOUBLE[0.00%]")
 
         # --- Price coverage at tail: the book's weight share that was ACTUALLY priced on its own
@@ -1182,12 +1240,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     tail_idx = tt.array.quantile_index(book_pnl_vec, 0.01, interpolation="lower")
     # --- contribution to the FACTOR VaR (Scenario VaR 99): the current cell's P&L at the book's
     #     tail scenario. ADDITIVE: Σ_member = Scenario VaR 99. ("marginal" in the Flex Agg sense.)
-    m["Marginal Scenario VaR 99"] = -m["Scenario PnL vector"][tail_idx]
-    m["VaR sensitivity"] = m["Marginal Scenario VaR 99"] / m["Net exposure"]   # per-unit ∂VaR/∂exp
+    m.dollarable("Marginal Scenario VaR 99", -m["Scenario PnL vector"][tail_idx])
+    # NOT dollarable (a per-unit ratio) — both sides read the RAW (wt) measures (the
+    # ratio-reference audit): dollar-scaling would cancel anyway, but this keeps the formula
+    # honestly in exposure units rather than relying on that cancellation.
+    m["VaR sensitivity"] = m["Marginal Scenario VaR 99 (wt)"] / m["Net exposure (wt)"]   # per-unit ∂VaR/∂exp
     # share of factor VaR: divide by the SUM of the marginals (NOT the interpolated quantile) so
     # it sums to EXACTLY 100%.
-    m["% of Scenario VaR 99"] = (m["Marginal Scenario VaR 99"]
-        / tt.total(m["Marginal Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
+    m["% of Scenario VaR 99"] = (m["Marginal Scenario VaR 99 (wt)"]
+        / tt.total(m["Marginal Scenario VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # --- contribution to the FACTOR ES 97.5: a member's MEAN P&L over the BOOK's worst-k tail
     #     scenarios (k = ceil(0.025 * n) lowest days of the BOOK P&L vector). Additive like the
@@ -1197,29 +1258,29 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     #     vector by that index-array picks its P&L on exactly those book-tail days.
     _k975_book = tt.math.ceil(0.025 * tt.array.len(book_pnl_vec))
     _book_tail_idx = tt.array.n_lowest_indices(book_pnl_vec, _k975_book)
-    m["Marginal Scenario ES 97.5"] = -tt.array.mean(m["Scenario PnL vector"][_book_tail_idx])
-    m["% of Scenario ES 97.5"] = (m["Marginal Scenario ES 97.5"]
-        / tt.total(m["Marginal Scenario ES 97.5"], h["Security"], h["FactorDim"], h["PositionRank"]))
+    m.dollarable("Marginal Scenario ES 97.5", -tt.array.mean(m["Scenario PnL vector"][_book_tail_idx]))
+    m["% of Scenario ES 97.5"] = (m["Marginal Scenario ES 97.5 (wt)"]
+        / tt.total(m["Marginal Scenario ES 97.5 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # --- contribution to TOTAL VaR 99 (factor + specific, combined in quadrature). Euler split of
     #     Total=√(F²+S²): each factor-marginal is scaled by F/Total, and the idiosyncratic block
     #     adds z²·(w²σ²)/Total PER NAME. Σ_member = Total VaR 99.
     #     NB: meaningful only in by-NAME views (Issuer/Sector/Country/Position). By FACTOR the
     #     specific part fans out (specific risk has no factor) -> use Marginal Scenario VaR 99 there.
-    F_book = tt.total(m["Scenario VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])     # book factor VaR
-    T_book = tt.total(m["Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])        # book total VaR
-    m["Marginal Total VaR 99"] = (m["Marginal Scenario VaR 99"] * F_book / T_book
-                                  + (2.326 ** 2) * m["Specific variance"] / T_book)
-    m["% of Total VaR 99"] = (m["Marginal Total VaR 99"]
-        / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
+    F_book = tt.total(m["Scenario VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])     # book factor VaR
+    T_book = tt.total(m["Total VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])        # book total VaR
+    m.dollarable("Marginal Total VaR 99", (m["Marginal Scenario VaR 99 (wt)"] * F_book / T_book
+                                           + (2.326 ** 2) * m["Specific variance"] / T_book))
+    m["% of Total VaR 99"] = (m["Marginal Total VaR 99 (wt)"]
+        / tt.total(m["Marginal Total VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
 
     # ---- concentration: Herfindahl-Hirschman index of risk shares. HHI = Σ_name share², where
     #      share is a NAME's fraction of book Total VaR (its Marginal Total VaR / the book total).
     #      Summed at the POSITION grain via an OriginScope (factors lifted, one term per name),
     #      like Specific variance. Reads 1/N for an evenly-diversified book up to 1.0 for a single
     #      name; the standard single-number concentration gauge a desk watches against a limit.
-    _name_share = (m["Marginal Total VaR 99"]
-                   / tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
+    _name_share = (m["Marginal Total VaR 99 (wt)"]
+                   / tt.total(m["Marginal Total VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
     m["Risk HHI"] = tt.agg.sum(_name_share * _name_share, scope=tt.OriginScope({l["Position"]}))
     m.fmt("Risk HHI", "DOUBLE[0.000]")
     _mark("measures.decomposition")
@@ -1230,10 +1291,10 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # PositionRank hierarchy (created with the other hierarchies above) gives the global
     # ranking; every book-level tt.total in this file lifts it, so measures evaluated inside a
     # PositionRank context still see the true book totals.
-    _tot_r = tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
-    _rank_r = tt.rank(m["Marginal Total VaR 99"], h["PositionRank"], ascending=False)
+    _tot_r = tt.total(m["Marginal Total VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])
+    _rank_r = tt.rank(m["Marginal Total VaR 99 (wt)"], h["PositionRank"], ascending=False)
     m["Top-5 risk share"] = tt.agg.sum(
-        tt.where(_rank_r <= 5, m["Marginal Total VaR 99"] / _tot_r, 0.0),
+        tt.where(_rank_r <= 5, m["Marginal Total VaR 99 (wt)"] / _tot_r, 0.0),
         scope=tt.OriginScope({l["PositionR"]}))
     m.fmt("Top-5 risk share", "DOUBLE[0.0%]")
     _mark("measures.top5_rank")
@@ -1263,13 +1324,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     pnl_ex = book_pnl_vec - m["Scenario PnL vector"]
     tail_idx_ex = tt.array.quantile_index(pnl_ex, 0.01, interpolation="lower")
     VaR_ex = -pnl_ex[tail_idx_ex]
-    m["Incremental Scenario VaR 99"] = book_var - VaR_ex
+    m.dollarable("Incremental Scenario VaR 99", book_var - VaR_ex)
     # total-VaR analog: strip the member's specific variance too, recombine in quadrature, subtract.
     # Reference = tt.total(Marginal Total VaR 99) (the additive book total) for the same reconciliation.
-    book_total = tt.total(m["Marginal Total VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"])
+    book_total = tt.total(m["Marginal Total VaR 99 (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])
     S_ex_var = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"]) - m["Specific variance"]
     Total_ex = tt.math.sqrt(VaR_ex * VaR_ex + (2.326 ** 2) * S_ex_var)
-    m["Incremental Total VaR 99"] = book_total - Total_ex
+    m.dollarable("Incremental Total VaR 99", book_total - Total_ex)
     _mark("measures.incremental")
 
     # ---- Model-vol decomposition: Euler marginal (== CTR) + incremental -----------------------
@@ -1279,13 +1340,13 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # sample std Model vol uses, so Σ_member == book Model vol EXACTLY (Euler) and the per-NAME
     # values equal the ch-09 CTR = w·(Σw)/σ that /contributions computes in numpy.
     # Like Marginal Total VaR: meaningful in by-NAME views; by FACTOR the specific block fans out.
-    _sigma_book = tt.total(m["Model vol"], h["Security"], h["FactorDim"], h["PositionRank"])
+    _sigma_book = tt.total(m["Model vol (wt)"], h["Security"], h["FactorDim"], h["PositionRank"])
     _cov_book = (tt.array.std(book_pnl_vec + m["Scenario PnL vector"]) ** 2
-                 - m["Scenario PnL vol"] ** 2
+                 - m["Scenario PnL vol (wt)"] ** 2
                  - tt.array.std(book_pnl_vec) ** 2) / 2
-    m["Marginal Model vol"] = (_cov_book + m["Specific variance"]) / _sigma_book
-    m["% of Model vol"] = (m["Marginal Model vol"]
-        / tt.total(m["Marginal Model vol"], h["Security"], h["FactorDim"], h["PositionRank"]))
+    m.dollarable("Marginal Model vol", (_cov_book + m["Specific variance"]) / _sigma_book)
+    m["% of Model vol"] = (m["Marginal Model vol (wt)"]
+        / tt.total(m["Marginal Model vol (wt)"], h["Security"], h["FactorDim"], h["PositionRank"]))
     # The clean FACTOR-side contribution (no specific block, VARIANCE units): cov(member, book).
     # By Factor: per factor this IS the ch-09 CTV = x_k(Fx)_k (cross-terms 50/50, negative =
     # hedge) and Σ_factor = the factor variance x'Fx. /contributions serves it.
@@ -1306,19 +1367,20 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # cannot touch specific risk; NB Incremental Model vol strips the cell's specific, which is
     # right for NAMES and wrong here — the fan-out trap, handled explicitly).
     _svar_book = tt.total(m["Specific variance"], h["Security"], h["FactorDim"], h["PositionRank"])
-    m["Vol ex factor"] = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + _svar_book)
+    m.dollarable("Vol ex factor", tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + _svar_book))
     m.fmt("Vol ex factor", "DOUBLE[0.00%]")
     # Min-variance hedge ratio (appendix D6), in EXPOSURE units: h* = −(Fx)_k/F_kk. Via the
     # polarization cov: cov(book, v_k) = x_k·(Fx)_k and var(f_k) = F_kk, so
     # h* = −cov/(x_k·vol_k²) — algebraically x_k cancels out of (Fx)_k, so a near-zero exposure
-    # still reads the true ratio (0/0 -> blank only at exactly zero).
+    # still reads the true ratio (0/0 -> blank only at exactly zero). NOT dollarable (a ratio) —
+    # reads the RAW (wt) exposure (the ratio-reference audit).
     m["Min-variance hedge ratio"] = (-_cov_book
-        / (m["Net exposure"] * m["Factor return vol"] ** 2))
+        / (m["Net exposure (wt)"] * m["Factor return vol"] ** 2))
     m.fmt("Min-variance hedge ratio", "DOUBLE[0.000]")
     # Vol at min-variance hedge: book sigma after ADDING h* units of the pure factor-k return
     # stream (specific block untouched) — the D6 single-instrument hedge priced per slice.
     _hedged_vec = book_pnl_vec + m["Min-variance hedge ratio"] * _shock_vec
-    m["Vol at min-variance hedge"] = tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book)
+    m.dollarable("Vol at min-variance hedge", tt.math.sqrt(tt.array.std(_hedged_vec) ** 2 + _svar_book))
     m.fmt("Vol at min-variance hedge", "DOUBLE[0.00%]")
     _mark("measures.tier1_hedge")
 
@@ -1331,12 +1393,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     cube.create_parameter_simulation(
         "CorrStress", measures={"Vol mult": 1.0, "Rho blend": 0.0})
     _mark("param_sim.CorrStress")
-    _sxs = tt.agg.sum(m["Net exposure"] * m["Factor return vol"],
+    _sxs = tt.agg.sum(m["Net exposure (wt)"] * m["Factor return vol"],
                       scope=tt.OriginScope({l["Factor"]}))          # SUM_k x_k * sigma_k (signed)
-    m["Stressed model vol"] = m["Vol mult"] * tt.math.sqrt(
-        (1.0 - m["Rho blend"]) * m["Scenario PnL vol"] ** 2
+    m.dollarable("Stressed model vol", m["Vol mult"] * tt.math.sqrt(
+        (1.0 - m["Rho blend"]) * m["Scenario PnL vol (wt)"] ** 2
         + m["Rho blend"] * _sxs ** 2
-        + m["Specific variance"])
+        + m["Specific variance"]))
     m.fmt("Stressed model vol", "DOUBLE[0.00%]")
 
     # ---- Tier-2 prototype: custom stress as a PARAMETER SIMULATION ----------------------------
@@ -1350,9 +1412,9 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     cube.create_parameter_simulation(
         "StressShock", measures={"Shock sigma": 0.0}, levels=[l["Factor"]])
     _mark("param_sim.StressShock")
-    m["Custom stress PnL"] = tt.agg.sum(
-        m["Net exposure"] * m["Shock sigma"] * m["Factor return vol"],
-        scope=tt.OriginScope({l["Factor"]}))
+    m.dollarable("Custom stress PnL", tt.agg.sum(
+        m["Net exposure (wt)"] * m["Shock sigma"] * m["Factor return vol"],
+        scope=tt.OriginScope({l["Factor"]})))
     m.fmt("Custom stress PnL", "DOUBLE[0.00%]")
     # Incremental Model vol: REMOVE the member, recompute sigma on the remainder (its factor
     # vector minus this cell's, its specific variance minus this cell's), subtract from the book
@@ -1360,7 +1422,7 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # member release". At the grand level the remainder is empty -> vol_ex = 0, so the total
     # reconciles with the Marginal column (both read the book sigma).
     _vol_ex = tt.math.sqrt(tt.array.std(pnl_ex) ** 2 + S_ex_var)
-    m["Incremental Model vol"] = _sigma_book - _vol_ex
+    m.dollarable("Incremental Model vol", _sigma_book - _vol_ex)
     for _mn in ("Marginal Model vol", "Incremental Model vol"):
         m.fmt(_mn, "DOUBLE[0.00%]")
 
@@ -1371,28 +1433,25 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m.fmt("VaR sensitivity", "DOUBLE[0.0000]")
     for _mn in ("% of Scenario VaR 99", "% of Total VaR 99", "% of Scenario ES 97.5"):
         m.fmt(_mn, "DOUBLE[0.0%]")
-    # ---- dollars (2026-08-22): the 13F market value joins the cube ---------------------------
-    # Market value = $ held in the cell (one term per (Date, Position), the Specific-variance
-    # idiom — never a columnar sum across the factor fan-out). Book MV lifts it to the sliced
-    # book over every non-book hierarchy (incl. the Day path, so PnL at day $ works), and each
-    # weight-unit measure gets a "$" twin = measure × Book MV. A what-if branch moves Weight,
-    # not MV, so a hypothetical's $ figures are priced on the base book size — disclosed.
-    _mv = tt.agg.single_value(t_pos["MV"])
-    m["Market value"] = tt.agg.sum(_mv, scope=tt.OriginScope({l["Date"], l["Position"]}))
-    m["Book MV"] = tt.total(m["Market value"], h["Security"], h["FactorDim"], h["PositionRank"],
-                            *_day_h)
-    for _mn in ("Market value", "Book MV"):
-        m.fmt(_mn, "DOUBLE[#,##0]")
-    for _mn in DOLLAR_MEASURES:
-        if _mn not in m:              # e.g. the Price family, absent when stock_returns is absent
-            continue
-        m[f"{_mn} $"] = m[_mn] * m["Book MV"]
-        m.fmt(f"{_mn} $", "DOUBLE[#,##0]")
-    _mark("measures.dollars")
+    # (Market value / Book MV / the Units simulation are defined up near the hierarchies — see
+    # the "Units context" block; every DOLLAR_MEASURES member above was published in place via
+    # `m.dollarable()`, so there is no separate "$" twin loop here any more.)
     _mark("measures.define")
     # ONE publish for every measure above, then the formatters (see _DeferredMeasures).
     m.flush()
     _mark("measures.flush")
+
+    # Hide the raw "(wt)" measures `dollarable()` published — plumbing for the Units toggle and
+    # the internal ratio-reference audit, not something a UI should ever list next to the public
+    # measure it backs.
+    for _mn in DOLLAR_MEASURES:
+        _wt = f"{_mn} (wt)"
+        if _wt in cube.measures:
+            try:
+                cube.measures[_wt].visible = False
+            except Exception:
+                pass
+    _mark("measures.hide_wt")
 
     # ---- DATA LAST: the whole model is now defined; fill the three big tables (see the seeding
     # note by the loads). The seed rows are re-loaded inside the full frames and upsert on the
