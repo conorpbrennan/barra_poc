@@ -40,7 +40,7 @@ beforeEach(() => {
 });
 
 const cfg = { rows: ["Factor"], cols: [], measures: ["Scenario VaR 99"], filters: {},
-  totals: false, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [], whatif: [], shocks: {} };
+  totals: false, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [], units: "weight" as const, whatif: [], shocks: {} };
 
 describe("ChartMode — saved chart", () => {
   it("renders each saved spec with its query's records bound (source resolved + stripped)", async () => {

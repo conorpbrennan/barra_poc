@@ -28,6 +28,7 @@ export interface PivotConfig {
   heat: boolean;
   asPct: boolean;
   prec: number;
+  units: "weight" | "dollar";   // <- view `units`: dollar = weight-unit measures × Book MV (re-query)
   sort: SortItem[];        // <- view `sort`, Streamlit colIds (see sortKeyFor / sortIdFor)
   // hypothetical (transient cube branch/scenario per query; NOT persisted in saved views):
   whatif: { position: string; ticker: string; weight: number }[];
@@ -75,6 +76,7 @@ async function queryLevel(
     measures: cfg.measures.join(","),
     filters: JSON.stringify(filters),
     totals: wantRowTot,
+    ...(cfg.units === "dollar" ? { units: "dollar" } : {}),
     ...hypoParams(cfg),
   });
 }
@@ -169,13 +171,14 @@ export function usePivot(initial: Partial<PivotConfig>) {
   const [cfg, setCfg] = useState<PivotConfig>({
     rows: ["Factor"], cols: [], measures: ["Net exposure"], filters: {},
     totals: true, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [],
-    whatif: [], shocks: {}, ...initial,
+    units: "weight", whatif: [], shocks: {}, ...initial,
   });
 
   const [tree, setTree] = useState<Record<string, DisplayRow[]>>({}); // parentKey -> children
   const [topRows, setTopRows] = useState<DisplayRow[]>([]);
   const [colMembers, setColMembers] = useState<string[]>([""]);
   const [grand, setGrand] = useState<Record<string, number | null>>({});
+  const [dollarMeasures, setDollarMeasures] = useState<string[]>([]);  // what /pivot priced in $
   const [warning, setWarning] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +202,7 @@ export function usePivot(initial: Partial<PivotConfig>) {
       const rows = rowsFromRecords(base.records, c.rows[0], colDim, c.measures, 0, {}, "", expandable,
         base.per_row);
       setColMembers(cms.length ? cms : [""]);
+      setDollarMeasures(base.units === "dollar" ? (base.dollar_measures ?? []) : []);
       setTopRows(rows);
       setTree({});
       setWarning(base.warning);
@@ -208,6 +212,7 @@ export function usePivot(initial: Partial<PivotConfig>) {
         const g = await apiGet<PivotResult>("/pivot", {
           rows: c.rows[0], ...(colDim ? { cols: colDim } : {}), measures: c.measures.join(","),
           filters: JSON.stringify(c.filters), totals: true,
+          ...(c.units === "dollar" ? { units: "dollar" } : {}),
           ...hypoParams(c),
         });
         const gr: Record<string, number | null> = {};
@@ -290,6 +295,6 @@ export function usePivot(initial: Partial<PivotConfig>) {
 
   return {
     cfg, setCfg, reload, toggleExpand,
-    flat, colMembers: shownColMembers, grand, warning, loading, error,
+    flat, colMembers: shownColMembers, grand, dollarMeasures, warning, loading, error,
   };
 }

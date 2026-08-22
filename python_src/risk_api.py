@@ -76,7 +76,7 @@ import barra_universe_membership as _um
 import barra_universe_funnel as _uf
 import barra_universe_span as _us
 import barra_universe_drift as _ud
-from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS
+from barra_factor_risk_cube import load_frames, build_cube, EVENT_WINDOWS, HYPO_SHOCKS, DOLLAR_MEASURES
 
 CUBE_PORT = int(os.environ.get("BARRA_CUBE_PORT", "9091"))   # own port, distinct from the 9090 UI cube
 TS_MEASURES = ["Model vol", "Scenario VaR 99", "Scenario worst loss", "Specific vol",
@@ -178,7 +178,12 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  "PnL at day", "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)",
                  # PnL attribution (Step 15, v2-only; pruned at startup if the cube lacks them).
                  # Forward-month convention: the value at Date d0 is the PnL over the month after d0.
-                 "Factor contribution", "Specific PnL", "Realized PnL"]
+                 "Factor contribution", "Specific PnL", "Realized PnL",
+                 # dollars (2026-08-22): $ held per cell, the sliced book's 13F value, and a
+                 # "<measure> $" twin of every weight-unit measure (DOLLAR_MEASURES, one list
+                 # with the cube). /pivot?units=dollar swaps them in and renames back.
+                 "Market value", "Book MV"] + [f"{_x} $" for _x in DOLLAR_MEASURES]
+DOLLAR_TWINS = {_x: f"{_x} $" for _x in DOLLAR_MEASURES}
 SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Total VaR 99",
             "Marginal Scenario VaR 99", "Marginal Total VaR 99", "VaR sensitivity",
             "% of Scenario VaR 99", "% of Total VaR 99",
@@ -195,6 +200,8 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             # the Day-path chart markers read the ScenarioSet-context book VaR/worst loss (PnL at
             # day itself reads DaySet only -- see DAY_DEP):
             "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
+SCEN_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in SCEN_DEP}
+DAY_DEP |= {DOLLAR_TWINS[_x] for _x in DOLLAR_MEASURES if _x in DAY_DEP}
 
 
 def _records(df: pd.DataFrame, reset: bool = True) -> list[dict]:
@@ -702,7 +709,8 @@ def _dims_response_fallback() -> dict:
     members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES if d not in DAY_DIMS}
     members.update(_day_members(S["session"]))
     members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-    return {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
+    return {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
+            "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
             "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "members": members,
             "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
@@ -738,7 +746,8 @@ def _dims_response() -> dict:
             members["Manager"] = f_mgr.result()
             members.update(f_day.result())
         members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-        resp = {"dimensions": DIM_NAMES, "measures": MEASURE_NAMES,
+        resp = {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES if not x.endswith(" $")],
+            "dollar_measures": [x for x in DOLLAR_MEASURES if f"{x} $" in MEASURE_NAMES],
                 "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "members": members,
                 "dates": members["Date"], "scenario_sets": members["ScenarioSet"]}
@@ -1289,7 +1298,11 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
                 shocks: str | None = Query(None, description=
                     'JSON {"Factor": sigma} — run the pivot under a transient custom stress'),
                 plan: str | None = Query(None, description=
-                    '"levels" forces the level plan for the Day shape (default: vector plan)')):
+                    '"levels" forces the level plan for the Day shape (default: vector plan)'),
+                units: str | None = Query(None, description=
+                    '"dollar": price every weight-unit measure in dollars (its "<name> $" cube '
+                    'twin = measure × Book MV), returned under the ORIGINAL measure names; '
+                    'default "weight" (fractions of book value)')):
     """Tidy long result of cube.query(measures, levels=rows+cols, filter=<slicers>).
 
     Slicers: `filters` is a JSON object {dimension: [members]} — AND across dimensions,
@@ -1311,13 +1324,46 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
     """
     rlist, clist, mlist = _csv(rows), _csv(cols), _csv(measures)
     fdict = _parse_filters(filters, date, set)
-    _validate_pivot(rlist, clist, mlist, fdict)
+    dollar = _units_is_dollar(units)
+    qlist = [DOLLAR_TWINS.get(x, x) for x in mlist] if dollar else mlist
+    _validate_pivot(rlist, clist, qlist, fdict)
     wtrades, shk = _parse_hypo(whatif, shocks, fdict)
     if not wtrades and not shk:
-        return await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(totals),
+        data = await run_in_threadpool(_pivot_result, rlist, clist, qlist, fdict, bool(totals),
                                        None, None, plan)
-    return await run_in_threadpool(_hypothetical_pivot, rlist, clist, mlist, fdict,
-                                   bool(totals), wtrades, shk)
+    else:
+        data = await run_in_threadpool(_hypothetical_pivot, rlist, clist, qlist, fdict,
+                                       bool(totals), wtrades, shk)
+    return _undollar(data, mlist, qlist) if dollar else {**data, "units": "weight"}
+
+
+def _units_is_dollar(units: str | None) -> bool:
+    """`units` query param -> True for the dollar view; 400 on anything but weight/dollar."""
+    u = (units or "weight").strip().lower()
+    if u in ("weight", "fraction", ""):
+        return False
+    if u in ("dollar", "dollars", "$", "usd"):
+        return True
+    raise HTTPException(400, f"units must be 'weight' or 'dollar', got {units!r}")
+
+
+def _undollar(data: dict, mlist: list, qlist: list) -> dict:
+    """Rename the "<name> $" twins in a pivot payload back to the names the caller asked for,
+    and say which measures were priced in dollars (the rest — ratios, dates, counts — are
+    returned as they are). Pure; unit-tested without a cube."""
+    ren = {q: x for x, q in zip(mlist, qlist) if q != x}
+    def fix(rec: dict) -> dict:
+        return {ren.get(k, k): v for k, v in rec.items()}
+    out = dict(data)
+    for key in ("records", "per_row", "per_col"):
+        if isinstance(out.get(key), list):
+            out[key] = [fix(r) for r in out[key]]
+    if isinstance(out.get("grand"), dict):
+        out["grand"] = fix(out["grand"])
+    out["measures"] = [ren.get(q, q) for q in out.get("measures", qlist)]
+    out["units"] = "dollar"
+    out["dollar_measures"] = [x for x in mlist if x in DOLLAR_TWINS]
+    return out
 
 
 set_ = set   # preserve builtin; the endpoint shadows `set` with the query param

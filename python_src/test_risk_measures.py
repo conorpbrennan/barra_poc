@@ -402,5 +402,75 @@ def main():
     raise SystemExit(1 if failed else 0)
 
 
+
+
+# ---- dollars (2026-08-22): MV in the cube, Book MV, the "<measure> $" twins, /pivot?units ----
+
+@test
+def t_undollar_renames_twins_back():
+    """Pure: the units=dollar payload comes back under the ORIGINAL names, the converted set
+    named, untouched measures left alone (no cube needed)."""
+    import risk_api as R
+    mlist = ["Scenario VaR 99", "% of Scenario VaR 99"]
+    qlist = [R.DOLLAR_TWINS.get(x, x) for x in mlist]
+    assert qlist == ["Scenario VaR 99 $", "% of Scenario VaR 99"]
+    data = {"measures": qlist, "records": [{"Manager": "Soros", "Scenario VaR 99 $": 1.5e8,
+                                            "% of Scenario VaR 99": 1.0}],
+            "grand": {"Scenario VaR 99 $": 1.5e8, "% of Scenario VaR 99": 1.0}, "per_row": []}
+    out = R._undollar(data, mlist, qlist)
+    assert out["records"][0] == {"Manager": "Soros", "Scenario VaR 99": 1.5e8, "% of Scenario VaR 99": 1.0}
+    assert out["grand"] == {"Scenario VaR 99": 1.5e8, "% of Scenario VaR 99": 1.0}
+    assert out["measures"] == mlist and out["units"] == "dollar"
+    assert out["dollar_measures"] == ["Scenario VaR 99"]
+    assert R._units_is_dollar(None) is False and R._units_is_dollar("$") is True
+    try:
+        R._units_is_dollar("euro"); assert False, "bad units must 400"
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 400
+
+
+@test
+def t_book_mv_is_the_13f_value_and_dollar_twin_is_measure_times_it():
+    """Book MV == the positions frame's dollar MV for the book/date (tie-out to the parquet);
+    `Scenario VaR 99 $` == Scenario VaR 99 × Book MV; Market value by Issuer sums to Book MV."""
+    import pandas as pd, pathlib
+    pos = pd.read_parquet(pathlib.Path(__file__).resolve().parent.parent / "data" / "positions.parquet")
+    frame_mv = float(pos[(pos.Book == "Soros") & (pos.Date == DATE)].MV.sum())
+    r = _pivot("Manager", ["Book MV", "Scenario VaR 99", "Scenario VaR 99 $", "Model vol $", "Model vol"])
+    rec = r["records"][0]
+    assert abs(rec["Book MV"] - frame_mv) <= 1e-6 * frame_mv, (rec["Book MV"], frame_mv)
+    # dollar values are ~1e8: compare at relative precision, not an absolute 1e-3
+    assert abs(rec["Scenario VaR 99 $"] - rec["Scenario VaR 99"] * rec["Book MV"]) <= 1e-9 * rec["Book MV"]
+    assert abs(rec["Model vol $"] - rec["Model vol"] * rec["Book MV"]) <= 1e-9 * rec["Book MV"]
+    assert rec["Book MV"] > 1e9, "Soros book is billions of dollars, not thousands — unit fix"
+    by_issuer = _pivot("Issuer", ["Market value"])
+    assert abs(_col_sum(by_issuer["records"], "Market value") - frame_mv) <= 1e-6 * frame_mv
+
+
+@test
+def t_pivot_units_dollar_round_trips_names():
+    """/pivot?units=dollar prices the weight-unit measures in $ under the original names and
+    leaves ratios as they are; units=weight (default) is byte-identical to before."""
+    import requests
+    filters = {"Book": ["Soros"], "Date": [DATE], "ScenarioSet": ["HistFull"]}
+    q = {"rows": "Sector", "measures": "Marginal Total VaR 99,% of Total VaR 99",
+         "filters": json.dumps(filters), "totals": "true", "units": "dollar"}
+    d = requests.get(f"{API}/pivot?{urllib.parse.urlencode(q)}", timeout=60).json()
+    w = _pivot("Sector", ["Marginal Total VaR 99", "% of Total VaR 99", "Book MV"])
+    assert d["units"] == "dollar" and d["dollar_measures"] == ["Marginal Total VaR 99"]
+    assert d["measures"] == ["Marginal Total VaR 99", "% of Total VaR 99"]
+    mv = w["records"][0]["Book MV"]
+    # /pivot rows=Sector records also carry Country (the Security hierarchy), so a sector held in
+    # two countries is two records: key on every non-measure column, not Sector alone
+    dims = lambda r: tuple(sorted((k, v) for k, v in r.items() if k not in ("Marginal Total VaR 99", "% of Total VaR 99", "Book MV")))
+    wd = {dims(r): r for r in w["records"]}
+    for r in d["records"]:
+        base = wd[dims(r)]
+        assert abs(r["Marginal Total VaR 99"] - base["Marginal Total VaR 99"] * mv) <= 1e-9 * mv, r
+        assert r["% of Total VaR 99"] == base["% of Total VaR 99"]
+    assert abs(d["grand"]["Marginal Total VaR 99"] - w["grand"]["Marginal Total VaR 99"] * mv) <= 1e-9 * mv
+    assert "units" in w and w["units"] == "weight"
+
+
 if __name__ == "__main__":
     main()

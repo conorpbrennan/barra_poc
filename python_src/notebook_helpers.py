@@ -194,15 +194,22 @@ def _blues_css(s: pd.Series) -> list[str]:
     return out
 
 
-def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3):
+def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3, money=None):
     """Return a pandas Styler reproducing the app's grid look functionally: a per-column blue
     heatmap over the numeric measure columns + percent/fixed formatting + an em-dash for nulls.
 
     `pct`/`prec` mirror a view's `as_pct`/`prec` state. Every Soros 13F grid is as_pct with
     prec=3, so the defaults match; pass pct=False for a plain fixed-decimal grid.
+
+    Dollar columns — the cube's "<measure> $" twins, `Market value`, `Book MV` — are formatted
+    as whole dollars with separators ($151,470,121) regardless of `pct`; `money` names extra
+    columns to treat the same way (the UI's units=dollar view).
     """
     num = list(df.select_dtypes("number").columns)
     fmt = (f"{{:.{prec}%}}" if pct else f"{{:.{prec}f}}")
+    dollar = {c for c in num if str(c).endswith(" $") or c in ("Market value", "Book MV")}
+    dollar |= set(money or [])
+    formats = {c: ("${:,.0f}" if c in dollar else fmt) for c in num}
     return (df.style
               .apply(_blues_css, subset=num, axis=0)   # per-column heatmap, like the app
-              .format({c: fmt for c in num}, na_rep="—"))
+              .format(formats, na_rep="—"))

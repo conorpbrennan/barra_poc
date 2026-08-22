@@ -8,7 +8,7 @@ import { AgGridReact } from "ag-grid-react";
 import type { ColDef, GridReadyEvent, ICellRendererParams, SortChangedEvent } from "ag-grid-community";
 import { COL_SEP, LABEL_COL, TOTAL_COL, sortIdFor, sortKeyFor, type DisplayRow, type PivotConfig } from "./usePivot";
 import type { SortItem } from "../api/types";
-import { pct, num } from "../lib/format";
+import { pct, num, money } from "../lib/format";
 
 interface GridRow {
   __row?: DisplayRow;
@@ -25,8 +25,9 @@ interface GridRow {
 const treeOrder = (_a: unknown, _b: unknown, na: { data?: GridRow }, nb: { data?: GridRow }, desc: boolean) =>
   ((na.data?.__ord ?? 0) - (nb.data?.__ord ?? 0)) * (desc ? -1 : 1);
 
-export function fmt(v: unknown, cfg: PivotConfig): string {
+export function fmt(v: unknown, cfg: PivotConfig, dollar = false): string {
   if (typeof v !== "number" || Number.isNaN(v)) return "";
+  if (dollar) return money(v);   // a "$" cell: whole dollars, whatever prec/% say
   // `prec` is decimals of the DISPLAYED number in both modes, as the notebook's style_grid
   // ({:.3%} -> 3.576%) and the Streamlit grid do — the old `prec - 1` showed 3.58% against
   // the notebook's 3.576% for the same cell.
@@ -43,13 +44,14 @@ function heatStyle(v: number, min: number, max: number) {
 }
 
 export function PivotGrid({
-  flat, colMembers, measures, cfg, grand, onToggle, onSort,
+  flat, colMembers, measures, cfg, grand, dollarMeasures = [], onToggle, onSort,
 }: {
   flat: DisplayRow[];
   colMembers: string[];
   measures: string[];
   cfg: PivotConfig;
   grand: Record<string, number | null>;
+  dollarMeasures?: string[];
   onToggle: (r: DisplayRow) => void;
   onSort?: (sort: SortItem[]) => void;
 }) {
@@ -112,7 +114,7 @@ export function PivotGrid({
           valueGetter: (p) => (p.data ? (p.data as GridRow)[key] as number | null : null),
           type: "rightAligned",
           width: 140,
-          valueFormatter: (p) => fmt(p.value, cfg),
+          valueFormatter: (p) => fmt(p.value, cfg, dollarMeasures.includes(m)),
           cellStyle: (p) => {
             if (!cfg.heat || typeof p.value !== "number") return { fontVariantNumeric: "tabular-nums" };
             const rg = ranges.get(key)!;
@@ -123,7 +125,7 @@ export function PivotGrid({
     }
 
     return { rowData: rows, columnDefs: [labelCol, ...valueCols] };
-  }, [flat, colMembers, measures, cfg, onToggle]);
+  }, [flat, colMembers, measures, cfg, dollarMeasures, onToggle]);
 
   const pinnedBottomRowData = useMemo(() => {
     if (!cfg.totals || !Object.keys(grand).length) return [];

@@ -59,6 +59,8 @@ export interface PivotResult {
   per_row?: Rec[];
   per_col?: Rec[];
   grand?: Record<string, number | null>;
+  units?: "weight" | "dollar";       // /pivot?units=dollar priced the weight-unit measures in $
+  dollar_measures?: string[];        // ...and these are the ones it converted
 }
 
 export interface TrendsResult {
@@ -416,6 +418,7 @@ export interface ViewState {
   slice_dims?: string[]; filters?: Record<string, string[]>;
   row_tot?: boolean; col_tot?: boolean; as_pct?: boolean; hide_empty?: boolean;
   heat?: boolean; prec?: number; sort?: SortItem[];
+  units?: "weight" | "dollar";   // dollar = every weight-unit measure × Book MV (2026-08-22)
   date_fmt?: string; render?: "grid" | "chart";
   // `chart` is a COMPLETE Vega-Lite spec, or a LIST of them (one per graph); each carries a `source`
   // naming the query in `queries` whose records feed it. Rendered verbatim (charts are not rebuilt).

@@ -12,6 +12,12 @@ export function signedPct(v: number | null | undefined, dp = 2): string {
   return `${v > 0 ? "+" : ""}${s}%`;
 }
 
+// whole dollars with separators; sign kept (a loss measure is reported positive upstream)
+export function money(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
+  return `${v < 0 ? "-" : ""}$${Math.abs(Math.round(v)).toLocaleString("en-US")}`;
+}
+
 export function num(v: number | null | undefined, dp = 2): string {
   if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return v.toFixed(dp);

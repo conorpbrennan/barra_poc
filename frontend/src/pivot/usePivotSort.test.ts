@@ -5,7 +5,7 @@ import { COL_SEP, LABEL_COL, TOTAL_COL, rowsFromRecords, sortIdFor, sortKeyFor, 
 
 const cfg = { rows: ["Issuer", "Position"], cols: [], measures: ["Marginal Total VaR 99", "Net exposure"],
   filters: {}, totals: true, rowTot: false, hideEmpty: true, heat: false, asPct: true, prec: 3,
-  sort: [], whatif: [], shocks: {} } as PivotConfig;
+  sort: [], units: "weight", whatif: [], shocks: {} } as PivotConfig;
 
 const row = (label: string, mtv: number | null, net = 0): DisplayRow => ({
   key: `/${label}`, label, level: 0, path: { Issuer: label }, expandable: false, expanded: false,

@@ -740,6 +740,9 @@ def _13FHR_filings_all(cik: int) -> pd.DataFrame:
     return allf
 
 
+THIRTEENF_DOLLARS_FROM = pd.Timestamp("2023-01-03")   # 13F value unit break: $000 before, $ from
+
+
 def positions_from_13f(cik: int) -> pd.DataFrame:
     """Parse every 13F-HR information table for `cik` (recent + paginated filings.files blocks)
     into (report_date, cusip, issuer, shares, value). Return contract is unchanged from the
@@ -778,7 +781,11 @@ def _parse_infotable(xml_bytes: bytes, report_date: str, filing_date: str) -> li
             "filing_date": pd.Timestamp(filing_date),
             "issuer":  lt(it, "nameOfIssuer"),
             "cusip":   lt(it, "cusip"),
-            "value":   float(lt(it, "value") or 0),     # weights are scale-free, so $ vs $000 is moot
+            # 13F values were reported in $ THOUSANDS until the SEC's 2023 amendment — filings made
+            # on/after 2023-01-03 report whole dollars (the Q4-2022 filing, made Feb 2023, is the
+            # first). Weights are scale-free either way; MV is normalised to DOLLARS here so the
+            # cube's $ measures (Book MV, "<measure> $") read one unit across the whole history.
+            "value":   float(lt(it, "value") or 0) * (1000.0 if pd.Timestamp(filing_date) < THIRTEENF_DOLLARS_FROM else 1.0),
             "shares":  float(lt(it, "sshPrnamt") or 0),
             "sshType": lt(it, "sshPrnamtType"),
             "putCall": lt(it, "putCall"),

@@ -269,7 +269,24 @@ OPTIONAL_FRAMES = ["specific_returns", "managers",
 
 # The Positions columns the CUBE needs: everything a measure reads, and nothing else. The frames
 # dict keeps the full width (MV/ADV) for the API -- this list only bounds what crosses into the JVM.
-POSITION_CUBE_COLS = ["Date", "Book", "Position", "Weight"]
+POSITION_CUBE_COLS = ["Date", "Book", "Position", "Weight", "MV"]   # MV (dollars) since 2026-08-22
+
+# Weight-unit measures (fractions of book value) that get a DOLLAR twin "<name> $" =
+# measure × Book MV (the sliced book's 13F market value at the cell's Date). One list, shared
+# with risk_api's allowlist and /pivot?units=dollar. Ratios (% of …, HHI, Top-5, sensitivity),
+# variances, factor-unit measures, dates/counts and the book-independent attribution trio are
+# deliberately NOT here — a dollar version of them is meaningless or wrong.
+DOLLAR_MEASURES = [
+    "Net exposure", "Net weight", "Gross weight",
+    "Scenario VaR 95", "Scenario VaR 97.5", "Scenario VaR 99", "Scenario ES 97.5", "Scenario ES 99",
+    "Scenario worst loss", "Scenario mean PnL", "Scenario PnL vol",
+    "Total VaR 99", "Total ES 97.5", "Specific vol",
+    "Marginal Scenario VaR 99", "Marginal Total VaR 99", "Marginal Scenario ES 97.5",
+    "Incremental Scenario VaR 99", "Incremental Total VaR 99",
+    "Model vol", "Marginal Model vol", "Incremental Model vol",
+    "Vol ex factor", "Vol at min-variance hedge", "Stressed model vol", "Custom stress PnL",
+    "PnL at day", "VaR line at day", "Worst pnl at day",
+]
 
 # Historical event windows to replay (must fall inside the loaded sample; pre-2016 events need a
 # longer factor-return history -- splice published style-factor returns for those windows).
@@ -1187,6 +1204,22 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m.fmt("VaR sensitivity", "DOUBLE[0.0000]")
     for _mn in ("% of Scenario VaR 99", "% of Total VaR 99", "% of Scenario ES 97.5"):
         m.fmt(_mn, "DOUBLE[0.0%]")
+    # ---- dollars (2026-08-22): the 13F market value joins the cube ---------------------------
+    # Market value = $ held in the cell (one term per (Date, Position), the Specific-variance
+    # idiom — never a columnar sum across the factor fan-out). Book MV lifts it to the sliced
+    # book over every non-book hierarchy (incl. the Day path, so PnL at day $ works), and each
+    # weight-unit measure gets a "$" twin = measure × Book MV. A what-if branch moves Weight,
+    # not MV, so a hypothetical's $ figures are priced on the base book size — disclosed.
+    _mv = tt.agg.single_value(t_pos["MV"])
+    m["Market value"] = tt.agg.sum(_mv, scope=tt.OriginScope({l["Date"], l["Position"]}))
+    m["Book MV"] = tt.total(m["Market value"], h["Security"], h["FactorDim"], h["PositionRank"],
+                            *_day_h)
+    for _mn in ("Market value", "Book MV"):
+        m.fmt(_mn, "DOUBLE[#,##0]")
+    for _mn in DOLLAR_MEASURES:
+        m[f"{_mn} $"] = m[_mn] * m["Book MV"]
+        m.fmt(f"{_mn} $", "DOUBLE[#,##0]")
+    _mark("measures.dollars")
     _mark("measures.define")
     # ONE publish for every measure above, then the formatters (see _DeferredMeasures).
     m.flush()

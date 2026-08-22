@@ -141,6 +141,33 @@ inline (`> 🔎 query_cube …`) so the grounding is visible. UI "💬 Ask the r
 400; live full loop opt-in via `RUN_LLM=1`, asserts a `query_cube` marker appears). Step 10 of the
 risk-tooling roadmap.
 
+## Dollars in the cube (`Book MV`, `<measure> $`, `/pivot?units=dollar`) — 2026-08-22
+
+Every risk measure is in **weight units** (fractions of book value). The 13F market value now
+also lives in the cube: `POSITION_CUBE_COLS` carries `MV` (dollars), **`Market value`** = $ held in
+the cell (one term per (Date, Position), the Specific-variance idiom), **`Book MV`** = the sliced
+book's value, lifted over every non-book hierarchy incl. the Day path, and a **`"<measure> $"`
+twin = measure × Book MV** for every weight-unit measure in `DOLLAR_MEASURES` (one list in
+`barra_factor_risk_cube.py`, imported by `risk_api.py`; ratios, variances, factor-unit measures,
+dates/counts and the book-independent attribution trio deliberately have no twin). **Unit fix in
+the builder**: 13F values were filed in $ thousands until the SEC's 2023 amendment (filings made
+on/after `THIRTEENF_DOLLARS_FROM` = 2023-01-03 are whole dollars) — `_parse_infotable` normalises
+to dollars; `barra_refresh_positions_mv.py` rewrote only the `MV` column of the existing
+`positions.parquet` from the cached filings (row set asserted identical; Weight/ADV untouched) so
+no 60-min rebuild was needed. A what-if branch moves Weight, not MV, so a hypothetical's $ figures
+are priced on the base book size — disclosed, not fixed.
+
+`GET /pivot?units=dollar` swaps each requested measure for its `$` twin, runs the same guarded
+pivot, and returns the records **under the original names** with `units: "dollar"` and
+`dollar_measures` (the ones converted); default `units=weight` is unchanged (+ `units: "weight"`).
+`/dims.measures` hides the twins from the picker (`Market value`/`Book MV` stay) and publishes
+`dollar_measures`. Vite: the Pivot builder's Display zone has `units: % / fraction / $` (the first
+two are formats of the same numbers; `$` re-queries), saved as the view's `units`; `$` cells render
+whole dollars with separators (`money()`), ignoring `prec`. Notebooks: query the twins directly
+(`m["Total VaR 99 $"]`), `style_grid` formats `… $`/`Market value`/`Book MV` columns as money; both
+demo notebooks carry an "L1 in dollars" cell. Tests: `test_risk_measures.py` (pure `_undollar`,
+Book MV == parquet MV, twin == measure × Book MV, `/pivot?units` round trip); `PivotGrid.test.ts`.
+
 ## Desk limits (`/limits`)
 
 **Reference-metric decision (2026-07-03): MODEL VOL is the reference; VaR/ES are the limits.**

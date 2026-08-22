@@ -122,8 +122,9 @@ export function Pivot() {
     rows: ["Sector"], measures: ["Net exposure", "Scenario VaR 99"],
     filters: { Date: [date], ScenarioSet: [scenario] },
     totals: true, rowTot: false, hideEmpty: true, heat: true, asPct: false, prec: 3, sort: [],
+    units: "weight",
   });
-  const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, warning, loading, error } = pivot;
+  const { cfg, setCfg, reload, toggleExpand, flat, colMembers, grand, dollarMeasures, warning, loading, error } = pivot;
 
   // Cross-lens drill link (?drill=<json {rows, cols?, measures, filters}>, e.g. from the
   // Attribution reconcile drawer): captured ONCE at mount, consumed inside the fold effect below
@@ -188,6 +189,7 @@ export function Pivot() {
       hideEmpty: s.hide_empty ?? true,
       heat: s.heat ?? cfg.heat, asPct: s.as_pct ?? cfg.asPct, prec: s.prec ?? cfg.prec,
       sort: Array.isArray(s.sort) ? s.sort : [],
+      units: s.units === "dollar" ? "dollar" : "weight",
       whatif: [], shocks: {},   // a saved view is a canonical report — never load it hypothetical
     };
     setCfg(next);
@@ -207,7 +209,7 @@ export function Pivot() {
     rows: cfg.rows, cols: cfg.cols, measures: cfg.measures, filters: cfg.filters,
     slice_dims: Object.keys(cfg.filters),
     row_tot: cfg.rowTot, col_tot: cfg.totals, as_pct: cfg.asPct, hide_empty: cfg.hideEmpty,
-    heat: cfg.heat, prec: cfg.prec, sort: cfg.sort,
+    heat: cfg.heat, prec: cfg.prec, sort: cfg.sort, units: cfg.units,
     render: mode, description: loadedView?.description,
   };
 
@@ -223,7 +225,16 @@ export function Pivot() {
   const display = (
     <div className="small" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem 0.6rem" }}>
       <label className="row"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
-      <label className="row"><input type="checkbox" checked={cfg.asPct} onChange={(e) => setCfg((c) => ({ ...c, asPct: e.target.checked }))} /> as %</label>
+      <label className="row" title="% and fraction are formats of the same weight-unit numbers; $ re-queries the cube's dollar twins (measure × Book MV)">
+        units <select value={cfg.units === "dollar" ? "$" : cfg.asPct ? "%" : "fraction"} style={{ width: "5.2rem" }}
+          onChange={(e) => {
+            const v = e.target.value;
+            const next: PivotConfig = { ...cfg, units: v === "$" ? "dollar" : "weight", asPct: v === "%" || (v === "$" ? cfg.asPct : false) };
+            setCfg(next);
+            if (next.units !== cfg.units) reload(next);
+          }}>
+          <option value="%">%</option><option value="fraction">fraction</option><option value="$">$</option>
+        </select></label>
       <label className="row" title="Total row — the cube's grand / per-column margin, pinned at the bottom">
         <input type="checkbox" checked={cfg.totals} onChange={(e) => { const next = { ...cfg, totals: e.target.checked }; setCfg(next); reload(next); }} /> total row</label>
       <label className="row" title="Total column — the cube's per-row margin across the column dim (needs a column field)"
@@ -269,7 +280,7 @@ export function Pivot() {
               {loading && <div className="spin">querying cube…</div>}
               {mode === "grid" ? (
                 <PivotGrid flat={flat} colMembers={colMembers} measures={cfg.measures}
-                  cfg={cfg} grand={grand} onToggle={toggleExpand}
+                  cfg={cfg} grand={grand} dollarMeasures={dollarMeasures} onToggle={toggleExpand}
                   onSort={(sort) => setCfg((c) => ({ ...c, sort }))} />
               ) : (
                 <Suspense fallback={<div className="spin">loading chart…</div>}>

@@ -15,6 +15,10 @@ describe("PivotGrid fmt", () => {
   it("fixed mode shows `prec` decimals", () => {
     expect(fmt(0.03576148, { ...base, asPct: false, prec: 3 })).toBe("0.036");
   });
+  it("a dollar cell is whole dollars with separators, whatever prec/% say", () => {
+    expect(fmt(151470121.4, { ...base, asPct: true, prec: 3 }, true)).toBe("$151,470,121");
+    expect(fmt(-2500.6, { ...base, asPct: false, prec: 3 }, true)).toBe("-$2,501");
+  });
   it("non-numbers render empty", () => {
     expect(fmt(null, { ...base, asPct: true, prec: 3 })).toBe("");
   });
