@@ -265,7 +265,12 @@ OPTIONAL_FRAMES = ["specific_returns", "managers",
                    # specific_pnl: the OPTIONAL precomputed (Date, Position) -> SpecPnL frame. Not
                    # written today; when a builder persists it (with FactorPnL on `exposures`),
                    # build_cube skips its pandas attribution prep entirely -- see Step 4 below.
-                   "specific_pnl"]
+                   "specific_pnl",
+                   # stock_returns: the 9th (optional) frame (docs/price-var-plan.md) -- daily
+                   # simple returns for every coverage name, v2-only like specific_returns.
+                   # Absent on v1 data / any pre-Price-VaR build -> the Price family of measures
+                   # is skipped entirely (has_price below), same degrade-cleanly pattern.
+                   "stock_returns"]
 
 # The Positions columns the CUBE needs: everything a measure reads, and nothing else. The frames
 # dict keeps the full width (MV/ADV) for the API -- this list only bounds what crosses into the JVM.
@@ -286,6 +291,12 @@ DOLLAR_MEASURES = [
     "Model vol", "Marginal Model vol", "Incremental Model vol",
     "Vol ex factor", "Vol at min-variance hedge", "Stressed model vol", "Custom stress PnL",
     "PnL at day", "VaR line at day", "Worst pnl at day",
+    # Price family (docs/price-var-plan.md) -- historical sim on raw stock returns, no factor
+    # model. v2-only: absent when stock_returns.parquet wasn't built (has_price below); the
+    # $-twin loop in build_cube skips any entry here that wasn't actually defined.
+    "Price VaR 95", "Price VaR 97.5", "Price VaR 99", "Price ES 97.5", "Price ES 99",
+    "Price worst loss", "Price mean PnL", "Price PnL vol",
+    "Marginal Price VaR 99", "Incremental Price VaR 99", "Marginal Price ES 97.5",
 ]
 
 # Historical event windows to replay (must fall inside the loaded sample; pre-2016 events need a
@@ -449,6 +460,60 @@ def build_scenario_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
+def build_price_axis(factor_ret: pd.DataFrame, style: list[str]) -> pd.DataFrame:
+    """Per PriceSet, the date axis (epoch days) of its Price PnL vector — docs/price-var-plan.md.
+    IDENTICAL sets/dates to build_scenario_axis's real sets (HistFull + every EVENT_WINDOWS
+    window); Hypo:* sets are sigma-shocks on factors and have no Price mirror. A separate small
+    table/function (not a reuse of ScenarioAxis) so PriceSet is a fully independent switch
+    hierarchy, one-for-one with the ScenarioSet/Scenarios/ScenarioAxis trio."""
+    wide = (factor_ret[factor_ret["Factor"].isin(style)]
+            .pivot(index="Date", columns="Factor", values="Return").dropna(how="any").sort_index())
+    epoch = pd.Timestamp("1970-01-01")
+
+    def days(idx):
+        return [int((pd.Timestamp(d) - epoch).days) for d in idx]
+    rows = [{"PriceSet": "HistFull", "DateVec": days(wide.index)}]
+    for name, (a, b) in EVENT_WINDOWS.items():
+        w = wide.loc[a:b]
+        if len(w):
+            rows.append({"PriceSet": name, "DateVec": days(w.index)})
+    return pd.DataFrame(rows)
+
+
+def build_price_returns(stock_ret: pd.DataFrame, factor_ret: pd.DataFrame,
+                        style: list[str]) -> pd.DataFrame:
+    """One table keyed (PriceSet, Position) -> ReturnVec, PricedVec — the Price family's raw
+    material (docs/price-var-plan.md, step 2). Mirrors build_scenarios/build_scenario_axis
+    EXACTLY: the SAME date axis per set (HistFull = the full daily factor-return calendar; Evt:*
+    = the same EVENT_WINDOWS slices), so index i of a Price vector and index i of the matching
+    Scenario vector are the same calendar day BY CONSTRUCTION. Hypo:* sets are sigma-shocks on
+    factors and have no Price mirror.
+
+    A name's daily return is SPARSE in `stock_ret` (barra_build_stock_returns.py / the builder's
+    stock_returns_from_prices) — reindexing it onto each set's date axis ZERO-FILLS the missing
+    days (no return that day; never backfilled from the model) and `PricedVec` flags which days
+    were real (1.0) vs zero-filled (0.0) — the raw material for `Price coverage at tail`."""
+    wide = (factor_ret[factor_ret["Factor"].isin(style)]
+            .pivot(index="Date", columns="Factor", values="Return").dropna(how="any").sort_index())
+    full_idx = wide.index
+    windows = {"HistFull": full_idx}
+    for name, (a, b) in EVENT_WINDOWS.items():
+        w = full_idx[(full_idx >= pd.Timestamp(a)) & (full_idx <= pd.Timestamp(b))]
+        if len(w):
+            windows[name] = w
+    sr = stock_ret.pivot_table(index="Date", columns="Position", values="Return", aggfunc="last")
+    rows = []
+    for set_name, idx in windows.items():
+        aligned = sr.reindex(idx)
+        priced = aligned.notna()
+        vals = aligned.fillna(0.0)
+        for pos in vals.columns:
+            rows.append({"PriceSet": set_name, "Position": pos,
+                         "ReturnVec": vals[pos].to_numpy().tolist(),
+                         "PricedVec": priced[pos].to_numpy().astype("float64").tolist()})
+    return pd.DataFrame(rows, columns=["PriceSet", "Position", "ReturnVec", "PricedVec"])
+
+
 def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _mark_reset()
     exposures, positions = frames["exposures"], frames["positions"]
@@ -469,6 +534,15 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _mark("prep.build_scenarios")
     pit_scn = build_pit_scenarios(factor_ret, scn_factors)    # truncated-history sets, own hierarchy
     _mark("prep.build_pit_scenarios")
+
+    # Price family (docs/price-var-plan.md): v2-only, degrades like specific_returns when the 9th
+    # frame is absent (v1 data / any pre-Price-VaR build).
+    stock_ret = frames.get("stock_returns")
+    has_price = stock_ret is not None and len(stock_ret) > 0
+    if has_price:
+        price_ret = build_price_returns(stock_ret, factor_ret, scn_factors)
+        price_axis = build_price_axis(factor_ret, scn_factors)
+        _mark("prep.build_price_returns")
 
     # Leaf products: `Net exposure` is now MEASURE-LEVEL (Loading x the JOINED Positions
     # Weight under an OriginScope) — benchmarked 2026-07-03 on atoti 0.9.15 at parity with the
@@ -628,6 +702,16 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     t_mgr = (session.read_pandas(managers, keys={"Book"}, table_name="Managers")
              if has_managers else None)
     _mark("load.Managers")
+    # Price family tables (docs/price-var-plan.md): StockReturns mirrors the "big table, seeded
+    # then bulk-loaded at the end" pattern (its array columns are comparable in bulk to
+    # SpecificPnL's); PriceAxis is tiny like ScenarioAxis, loaded whole.
+    t_price = (session.read_pandas(price_ret.head(SEED_ROWS), keys={"PriceSet", "Position"},
+                                   table_name="StockReturns")
+               if has_price else None)
+    _mark("load.StockReturns_seed")
+    t_paxis = (session.read_pandas(price_axis, keys={"PriceSet"}, table_name="PriceAxis")
+               if has_price else None)
+    _mark("load.PriceAxis")
 
     t_exp.join(t_pos, (t_exp["Date"] == t_pos["Date"]) & (t_exp["Position"] == t_pos["Position"]))
     t_exp.join(t_sec, t_exp["Position"] == t_sec["Position"])
@@ -660,6 +744,12 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         # degrades cleanly when managers.parquet is absent (v1 data / any pre-Phase-2 build has
         # no entity dimension, nothing else affected).
         t_pos.join(t_mgr, t_pos["Book"] == t_mgr["Book"])
+    if t_price is not None:
+        # Second copy of the Scenario partial-join trick: PriceSet becomes its own switch
+        # hierarchy off the un-mapped key -- but mapping POSITION only (Price PnL has no Factor
+        # structure at all; Scenarios map Factor). Exposures fan across PriceSets, unaffected.
+        t_exp.join(t_price, t_exp["Position"] == t_price["Position"])
+        t_price.join(t_paxis, t_price["PriceSet"] == t_paxis["PriceSet"])
     _mark("joins")
 
     cube = session.create_cube(t_exp, mode="manual")
@@ -726,6 +816,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     assert {"Book", "ScenarioSet"} <= _hier_names, sorted(_hier_names)
     if t_pit is not None:
         assert "PITSet" in _hier_names, sorted(_hier_names)
+    if has_price:
+        assert "PriceSet" in _hier_names, sorted(_hier_names)
     _mark("hierarchies.assert")
 
     # ---- additive exposures (drill/slice; independent of ScenarioSet) -------------------------
@@ -767,8 +859,21 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
         m["PIT Scenario PnL vector"] = tt.agg.sum(
             m["Net exposure"] * tt.agg.single_value(t_pit["ShockVec"]),
             scope=tt.OriginScope({l["Factor"]}))
+    # ---- Price family's raw vectors: second copy of the leaf-product idiom, but PER POSITION
+    # (Price PnL has no Factor structure at all) — the same OriginScope({Date, Position}) trick
+    # `Specific variance` uses to avoid fanning out across the 23 factor rows per (Date, Position)
+    # in t_exp. `Price coverage vector` is the identical sum with PricedVec in place of ReturnVec
+    # (the weight-share that was ACTUALLY priced that day, zero-fill excluded).
+    if has_price:
+        m["Price PnL vector"] = tt.agg.sum(
+            tt.agg.single_value(t_pos["Weight"]) * tt.agg.single_value(t_price["ReturnVec"]),
+            scope=tt.OriginScope({l["Date"], l["Position"]}))
+        m["Price coverage vector"] = tt.agg.sum(
+            tt.agg.single_value(t_pos["Weight"]) * tt.agg.single_value(t_price["PricedVec"]),
+            scope=tt.OriginScope({l["Date"], l["Position"]}))
+        m["Price dates (epoch)"] = tt.agg.single_value(t_paxis["DateVec"])
     # THE ONE EARLY PUBLISH. Every `tt.array.*` helper type-checks a MEASURE argument against the
-    # server (`Measure.data_type`), so the three array-typed measures above must exist before the
+    # server (`Measure.data_type`), so the array-typed measures above must exist before the
     # expressions that consume them. Everything else -- ~50 measures -- goes in the final flush.
     m.flush()
     _mark("measures.flush_vectors")
@@ -979,6 +1084,64 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     m["Total ES 97.5"] = tt.math.sqrt(m["Scenario ES 97.5"] * m["Scenario ES 97.5"]
                                       + (2.338 * m["Specific vol"]) ** 2)
     m.fmt("Total ES 97.5", "DOUBLE[0.00%]")
+
+    # ---- Price family: historical simulation on RAW STOCK RETURNS, no factor model ------------
+    # (docs/price-var-plan.md.) Second copy of the Scenario vector engine, mirrored measure for
+    # measure and Euler convention for Euler convention: `Price PnL vector` (defined above, per
+    # POSITION via OriginScope) plays the role of `Scenario PnL vector` throughout. PriceSet is
+    # the switch hierarchy (HistFull + every Evt:* window — the SAME calendar as ScenarioSet by
+    # construction, via build_price_returns/build_price_axis; Hypo:* sets are sigma-shocks on
+    # factors and have no Price mirror). MEANINGFUL in by-NAME/Sector/Issuer/book views; by
+    # FACTOR it repeats (Price has no factor structure at all) — same fan-out caveat
+    # Specific variance / Specific PnL already carry. `has_price` (stock_returns.parquet present,
+    # v2-only) degrades cleanly: v1 data / a pre-Price-VaR build gets no Price measures.
+    if has_price:
+        book_price_vec = tt.total(m["Price PnL vector"], h["Security"], h["FactorDim"], h["PositionRank"])
+        price_tail_idx = tt.array.quantile_index(book_price_vec, 0.01, interpolation="lower")
+
+        m["Price mean PnL"]   = tt.array.mean(m["Price PnL vector"])
+        m["Price VaR 95"]     = -tt.array.quantile(m["Price PnL vector"], 0.05)
+        m["Price VaR 97.5"]   = -tt.array.quantile(m["Price PnL vector"], 0.025)
+        m["Price VaR 99"]     = -tt.array.quantile(m["Price PnL vector"], 0.01)
+        m["Price worst loss"] = -tt.array.min(m["Price PnL vector"])
+        _price_n = tt.array.len(m["Price PnL vector"])                 # this set's vector length
+        _pk975 = tt.math.ceil(0.025 * _price_n)                        # tail size for 97.5% ES
+        _pk99  = tt.math.ceil(0.01  * _price_n)                        # tail size for 99% ES
+        m["Price ES 97.5"] = -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk975))
+        m["Price ES 99"]   = -tt.array.mean(tt.array.n_lowest(m["Price PnL vector"], _pk99))
+        m["Price PnL vol"] = tt.array.std(m["Price PnL vector"])
+        for _mn in ("Price mean PnL", "Price VaR 95", "Price VaR 97.5", "Price VaR 99",
+                    "Price worst loss", "Price ES 97.5", "Price ES 99", "Price PnL vol"):
+            m.fmt(_mn, "DOUBLE[0.00%]")
+
+        # --- Marginal Price VaR 99: the SAME tail-day Euler as Marginal Scenario VaR 99 — this
+        #     cell's OWN P&L on the BOOK's 1% tail scenario. ADDITIVE: Σ_member = Price VaR 99.
+        m["Marginal Price VaR 99"] = -m["Price PnL vector"][price_tail_idx]
+        m["% of Price VaR 99"] = (m["Marginal Price VaR 99"]
+            / tt.total(m["Marginal Price VaR 99"], h["Security"], h["FactorDim"], h["PositionRank"]))
+        _pk975_book = tt.math.ceil(0.025 * tt.array.len(book_price_vec))
+        _price_book_tail_idx = tt.array.n_lowest_indices(book_price_vec, _pk975_book)
+        m["Marginal Price ES 97.5"] = -tt.array.mean(m["Price PnL vector"][_price_book_tail_idx])
+        for _mn in ("Marginal Price VaR 99", "Marginal Price ES 97.5"):
+            m.fmt(_mn, "DOUBLE[0.00%]")
+        m.fmt("% of Price VaR 99", "DOUBLE[0.0%]")
+
+        # --- Incremental Price VaR 99: book minus book-without-member, EXACTLY like Incremental
+        #     Scenario VaR 99 — diversification-aware, NOT additive, no "% of".
+        price_var_book = -book_price_vec[price_tail_idx]
+        price_pnl_ex = book_price_vec - m["Price PnL vector"]
+        price_tail_idx_ex = tt.array.quantile_index(price_pnl_ex, 0.01, interpolation="lower")
+        price_var_ex = -price_pnl_ex[price_tail_idx_ex]
+        m["Incremental Price VaR 99"] = price_var_book - price_var_ex
+        m.fmt("Incremental Price VaR 99", "DOUBLE[0.00%]")
+
+        # --- Price coverage at tail: the book's weight share that was ACTUALLY priced on its own
+        #     Price VaR tail day (never the model's tail day — this is a model-free lens). Reads
+        #     1.0 for a fully-priced book on that day; the /var_bridge disclosure for the rest.
+        book_coverage_vec = tt.total(m["Price coverage vector"], h["Security"], h["FactorDim"], h["PositionRank"])
+        m["Price coverage at tail"] = book_coverage_vec[price_tail_idx]
+        m.fmt("Price coverage at tail", "DOUBLE[0.0%]")
+    _mark("measures.price_family")
 
     # ---- PnL attribution measures (Step 15; only when the 7th frame was built) ----------------
     # All three are ADDITIVE scalars (same class as Net exposure — no ragged vectors), reading the
@@ -1217,6 +1380,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     for _mn in ("Market value", "Book MV"):
         m.fmt(_mn, "DOUBLE[#,##0]")
     for _mn in DOLLAR_MEASURES:
+        if _mn not in m:              # e.g. the Price family, absent when stock_returns is absent
+            continue
         m[f"{_mn} $"] = m[_mn] * m["Book MV"]
         m.fmt(f"{_mn} $", "DOUBLE[#,##0]")
     _mark("measures.dollars")
@@ -1231,6 +1396,8 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     _bulk = [(t_exp, exposures), (t_pos, positions_cube), (t_sv, specific)]
     if t_sr is not None:
         _bulk.append((t_sr, spec_pnl))
+    if t_price is not None:
+        _bulk.append((t_price, price_ret))
     _bulk_load(_bulk)
     _mark("load.bulk")
 
