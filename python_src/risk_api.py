@@ -127,20 +127,20 @@ DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
 # P&L for the sets that don't hold that day, and multi-set sums where they overlap.
 DAY_DEP = {"PnL at day", "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
 DAY_DIMS = ["Day", "DayDate", "DaySet"]
-# "Manager" is the USER-FACING name of the cube's Book level (renamed at the API surface
-# 2026-08-14 for the multi-manager demo — "Book" is desk jargon; prospects pick a manager).
-# The cube hierarchy/level itself is still named "Book": renaming it in atoti would break the
-# eight `"Book" in cube.hierarchies` guards and every l["Book"] lookup below for zero user-visible
-# gain (the standalone atoti web app isn't part of the demo). DIM_ALIASES keeps "Book" accepted
-# on INPUT forever — saved views, old URLs, and tests carry it; DIM_LEVELS maps the canonical
-# name back to the cube level when building queries; responses always emit "Manager".
+# "Manager" is the USER-FACING name of the cube's Manager level (renamed at the API surface
+# 2026-08-14 for the multi-manager demo — "Book" is desk jargon; prospects pick a manager; the
+# cube's physical level/column followed on 2026-08-22 — see CLAUDE.md — so the two now match).
+# DIM_ALIASES keeps "Book" accepted on INPUT forever — saved views, old URLs, and tests carry
+# it; DIM_LEVELS is now empty (kept, not deleted, as the one seam a future alias would reuse).
 DIM_ALIASES = {"Book": "Manager"}
-DIM_LEVELS = {"Manager": "Book"}
+DIM_LEVELS = {}
 
 
 def _lvl(l, name: str):
-    """Cube level for a canonical dimension name (Manager -> the Book level)."""
-    return l[DIM_LEVELS.get(name, name)]
+    """Cube level for a canonical dimension name, resolving the INPUT alias first ("Book" ->
+    "Manager") — the cube level itself has been named Manager since the 2026-08-22 physical
+    rename, so this is just alias resolution + indexing now."""
+    return l[DIM_LEVELS.get(_canon_dim(name), _canon_dim(name))]
 
 
 def _canon_dim(name):
@@ -370,7 +370,7 @@ def _managers_meta() -> list[dict]:
     same key set, just null attributes (not a different response shape the UI has to branch on)."""
     books = _book_names()
     mgr = S["frames"].get("managers")
-    by_book = mgr.set_index("Book").to_dict("index") if mgr is not None and len(mgr) else {}
+    by_book = mgr.set_index("Manager").to_dict("index") if mgr is not None and len(mgr) else {}
     out = []
     for b in books:
         row = by_book.get(b, {})
@@ -412,14 +412,14 @@ async def risk(date: str, set: str, book: str = "Soros"):
     _reject_pit(set)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
-        # Book MUST be sliced. Every measure here is weight-dependent, and with more than one book
-        # loaded the no-book grand total is not a portfolio: `single_value` refuses to choose
+        # Manager MUST be sliced. Every measure here is weight-dependent, and with more than one
+        # manager loaded the no-manager grand total is not a portfolio: `single_value` refuses to choose
         # between two books' differing weights for a shared name, so the aggregate collapses
         # (measured on the 11-book build: Scenario VaR 99 read 0.0013 unsliced vs 0.0352 for
         # Soros). It read fine for years only because there was exactly one book.
         df = cube.query(m["Total VaR 99"], m["Scenario VaR 99"], m["Scenario worst loss"], m["Specific vol"],
                         filter=(l["Date"] == _date(date)) & (l["ScenarioSet"] == set)
-                               & (l["Book"] == book))
+                               & (l["Manager"] == book))
         if not len(df):
             return {"date": date, "set": set, "empty": True}
         r = df.iloc[0]
@@ -433,11 +433,11 @@ async def risk(date: str, set: str, book: str = "Soros"):
 async def scenarios(date: str, book: str = "Soros"):
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
-        # Book slice required — see the note on /risk. These are weight-dependent measures, so
+        # Manager slice required — see the note on /risk. These are weight-dependent measures, so
         # the multi-book grand total collapses instead of aggregating into a portfolio.
         df = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], m["Total VaR 99"],
                         levels=[l["ScenarioSet"]],
-                        filter=(l["Date"] == _date(date)) & (l["Book"] == book))
+                        filter=(l["Date"] == _date(date)) & (l["Manager"] == book))
         return _records(df)
     return await run_in_threadpool(run)
 
@@ -448,7 +448,7 @@ async def exposures(date: str, book: str = "Soros"):
         cube = S["cube"]; l, m = cube.levels, cube.measures
         # Net exposure is x_k = sum(w * L) — meaningless without a book to supply the w.
         df = cube.query(m["Net exposure"], levels=[l["FactorGroup"], l["Factor"]],
-                        filter=(l["Date"] == _date(date)) & (l["Book"] == book))
+                        filter=(l["Date"] == _date(date)) & (l["Manager"] == book))
         return _records(df)
     return await run_in_threadpool(run)
 
@@ -461,11 +461,11 @@ async def attribution(date: str, set: str, by: str = "sector", book: str = "Soro
         raise HTTPException(400, f"by must be one of {list(BY_LEVELS)}")
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
-        # Book slice required — see the note on /risk.
+        # Manager slice required — see the note on /risk.
         df = cube.query(m["Net exposure"], m["Scenario VaR 99"], m["Scenario worst loss"],
                         levels=[l[BY_LEVELS[by]]],
                         filter=(l["Date"] == _date(date)) & (l["ScenarioSet"] == set)
-                               & (l["Book"] == book))
+                               & (l["Manager"] == book))
         recs = _records(df)
         if by == "position":           # decorate FIGI with a readable ticker
             tk = _ticker_map()
@@ -513,7 +513,7 @@ async def trends(set: str = "HistFull",
         back = dict(zip(mnames, mlist))
         if by:
             # additive breakdown (e.g. Net exposure by Factor) — one query is safe (no P&L vectors).
-            # Book sliced for the same reason as /risk: these are weight-dependent measures and
+            # Manager sliced for the same reason as /risk: these are weight-dependent measures and
             # the multi-book grand total collapses rather than aggregating into a portfolio.
             # Memoized on the same argument as the book path below (api_bench 2026-08-21): the
             # measured cost is the cube query itself (~1.4 s for Date x Factor on the largest
@@ -523,9 +523,8 @@ async def trends(set: str = "HistFull",
             if ck in S:
                 return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             df = (cube.query(*meas, levels=[l["Date"], _lvl(l, by)],
-                             filter=set_cond & (l["Book"] == book))
+                             filter=set_cond & (l["Manager"] == book))
                   .rename(columns=back)
-                  .rename_axis(index={"Book": "Manager"})
                   .reset_index().sort_values("Date"))
             recs = _records(df, reset=False)
             S[ck] = recs
@@ -544,7 +543,7 @@ async def trends(set: str = "HistFull",
             dates = sorted({pd.Timestamp(d).date() for d in S["frames"]["specific_var"]["Date"]})
 
             def _one(d):
-                return cube.query(*meas, filter=(l["Date"] == d) & set_cond & (l["Book"] == book))
+                return cube.query(*meas, filter=(l["Date"] == d) & set_cond & (l["Manager"] == book))
 
             with ThreadPoolExecutor(max_workers=8) as ex:
                 results = list(ex.map(_one, dates))
@@ -593,8 +592,8 @@ async def validation(book: str = "Soros"):
         # and the cube side below would read the collapsed no-book grand total. The local holding
         # the picked rows is `top3`, NOT `book` — rebinding the parameter name inside the closure
         # is what made /span raise UnboundLocalError.
-        if "Book" in positions.columns:
-            positions = positions[positions["Book"] == book]
+        if "Manager" in positions.columns:
+            positions = positions[positions["Manager"] == book]
             if positions.empty:
                 raise HTTPException(404, f"no positions for book {book!r}")
         last = positions["Date"].max()
@@ -605,7 +604,7 @@ async def validation(book: str = "Soros"):
         # --- cube side: 3-position slice, by scenario set ---
         cdf = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], levels=[l["ScenarioSet"]],
                          filter=(l["Date"] == pd.Timestamp(last).date()) & l["Position"].isin(*figs)
-                                & (l["Book"] == book))
+                                & (l["Manager"] == book))
 
         # --- pandas reference: same math as the Excel workbook (Market INCLUDED: leaf loading 1.0) ---
         wide = (factor_ret
@@ -654,20 +653,20 @@ def _dim_members_via_count(cube, l, m, d: str) -> list[str]:
 
 
 def _manager_members(cube, session, l, m) -> list[str]:
-    """Book/Manager members WITHOUT the fan-out contributors.COUNT groupby (2026-08-15 cube-opt
+    """Manager members WITHOUT the fan-out contributors.COUNT groupby (2026-08-15 cube-opt
     round 2, docs/cube-opt-round2-dims.md). That groupby is ~85-90% of /dims's cost on the
-    124-book build (13-25s of 15-28s measured across runs): Book is an UN-MAPPED key of the
-    Positions table's partial join onto Exposures (Date+Position only, Book left out -- the same
-    partial-join trick ScenarioSet uses), so counting contributors per Book member means fanning
+    124-book build (13-25s of 15-28s measured across runs): Manager is an UN-MAPPED key of the
+    Positions table's partial join onto Exposures (Date+Position only, Manager left out -- the
+    same partial-join trick ScenarioSet uses), so counting contributors per Manager member means fanning
     the 6M-row Exposures fact out against the matching slice of the 11.6M-row Positions table for
     EVERY member at once.
 
     Three cheap engine queries replace it (all round-trip into the live Atoti session, never
     S["frames"]/pandas.read_parquet -- the cube stays the source of truth). Two variants were
     tried and measured before this one:
-      - fetching the WHOLE Positions.Book column (Table.query, 11.6M rows) and de-duping
+      - fetching the WHOLE Positions.Manager column (Table.query, 11.6M rows) and de-duping
         client-side: correct, but the data volume alone costs ~3.5s;
-        `t_pos.query(t_pos["Book"], max_rows=20_000_000)` then `.unique()`.
+        `t_pos.query(t_pos["Manager"], max_rows=20_000_000)` then `.unique()`.
       - the SAME idea flattened into one big worker pool alongside everything else: measured
         WORSE (2.8s cold) than the nested version below -- too much concurrent JVM query
         dispatch contends with itself; small, separately-pooled batches of concurrent work beat
@@ -678,7 +677,7 @@ def _manager_members(cube, session, l, m) -> list[str]:
     max_rows=1 Table.query (the engine can short-circuit on the first match instead of scanning),
     run CONCURRENTLY in their own worker pool. "N/A" (an Exposures (Date, Position) row that no
     book holds that date -- the partial join's unmatched placeholder) is checked the same way as
-    before: a SINGLE-CELL FILTERED contributors.COUNT (`Book.isin("N/A")`) instead of enumerating
+    before: a SINGLE-CELL FILTERED contributors.COUNT (`Manager.isin("N/A")`) instead of enumerating
     and counting all 124 members, so the engine answers from its per-member index rather than a
     full fan-out scan. One measured, disclosed gap: the Managers table (managers.parquet, Phase-2
     optional) lists every manager the desk tracks, including ones with zero equity positions ever
@@ -689,13 +688,13 @@ def _manager_members(cube, session, l, m) -> list[str]:
     t_mgr = session.tables.get("Managers")   # None on pre-Phase-2 builds / v1 data (no managers.parquet)
 
     def _exists(t_pos, name: str) -> bool:
-        r = t_pos.query(t_pos["Book"], filter=t_pos["Book"] == name, max_rows=1)
+        r = t_pos.query(t_pos["Manager"], filter=t_pos["Manager"] == name, max_rows=1)
         return len(r) > 0
 
     t_pos = session.tables["Positions"]
     if t_mgr is not None:
-        cand_df = t_mgr.query(t_mgr["Book"], max_rows=1000)
-        candidates = sorted({str(x) for x in cand_df["Book"].unique()})
+        cand_df = t_mgr.query(t_mgr["Manager"], max_rows=1000)
+        candidates = sorted({str(x) for x in cand_df["Manager"].unique()})
         # 32 workers, NOT one-per-candidate: measured worse (2.8s vs 1.4-1.5s) with a worker per
         # candidate (124 here) -- too much concurrent JVM query dispatch contends with itself.
         with ThreadPoolExecutor(max_workers=32) as ex:
@@ -703,11 +702,11 @@ def _manager_members(cube, session, l, m) -> list[str]:
             members = {c for c, f in futs.items() if f.result()}
     else:
         # no managers.parquet (pre-Phase-2 build / v1 data): fall back to the full-column scan --
-        # slower (~3.5s) but still cube-native, and the only source of Book candidates available.
-        book_df = t_pos.query(t_pos["Book"], max_rows=20_000_000)
-        members = {str(x) for x in book_df["Book"].unique()}
+        # slower (~3.5s) but still cube-native, and the only source of Manager candidates available.
+        book_df = t_pos.query(t_pos["Manager"], max_rows=20_000_000)
+        members = {str(x) for x in book_df["Manager"].unique()}
 
-    na_df = cube.query(m["contributors.COUNT"], filter=l["Book"].isin("N/A"))
+    na_df = cube.query(m["contributors.COUNT"], filter=l["Manager"].isin("N/A"))
     if len(na_df) and int(na_df.iloc[0, 0]) > 0:
         members.add("N/A")
     return sorted(members)
@@ -752,9 +751,9 @@ def _dims_response() -> dict:
 
     2026-08-15 cube-opt round 2 (docs/cube-opt-round2-dims.md): this used to be ten sequential
     contributors.COUNT groupbys, one per DIM_NAMES entry, ~28s total on the 124-book build (~24s
-    of it the Book/Manager dimension alone -- Step 7's flagged next candidate in
+    of it the Manager dimension alone -- Step 7's flagged next candidate in
     docs/cube-optimization-plan.md). Now: the nine cheap dimensions run CONCURRENTLY (same exact
-    query each, just not serialized -- correctness is untouched by construction), and Book/Manager
+    query each, just not serialized -- correctness is untouched by construction), and Manager
     is answered by _manager_members's two targeted engine queries instead of the fan-out groupby.
     Measured end to end (124-book build, cold): see the round-2 doc.
     """
@@ -864,7 +863,7 @@ def _pit_addressing(cube, fdict: dict, axis: list, mlist: list):
 
 
 # Factor contribution / Specific PnL / Realized PnL are baked PHYSICAL columns on tables keyed
-# WITHOUT Book (deliberately, so attribution stays immune to the what-if branch — see
+# WITHOUT Manager (deliberately, so attribution stays immune to the what-if branch — see
 # barra_factor_risk_cube.py's long "KNOWN LIMITATION" comment near `w = (positions[...]`). With
 # more than one book loaded, the merge that builds them takes the FIRST BOOK ALPHABETICALLY's
 # weight for any (Date, Position) — so they read that ONE book's numbers under every book's
@@ -884,7 +883,7 @@ def _book_names() -> list[str]:
     # S.get, not S[...]: _validate_pivot calls this, and the pivot-spec unit tests exercise that
     # validator with no cube loaded at all, so "frames" is simply absent there.
     pos = (S.get("frames") or {}).get("positions")
-    if pos is None or "Book" not in pos.columns:
+    if pos is None or "Manager" not in pos.columns:
         return []
     # Keyed by a WEAKREF to the frame, not id(): the unit tests swap short-lived stub frames in
     # and out of S, and CPython reuses the address of a collected one — an id-keyed memo handed
@@ -893,7 +892,7 @@ def _book_names() -> list[str]:
     hit = S.get("_book_names_memo")
     if hit is not None and hit[0]() is pos:
         return hit[1]
-    names = sorted(pos["Book"].unique().tolist())
+    names = sorted(pos["Manager"].unique().tolist())
     S["_book_names_memo"] = (weakref.ref(pos), names)
     return names
 
@@ -903,7 +902,7 @@ def _n_books() -> int:
 
 
 def _multi_book_cube() -> bool:
-    """True once more than one Book is loaded on the live positions frame."""
+    """True once more than one Manager is loaded on the live positions frame."""
     return _n_books() > 1
 
 
@@ -936,7 +935,7 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
         if unsafe:
             n_books = _n_books()
             raise HTTPException(400,
-                f"{unsafe} are book-independent (baked columns with no Book key — a known atoti "
+                f"{unsafe} are book-independent (baked columns with no Manager key — a known atoti "
                 f"0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted per-book "
                 f"with {n_books} books loaded: they would silently read one arbitrary book's "
                 "numbers under every book's label. Use barra_pnl_attribution.py's book= precompute "
@@ -1021,7 +1020,7 @@ def _day_vector_records(cube, l, m, shape, mlist: list, fdict: dict, query_kw: d
                         stress_scenario: str | None) -> list[dict]:
     """The vector plan's records: identical columns/order/types to the level plan (Day int,
     DayDate ISO date, the breakout's full hierarchy path as the cube emits it, then the measures
-    in the caller's order). Book-level markers (`VaR line at day` & co.) come from ONE single-cell
+    in the caller's order). Manager-level markers (`VaR line at day` & co.) come from ONE single-cell
     query and are broadcast to every row, exactly what the cube's lifted markers evaluate to."""
     with_daydate, breakouts, set_name, day_filter = shape
     # the day window is applied to the RECORDS below, not to the cube filter: the P&L vector is
@@ -1195,9 +1194,9 @@ def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: boo
     _kw = {"scenario": scenario} if scenario is not None else {}
 
     def _canon_ax(df):
-        # the cube's level is named "Book"; the API's canonical dimension is "Manager"
-        df = df.rename(columns=_back) if pit_mode else df
-        return df.rename_axis(index={"Book": "Manager"}) if "Book" in (df.index.names or []) else df
+        # the cube's level has been named "Manager" since the 2026-08-22 physical rename, so
+        # this is now a plain PIT-mirror column rename with no axis-name shim needed.
+        return df.rename(columns=_back) if pit_mode else df
 
     shape = None if plan == "levels" or pit_mode else _day_vector_shape(rlist, clist, mlist, fdict)
     if shape is not None:
@@ -1238,7 +1237,7 @@ def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
     Untraded names inherit the base — a branch is a delta, not a copy."""
     pos = S["frames"]["positions"]
     d_ts = pd.Timestamp(date)
-    base = pos[(pos["Book"] == book) & (pos["Date"] == d_ts)]
+    base = pos[(pos["Manager"] == book) & (pos["Date"] == d_ts)]
     rows = []
     for t in trades:
         p, nw = t["position"], float(t["weight"])
@@ -1246,7 +1245,7 @@ def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
         if len(r0):
             r = r0.iloc[0].to_dict(); r["Weight"] = nw
         else:
-            r = {"Date": d_ts, "Book": book, "Position": p, "Weight": nw,
+            r = {"Date": d_ts, "Manager": book, "Position": p, "Weight": nw,
                  "MV": np.nan, "ADV": np.nan}
         rows.append(r)
     # The branch load must match the CUBE table's width, which since 2026-08-14 is narrower than
@@ -1414,7 +1413,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
 
     Drill: legacy `position`/`sector` params still work; `filters` is the same JSON object
     {dimension: [members]} `/pivot` takes (AND across dims, OR within) so the chart can scope
-    to a Book and any Sector/Issuer/Position/Factor slice. Date/ScenarioSet stay the path axis
+    to a Manager and any Sector/Issuer/Position/Factor slice. Date/ScenarioSet stay the path axis
     and must NOT appear in `filters` (they're the `date`/`set` params).
 
     `breakout` (a dimension, e.g. "Sector") adds a `dist_stacked` dataset: the cube's P&L vector
@@ -1506,7 +1505,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
 
 # ============================================================================ desk limits (RAG)
 # Compare the cube's book numbers to a desk limit set (limits.json) and return a red/amber/green
-# status per limit. Book-level VaR/ES/HHI come from the cube (scenario-dependent -> one ScenarioSet);
+# status per limit. Manager-level VaR/ES/HHI come from the cube (scenario-dependent -> one ScenarioSet);
 # concentration (single-name / sector weight) comes from the positions overlay as-of the date.
 
 def _load_limits() -> dict:
@@ -1545,8 +1544,8 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
     cfg = _load_limits()
     cube = S["cube"]; l, m = cube.levels, cube.measures
     checks: list[dict] = []
-    have_book = "Book" in {n for _, n in cube.hierarchies}
-    base = (l["Date"] == _date(date)) & ((l["Book"] == book) if have_book else (l["Date"] == _date(date)))
+    have_book = "Manager" in {n for _, n in cube.hierarchies}
+    base = (l["Date"] == _date(date)) & ((l["Manager"] == book) if have_book else (l["Date"] == _date(date)))
 
     # book-level scenario measures (VaR/ES/Top-5 need a single ScenarioSet; Top-5 risk share is
     # a cube measure since 2026-07-04 — tt.rank over the flat PositionRank hierarchy — so the
@@ -1566,7 +1565,7 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
     conc = cfg.get("concentration", {})
     if conc:
         pos = S["frames"]["positions"]
-        asof = pos[(pos["Book"] == book) & (pos["Date"] <= pd.Timestamp(date))]
+        asof = pos[(pos["Manager"] == book) & (pos["Date"] <= pd.Timestamp(date))]
         bp = asof[asof["Date"] == asof["Date"].max()][["Position", "Weight"]] if len(asof) else asof
         if "single_name_weight" in conc and len(bp):
             spec = conc["single_name_weight"]
@@ -1652,7 +1651,7 @@ async def dq():
 
 # ============================================================================ single-book artifact guard
 # Multi-manager Phase 3 (2026-07-30). Several precomputed artifacts (universe_membership/funnel/span/
-# drift.parquet, pnl_attribution.parquet) were built for ONE book and carry no Book column at all —
+# drift.parquet, pnl_attribution.parquet) were built for ONE book and carry no Manager column at all —
 # barra_universe_membership.py hardcodes SOROS_CIK and never reads positions.parquet; barra_universe_
 # funnel.py/_span.py/_drift.py and barra_pnl_attribution.py's default `run()` call all read (or were
 # called against) whatever book(s) happened to be in positions.parquet at build time, unfiltered.
@@ -1662,10 +1661,10 @@ async def dq():
 # 500) instead of proceeding when the requested book isn't verifiably the one the artifact covers.
 
 def _artifact_book(kind: str) -> tuple[str | None, str]:
-    """(book, basis) — the single Book the named single-book artifact was built against, and how
+    """(book, basis) — the single Manager the named single-book artifact was built against, and how
     that was determined. `kind` is "membership" (barra_universe_membership.py) or one of
     "funnel"/"span"/"drift"/"pnl_attribution" (all read positions.parquet with no, or only a
-    default-value, Book filter).
+    default-value, Manager filter).
 
     membership: barra_universe_membership.py hardcodes SOROS_CIK and never reads positions.parquet
     at all, so its coverage is fixed and independent of whatever books are in the LIVE frames —
@@ -1674,7 +1673,7 @@ def _artifact_book(kind: str) -> tuple[str | None, str]:
 
     funnel/span/drift/pnl_attribution: none of these precomputes persist a book marker on their
     artifact. The best signal available at REQUEST time is the live positions frame: if it holds
-    exactly one Book, that is (barring a stale artifact — see the WEAKNESS note below) what the
+    exactly one Manager, that is (barring a stale artifact — see the WEAKNESS note below) what the
     artifact was built against. >1 book live -> we cannot attribute a book-oblivious artifact to
     any one of several, so `book` comes back None ("can't verify").
 
@@ -1692,11 +1691,11 @@ def _artifact_book(kind: str) -> tuple[str | None, str]:
                 return m["book"], "SOROS_CIK hardcoded in barra_universe_membership.py, resolved via barra_build_frames.MANAGERS"
         return None, "SOROS_CIK not found in barra_build_frames.MANAGERS (unreachable in a healthy config)"
     pos = S["frames"].get("positions")
-    if pos is None or pos.empty or "Book" not in pos.columns:
+    if pos is None or pos.empty or "Manager" not in pos.columns:
         return None, "no positions frame loaded"
-    books = pos["Book"].unique()
+    books = pos["Manager"].unique()
     if len(books) == 1:
-        return str(books[0]), "inferred from the live positions frame (exactly one Book present)"
+        return str(books[0]), "inferred from the live positions frame (exactly one Manager present)"
     # Several books live. Inferring from the frames is useless here, but the precomputes are NOT
     # book-oblivious any more: funnel/span/drift/pnl_attribution each take `run(..., book=...)`
     # with a default, and that default IS the contract for what an unattended rerun produced.
@@ -1953,7 +1952,7 @@ async def span(date: str | None = Query(None, description="month; default latest
 @app.get("/drift")
 async def drift(split: str = Query("2021-01-01", description="pre/post boundary for the drift"),
                 book: str = Query("Soros", description="both the artifact and the live attribution "
-                                  "below (book_at has no Book filter) are single-book")):
+                                  "below (book_at has no Manager filter) are single-book")):
     """Style-drift attribution: per-factor net-exposure trend, the pre/post-`split` drift ranked by
     magnitude, and a decomposition of each factor's drift into entered / exited / reweighted /
     loading_drift — with a per-factor 'lean' (rotation → intentional → benchmark; re-pricing →
@@ -1969,11 +1968,11 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
         sp = pd.Timestamp(split)
 
         exp, pos = S["frames"]["exposures"], S["frames"]["positions"]
-        # The live attribution below (book_at → decompose) has no Book concept of its own; with
+        # The live attribution below (book_at → decompose) has no Manager concept of its own; with
         # the multi-book frames the requested book must be filtered HERE or x_k sums across every
         # manager at once (the same bug barra_universe_drift.run fixed for the artifact side).
-        if "Book" in pos.columns:
-            pos = pos[pos["Book"] == book]
+        if "Manager" in pos.columns:
+            pos = pos[pos["Manager"] == book]
             if pos.empty:
                 return {"status": "book_mismatch", "kind": "drift", "requested_book": book,
                         "artifact_book": None, "basis": "no positions rows for this book",
@@ -2092,10 +2091,10 @@ def _backtest_result(date: str, scen: str, book: str, alpha: float, window: int,
                      method: str = "equal", lam: float = 0.94) -> dict:
     """Rolling-window VaR backtest of the book's daily factor-P&L series for one scenario set."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
-    have_book = "Book" in {n for _, n in cube.hierarchies}
+    have_book = "Manager" in {n for _, n in cube.hierarchies}
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == scen)
     if have_book:
-        flt = flt & (l["Book"] == book)
+        flt = flt & (l["Manager"] == book)
     pv = cube.query(m["Scenario PnL vector"], filter=flt)
     dv = cube.query(m["Scenario dates (epoch)"], filter=flt)
     base = {"set": scen, "book": book, "date": date, "alpha": alpha, "window": window,
@@ -2186,10 +2185,10 @@ def _drawdown_result(date: str, scen: str, book: str) -> dict:
     """Pull the book P&L vector for one (Date, ScenarioSet) and reduce to the drawdown summary +
     path. Same vector source as /backtest and /scenario_pnl."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
-    have_book = "Book" in {n for _, n in cube.hierarchies}
+    have_book = "Manager" in {n for _, n in cube.hierarchies}
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == scen)
     if have_book:
-        flt = flt & (l["Book"] == book)
+        flt = flt & (l["Manager"] == book)
     pv = cube.query(m["Scenario PnL vector"], filter=flt)
     dv = cube.query(m["Scenario dates (epoch)"], filter=flt)
     base = {"set": scen, "book": book, "date": date}
@@ -2237,8 +2236,8 @@ def _factor_exposures(date: str, book: str) -> dict:
     """Book net factor exposure x_k by Factor at a date (cube Net exposure — scenario-independent)."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
     flt = (l["Date"] == _date(date))
-    if "Book" in {n for _, n in cube.hierarchies}:
-        flt = flt & (l["Book"] == book)
+    if "Manager" in {n for _, n in cube.hierarchies}:
+        flt = flt & (l["Manager"] == book)
     df = cube.query(m["Net exposure"], levels=[l["Factor"]], filter=flt).reset_index()
     return {str(r["Factor"]): float(r["Net exposure"]) for _, r in df.iterrows()}
 
@@ -2336,8 +2335,8 @@ def _corr_stress_cube(date: str, book: str, vol_mult: float, rho: float) -> dict
         sim = S["session"].tables["CorrStress"]
         sim.append((scen, float(vol_mult), float(rho)))
         flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
-        if "Book" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Book"] == book)
+        if "Manager" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Manager"] == book)
         base = cube.query(mm["Model vol"], filter=flt)
         stressed = cube.query(mm["Stressed model vol"],
                               filter=flt & (l["CorrStress"] == scen))
@@ -2387,8 +2386,8 @@ async def stress(body: StressBody):
             sim.append(*[(scen, f_, float(sig)) for f_, sig in body.shocks.items()])
             flt = ((l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
                    & (l["StressShock"] == scen))
-            if "Book" in {n for _, n in cube.hierarchies}:
-                flt &= (l["Book"] == body.book)
+            if "Manager" in {n for _, n in cube.hierarchies}:
+                flt &= (l["Manager"] == body.book)
             dfF = (cube.query(mm["Custom stress PnL"], mm["Net exposure"], mm["Factor return vol"],
                               levels=[l["Factor"]], filter=flt).reset_index())
             byf = dfF.set_index("Factor")
@@ -2472,7 +2471,7 @@ def _book_inputs(date: str, book: str):
     factors = [c for c in L.columns if c in wide.columns]
     L = L[factors]
     R = wide[factors].to_numpy()
-    pos = f["positions"]; asof = pos[(pos["Book"] == book) & (pos["Date"] <= d)]
+    pos = f["positions"]; asof = pos[(pos["Manager"] == book) & (pos["Date"] <= d)]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     held = bp.set_index("Position")["Weight"] if len(bp) else pd.Series(dtype=float)
     w = pd.Series(0.0, index=L.index)
@@ -2564,8 +2563,8 @@ async def contributions(date: str | None = None, book: str = "Soros"):
         # cube-served numbers (single source of truth with the grid), HistFull = the model σ
         cube = S["cube"]; l, m = cube.levels, cube.measures
         flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
-        if "Book" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Book"] == book)
+        if "Manager" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Manager"] == book)
         bk = cube.query(m["Model vol"], m["Scenario PnL vol"], m["Specific variance"], filter=flt)
         if not len(bk):
             raise HTTPException(404, f"no cube cell at {d} / HistFull")
@@ -2638,8 +2637,8 @@ def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
     transient what-if source-scenario branch. One query."""
     cube = S["cube"]; l, mm = cube.levels, cube.measures
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
-    if "Book" in {n for _, n in cube.hierarchies}:
-        flt &= (l["Book"] == book)
+    if "Manager" in {n for _, n in cube.hierarchies}:
+        flt &= (l["Manager"] == book)
     kw = {"scenario": scenario} if scenario is not None else {}
     q = cube.query(*[mm[v] for v in _CUBE_RISK_KEYS.values()], filter=flt, **kw)
     if not len(q):
@@ -2714,7 +2713,7 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     # name) are invisible to the risk math; disclose them rather than let the book quietly
     # sum below 1. holdings + unpriced together recover the full 13F weight.
     pos = S["frames"]["positions"]
-    asof = pos[(pos["Book"] == book) & (pos["Date"] <= pd.Timestamp(date))]
+    asof = pos[(pos["Manager"] == book) & (pos["Date"] <= pd.Timestamp(date))]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     unpriced = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
                 for p, wt in bp.set_index("Position")["Weight"].items() if p not in L.index]
@@ -2773,7 +2772,7 @@ async def liquidity(date: str | None = Query(None, description="as-of date; defa
     def run():
         f = S["frames"]; pos = f["positions"]
         d = pd.Timestamp(date) if date else pd.Timestamp(pos["Date"].max())
-        bk = pos[(pos["Book"] == book) & (pos["Date"] == d)].copy()
+        bk = pos[(pos["Manager"] == book) & (pos["Date"] == d)].copy()
         if bk.empty:
             raise HTTPException(404, f"no positions for {book} on {d.date()}")
         if "ADV" not in bk.columns:
@@ -2866,7 +2865,7 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     # full-frame boolean masks -- specific_returns is the DAILY residual frame (~13M rows on the
     # 124-book build) and scanning it once per month was most of /pnl_attribution/residual's
     # cost. Same rows selected, same arithmetic (see _frame_rows_by).
-    pos_by = _frame_rows_by("positions", ("Book", "Date"))
+    pos_by = _frame_rows_by("positions", ("Manager", "Date"))
     exp_by = _frame_rows_by("exposures", ("Date",))
     parts = []
     for d0 in d0s:
@@ -3026,14 +3025,14 @@ def _frame_rows_by(name: str, keys: tuple) -> dict:
 
 
 def _book_date_rows(book: str) -> dict:
-    """{Date: row positions in the positions frame} for ONE book — the (Book, Date) row index
-    projected onto its book. `pos[pos["Book"] == book]` is an 11.6M-row scan on the 124-book
+    """{Date: row positions in the positions frame} for ONE book — the (Manager, Date) row index
+    projected onto its book. `pos[pos["Manager"] == book]` is an 11.6M-row scan on the 124-book
     build and the endpoints that needed it did one per call (/whatchanged did several)."""
     fr = S["frames"]["positions"]
     ck = ("_book_dates", book, id(fr))
     if ck not in S:
         S[ck] = {pd.Timestamp(d): idx
-                 for (b, d), idx in _frame_rows_by("positions", ("Book", "Date")).items()
+                 for (b, d), idx in _frame_rows_by("positions", ("Manager", "Date")).items()
                  if b == book}
     return S[ck]
 
@@ -3064,7 +3063,7 @@ def _pred_month_numpy(d0, book: str, frw: pd.DataFrame):
     function of the frames -- the same arithmetic _pred_book_vols always ran, just fed from the
     cached row index instead of full-frame masks."""
     f = S["frames"]
-    pos_idx = _frame_rows_by("positions", ("Book", "Date")).get((book, d0))
+    pos_idx = _frame_rows_by("positions", ("Manager", "Date")).get((book, d0))
     if pos_idx is None or len(pos_idx) == 0:
         return None
     w_ = f["positions"].iloc[pos_idx].groupby("Position")["Weight"].sum()
@@ -3096,7 +3095,7 @@ def _pred_month_cube(d0, book: str, ref):
     absent (numpy stands). Raises on a cube error (the caller records it and falls back)."""
     ref_book, ref_spec, ref_fac = ref
     cube = S["cube"]; l, mm = cube.levels, cube.measures
-    have_book = "Book" in {n for _, n in cube.hierarchies}
+    have_book = "Manager" in {n for _, n in cube.hierarchies}
     # The PIT sets moved to their own hierarchy + mirrored measures on 2026-08-14 (cube
     # optimization Step 2 — they were 95% of ScenarioSet's members and every group-by paid
     # for them). Same set NAMES, same numbers; a pre-split cube still answers via ScenarioSet.
@@ -3107,7 +3106,7 @@ def _pred_month_cube(d0, book: str, ref):
     pit = f"PIT:{pd.Timestamp(d0).date()}"
     flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (set_lvl == pit)
     if have_book:
-        flt &= (l["Book"] == book)
+        flt &= (l["Manager"] == book)
     q = cube.query(mm[mvol_n], mm["Specific vol"], filter=flt)
     if not len(q) or pd.isna(q.iloc[0][mvol_n]):
         return None                                    # no PIT set for this month — numpy stands
@@ -3814,7 +3813,7 @@ async def exposure_profile(factor: str, date: str | None = None, book: str = "So
         if sub.empty:
             raise HTTPException(400, f"unknown factor or no loadings: {factor}")
         pos = f["positions"]
-        w_ = pos[(pos["Book"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
+        w_ = pos[(pos["Manager"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
         tk = _ticker_map()
         held = sorted(
             [{"ticker": tk.get(p, p), "weight": float(wt), "loading": float(sub[p])}
@@ -3892,8 +3891,8 @@ async def hedge(date: str | None = None, book: str = "Soros"):
         # cube-served numbers (HistFull = the model σ)
         cube = S["cube"]; l, m = cube.levels, cube.measures
         flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
-        if "Book" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Book"] == book)
+        if "Manager" in {n for _, n in cube.hierarchies}:
+            flt &= (l["Manager"] == book)
         bk = cube.query(m["Model vol"], m["Specific vol"], filter=flt)
         if not len(bk):
             raise HTTPException(404, f"no cube cell at {d} / HistFull")
@@ -3963,12 +3962,12 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
     if not float(np.abs(w.to_numpy()).sum()):
         raise HTTPException(404, f"no {book} positions at {d}")
     f = S["frames"]
-    has_book_hier = "Book" in {n for _, n in cube.hierarchies}
+    has_book_hier = "Manager" in {n for _, n in cube.hierarchies}
 
     # T0 / T1 -- straight from the cube (ScenarioSet=set_)
     flt_scn = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_)
     if has_book_hier:
-        flt_scn &= (l["Book"] == book)
+        flt_scn &= (l["Manager"] == book)
     scn_row = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], filter=flt_scn)
     if not len(scn_row):
         raise HTTPException(404, f"no cube cell at {d} / ScenarioSet={set_}")
@@ -3978,7 +3977,7 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
     # T4 + the book's own coverage-at-tail -- straight from the cube (PriceSet=set_)
     flt_price = (l["Date"] == _date(d)) & (l["PriceSet"] == set_)
     if has_book_hier:
-        flt_price &= (l["Book"] == book)
+        flt_price &= (l["Manager"] == book)
     price_row = cube.query(m["Price VaR 99"], m["Price coverage at tail"], filter=flt_price)
     if not len(price_row):
         raise HTTPException(404, f"no cube cell at {d} / PriceSet={set_}")
@@ -4017,7 +4016,7 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
 
     # numpy verification twin of T4 (Price VaR 99, ALL priced names — /contributions' pattern)
     pos = f["positions"]; dts = pd.Timestamp(d)
-    asof = pos[(pos["Book"] == book) & (pos["Date"] <= dts)]
+    asof = pos[(pos["Manager"] == book) & (pos["Date"] <= dts)]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     held = bp.set_index("Position")["Weight"] if len(bp) else pd.Series(dtype=float)
     priced_names = set(r_wide.columns)
@@ -4049,7 +4048,7 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
     # is a magnitude comparison, not a true per-name T2/T3 split — disclosed, see docs).
     flt_names = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_) & (l["PriceSet"] == set_)
     if has_book_hier:
-        flt_names &= (l["Book"] == book)
+        flt_names &= (l["Manager"] == book)
     dfN = cube.query(m["Marginal Total VaR 99"], m["Marginal Price VaR 99"], m["Specific variance"],
                      m["Net weight"],
                      levels=[l["Position"]], filter=flt_names).reset_index()
@@ -4476,7 +4475,7 @@ async def analysis(body: AnalysisBody):
     # breach and cite the path-drawdown lens VaR/ES miss). Headline only — the dd path is dropped.
     lim = dd = None
     ldate = (fdict.get("Date") or [None])[0]
-    lbook = (fdict.get("Book") or ["Soros"])[0]
+    lbook = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
     if ldate:
         lset = (fdict.get("ScenarioSet") or [_load_limits().get("scenario_set", "HistFull")])[0]
         try:
@@ -4947,7 +4946,7 @@ def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros")
                      key=lambda r: -abs(r["delta"]))
 
     # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly.
-    # book_at has no Book concept of its own, so it must be handed the REQUESTED BOOK's rows: on
+    # book_at has no Manager concept of its own, so it must be handed the REQUESTED BOOK's rows: on
     # the multi-book frames it was reading `pos` whole, and `dict(zip(Position, Weight))` collapsed
     # all 124 managers' rows to one arbitrary weight per name — every book returned the same
     # (wrong) net exposure. Same fix /drift already carries. Slicing exposures by date too: the

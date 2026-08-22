@@ -58,13 +58,13 @@ def _day_series(cube, l, m, date, book, dayset, measures=("PnL at day",), with_d
     measure — a level is read off the axis, a measure is aggregated per member)."""
     levels = [l["Day"], l["DayDate"]] if with_date else [l["Day"]]
     return cube.query(*[m[x] for x in measures], levels=levels,
-                      filter=(l["Date"] == date) & (l["Book"] == book) & (l["DaySet"] == dayset))
+                      filter=(l["Date"] == date) & (l["Manager"] == book) & (l["DaySet"] == dayset))
 
 
 def sector_footing(cube, l, m, date, book, dayset, days=(0, 1, 41)) -> dict:
     """The drill must FOOT: the sector rows of a day sum to that day's book P&L."""
     d = cube.query(m["PnL at day"], levels=[l["Day"], l["Sector"]],
-                   filter=(l["Date"] == date) & (l["Book"] == book) & (l["DaySet"] == dayset)
+                   filter=(l["Date"] == date) & (l["Manager"] == book) & (l["DaySet"] == dayset)
                           & l["Day"].isin(*days))
     book_rows = _day_series(cube, l, m, date, book, dayset, with_date=False)
     worst = 0.0
@@ -88,7 +88,7 @@ def correctness(cube, l, m, date) -> list[dict]:
             df = _day_series(cube, l, m, date, book, s,
                              ("PnL at day", "Date at day (epoch)"), with_date=False).sort_index()
             vec = cube.query(m["Scenario PnL vector"], m["Scenario dates (epoch)"],
-                             filter=(l["Date"] == date) & (l["Book"] == book)
+                             filter=(l["Date"] == date) & (l["Manager"] == book)
                                     & (l["ScenarioSet"] == s))
             v = np.asarray(vec["Scenario PnL vector"].iloc[0], dtype="float64")
             dates_v = np.asarray(vec["Scenario dates (epoch)"].iloc[0], dtype="int64")
@@ -129,7 +129,7 @@ def main(out_path: str, with_old: bool):
     l, m = cube.levels, cube.measures
     D = pd.Timestamp(sorted(cube.query(m["contributors.COUNT"], levels=[l["Date"]]).index)[-1]).date()
     B, HF = BENCH_BOOK, "HistFull"
-    base = (l["Date"] == D) & (l["Book"] == B)
+    base = (l["Date"] == D) & (l["Manager"] == B)
 
     queries = {
         # the gated shape: the book's per-day series, both measures, as a caller would ask for it

@@ -12,7 +12,7 @@ hypothesized pathologies from the optimization analysis:
                                 A/B gate).
   H3  dead columns            — positions load timed full-width vs slim (micro-bench, own
                                 throwaway session).
-  H4  cross-book scaling      — vector measures by Book at N = 1..123 books; where the
+  H4  cross-book scaling      — vector measures by Manager at N = 1..123 books; where the
                                 intermediate limit / time limit actually bites.
   H5  aggregate cache         — every query runs twice; warm/cold ratio.
 
@@ -101,7 +101,7 @@ def build_suite(cube, ctx):
     l, m, h = ctx["l"], ctx["m"], ctx["h"]
     D, B = ctx["date"], BENCH_BOOK
     HF = l["ScenarioSet"] == "HistFull"
-    BK = l["Book"] == B
+    BK = l["Manager"] == B
     DT = l["Date"] == D
     base = DT & BK & HF
     DAY_HF = l["DaySet"] == "HistFull"      # the day-facts table's OWN set key (day_path_* entries)
@@ -159,16 +159,16 @@ def build_suite(cube, ctx):
                                                            filter=DT & BK & l["ScenarioSet"].isin(*REAL_SETS))),
         ("hhi_by_set_all130",        "sets",     lambda: q(m["Risk HHI"], levels=[l["ScenarioSet"]], filter=DT & BK)),
         ("hhi_small_book_all130",    "sets",     lambda: q(m["Risk HHI"], levels=[l["ScenarioSet"]],
-                                                           filter=DT & (l["Book"] == SMALL_BOOK))),
+                                                           filter=DT & (l["Manager"] == SMALL_BOOK))),
     ]
     # F — H4: cross-book scaling of a vector measure vs an additive one
     for n in SCALE_N:
         picks = books[:n]
         suite.append((f"model_vol_by_book_{n:03d}", "xbook",
-                      (lambda p: lambda: q(m["Model vol"], levels=[l["Book"]],
-                                           filter=DT & HF & l["Book"].isin(*p)))(picks)))
+                      (lambda p: lambda: q(m["Model vol"], levels=[l["Manager"]],
+                                           filter=DT & HF & l["Manager"].isin(*p)))(picks)))
     suite.append(("net_exposure_by_book_all", "xbook",
-                  lambda: q(m["Net exposure"], levels=[l["Book"]], filter=DT & HF)))
+                  lambda: q(m["Net exposure"], levels=[l["Manager"]], filter=DT & HF)))
     # G — attribution + Tier-1 families
     if "Factor contribution" in {n for n in cube.measures}:
         suite += [
@@ -189,14 +189,14 @@ def micro_bench_load(frames) -> dict:
     import atoti as tt
     out = {}
     pos = frames["positions"]
-    slim = pos[["Date", "Book", "Position", "Weight"]]
+    slim = pos[["Date", "Manager", "Position", "Weight"]]
     s = tt.Session.start(tt.SessionConfig(port=9098, java_options=["-Xmx6g"]))
     try:
         t0 = time.perf_counter()
-        s.read_pandas(pos, keys={"Date", "Book", "Position"}, table_name="PosFull")
+        s.read_pandas(pos, keys={"Date", "Manager", "Position"}, table_name="PosFull")
         out["positions_load_full_s"] = round(time.perf_counter() - t0, 2)
         t0 = time.perf_counter()
-        s.read_pandas(slim, keys={"Date", "Book", "Position"}, table_name="PosSlim")
+        s.read_pandas(slim, keys={"Date", "Manager", "Position"}, table_name="PosSlim")
         out["positions_load_slim_s"] = round(time.perf_counter() - t0, 2)
     finally:
         s.close()
@@ -228,7 +228,7 @@ def main(out_path: str):
     D = pd.Timestamp(dates[-1]).date()
     pos = frames["positions"]
     latest = pos[pos["Date"] == pos["Date"].max()]
-    books = (latest.groupby("Book")["MV"].sum().sort_values(ascending=False).index.tolist())
+    books = (latest.groupby("Manager")["MV"].sum().sort_values(ascending=False).index.tolist())
     ctx = {"l": l, "m": m, "h": h, "date": D, "books": books}
 
     results = []
