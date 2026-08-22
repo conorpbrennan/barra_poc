@@ -26,19 +26,19 @@ Endpoints:
     GET /position?date=&position=          -> per-name detail (weight, loadings, specific var)
     GET /validation                        -> 3-position cube-vs-pandas reconciliation
     GET /pivot                             -> generic tidy pivot (the saved-view engine)
-    GET /limits?date=&set=&book=           -> desk-limit RAG status (limits.json)
+    GET /limits?date=&set=&manager=        -> desk-limit RAG status (limits.json)
     GET /dq                                -> data-quality / trust report on the live frames
     GET /backtest?set=&alpha=&window=      -> rolling-window VaR backtest (Kupiec + Basel zone)
-    GET /drawdown?set=&date=&book=         -> constant-portfolio max drawdown over the scenario path
-    GET /trends?set=&measures=&by=         -> tidy time series of book measures over the calendar
+    GET /drawdown?set=&date=&manager=      -> constant-portfolio max drawdown over the scenario path
+    GET /trends?set=&measures=&by=         -> tidy time series of portfolio measures over the calendar
     POST /stress                           -> custom one-day stress (user-defined per-factor sigmas)
     GET /reverse_stress?loss=              -> per-factor sigma move that breaches a target loss
-    POST /whatif                           -> pre-trade book risk before/after hypothetical trades
+    POST /whatif                           -> pre-trade portfolio risk before/after hypothetical trades
     GET /pnl_attribution?from=&to=&by=     -> realized PnL by factor + residual (Carino-linked)
     GET /pnl_attribution/residual          -> residual diagnostics (IR, autocorr, bias) with RAG
     GET /pnl_attribution/linkage?T=        -> risk decomposition at T vs PnL over T→T+h (surprise z)
-    GET /pnl_attribution/drill?T=&to=&book=&position=|factor=
-                                            -> live per-book reconcile drill (frames, not the cube)
+    GET /pnl_attribution/drill?T=&to=&manager=&position=|factor=
+                                            -> live per-manager reconcile drill (frames, not the cube)
     POST /analysis                         -> streamed risk-analyst commentary on ONE view's numbers
 
 The /analysis endpoint runs the SAME guarded pivot the UI shows, then sends ONLY those tidy
@@ -116,7 +116,7 @@ DIM_NAMES = ["Date", "Manager", "Country", "Sector", "Issuer", "Position",
              # table's OWN set key. Read `PnL at day` with rows=[Day, DayDate] (+ up to TWO
              # breakout dims, e.g. Sector) and a DaySet slice. That shape -- with or without a
              # Day/DayDate window -- is served by the VECTOR plan (`_day_vector_shape`: the cube's
-             # own P&L vector unpacked, ~0.5 s any book); anything else falls to the level plan.
+             # own P&L vector unpacked, ~0.5 s any manager); anything else falls to the level plan.
              "Day", "DayDate", "DaySet",
              # PriceSet (docs/price-var-plan.md): the Price family's switch hierarchy, mirroring
              # ScenarioSet one-for-one (HistFull + every Evt:* window; no Hypo:* mirror). Pruned
@@ -147,6 +147,30 @@ def _lvl(l, name: str):
 
 def _canon_dim(name):
     return DIM_ALIASES.get(name, name)
+
+
+# Mirrors DIM_ALIASES, but for the one measure whose name followed the cube's Book -> Manager
+# rename (barra_factor_risk_cube.py, 2026-08-22): "Book MV" is accepted on INPUT forever (old
+# saved views, old URLs, old tests), but only "Manager MV" is ever emitted — in MEASURE_NAMES,
+# in query results, or anywhere else in this file.
+MEASURE_ALIASES = {"Book MV": "Manager MV"}
+
+
+def _canon_measure(name):
+    return MEASURE_ALIASES.get(name, name)
+
+
+def _coalesce_manager(manager: str | None, book: str | None, default: str = "Soros") -> str:
+    """`manager` is the canonical param name everywhere in this API; `book` is still accepted
+    silently (old links, saved views, callers not yet updated) but is never documented and never
+    emitted."""
+    if manager is not None:
+        return manager
+    if book is not None:
+        return book
+    return default
+
+
 MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL",
                  "Specific vol", "Specific variance", "Total VaR 99",
                  "Marginal Scenario VaR 99", "Marginal Total VaR 99", "VaR sensitivity",
@@ -174,24 +198,24 @@ MEASURE_NAMES = ["Net exposure", "Scenario VaR 99", "Scenario worst loss", "Scen
                  # concentration: 5 largest names' share of Total VaR (tt.rank over the flat
                  # PositionRank hierarchy; set-dependent like the marginals):
                  "Top-5 risk share",
-                 # gross/net book weight (scenario-independent, branch-sensitive):
+                 # gross/net portfolio weight (scenario-independent, branch-sensitive):
                  "Gross weight", "Net weight",
                  # ES contribution split + risk-concentration HHI:
                  "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
                  "Scenario worst date (epoch)", "Scenario n",
                  # the FAST per-day path (read with Day/DayDate on an axis + a DaySet slice; see
-                 # DIM_NAMES): the per-day book P&L and its chart markers (book VaR rule, worst
-                 # P&L point + its date -- book-level constants lifted over the day hierarchies):
+                 # DIM_NAMES): the per-day portfolio P&L and its chart markers (portfolio VaR rule,
+                 # worst P&L point + its date -- portfolio-level constants lifted over the day hierarchies):
                  "PnL at day", "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)",
                  # PnL attribution (Step 15, v2-only; pruned at startup if the cube lacks them).
                  # Forward-month convention: the value at Date d0 is the PnL over the month after d0.
                  "Factor contribution", "Specific PnL", "Realized PnL",
                  # dollars (2026-08-22, Units-context refactor 2026-08-22): $ held per cell, the
-                 # sliced book's 13F value. Every weight-unit measure in DOLLAR_MEASURES (one list
+                 # sliced manager's 13F value. Every weight-unit measure in DOLLAR_MEASURES (one list
                  # with the cube) toggles weight<->dollars on the cube's own `Units` context —
                  # there is no separate "<measure> $" measure name any more (see `Units` handling
                  # in `_pivot_query`/`_pivot_result` below).
-                 "Market value", "Book MV",
+                 "Market value", "Manager MV",
                  # Price family (docs/price-var-plan.md): historical sim on raw stock returns, no
                  # factor model — the model-free VaR/var_bridge compares against. v2-only; pruned
                  # at startup like the PnL-attribution trio if stock_returns.parquet is absent.
@@ -213,7 +237,7 @@ SCEN_DEP = {"Scenario VaR 99", "Scenario worst loss", "Scenario mean PnL", "Tota
             "Exceedance rate 2s", "Stressed model vol",
             "Marginal Scenario ES 97.5", "% of Scenario ES 97.5", "Risk HHI",
             "Scenario worst date (epoch)", "Scenario n",
-            # the Day-path chart markers read the ScenarioSet-context book VaR/worst loss (PnL at
+            # the Day-path chart markers read the ScenarioSet-context portfolio VaR/worst loss (PnL at
             # day itself reads DaySet only -- see DAY_DEP):
             "VaR line at day", "Worst pnl at day", "Worst date at day (epoch)"}
 
@@ -231,7 +255,7 @@ def _records(df: pd.DataFrame, reset: bool = True) -> list[dict]:
 
     This used to be `[{k: _clean(v) for k, v in row.items()} for _, row in df.iterrows()]`, which
     materialises one Series per row: on the payloads the Vite grid actually pulls (a by-Position
-    pivot on the largest book, ~5k rows) that per-row construction, not the cube query, was the
+    pivot on the largest manager, ~5k rows) that per-row construction, not the cube query, was the
     bulk of the response time. Cleaning per COLUMN is the same work done once per dtype.
 
     The one behavioural subtlety kept deliberately: `iterrows` coerces each row to a common dtype,
@@ -297,7 +321,7 @@ async def lifespan(app: FastAPI):
 def _prewarm() -> None:
     """Pay the one-per-process cold costs at START-UP, in a daemon thread, so no user request
     ever sees them (docs/api-bench.md): /dims member enumeration (1.4-3 s, cached on the cube
-    identity -- docs/cube-opt-round2-dims.md) and the /dq check battery (7-14 s on the 124-book
+    identity -- docs/cube-opt-round2-dims.md) and the /dq check battery (7-14 s on the 124-manager
     frames, memoized on the frames' identity). Off the start-up critical path -- inline they would
     delay 'ready' for nothing; in the thread the first request that arrives before a warm-up
     finishes simply computes it itself (same memo, same answer). Each step is best-effort: a
@@ -361,20 +385,22 @@ def _reject_pit(set_name: str) -> None:
 
 
 def _managers_meta() -> list[dict]:
-    """Available books/managers for the UI (multi-manager Phase 3, 2026-07-30) — the ONE source,
+    """Available managers for the UI (multi-manager Phase 3, 2026-07-30) — the ONE source,
     like `hypo_shocks` below (see `t_meta_serves_managers`). Sourced from the live frames, never a
     hardcoded manager list, so it reflects whatever ACTIVE_MANAGERS scope the running build used.
-    `book` is always populated (from `positions`); the entity attributes (entity_name/firm_type/
+    `manager` is always populated (from `positions`); the entity attributes (entity_name/firm_type/
     cik/n_positions_distinct) come from managers.parquet when present and are None otherwise —
-    today's data has no managers.parquet, so this degrades to book-name-only entries, same shape,
-    same key set, just null attributes (not a different response shape the UI has to branch on)."""
-    books = _book_names()
-    mgr = S["frames"].get("managers")
-    by_book = mgr.set_index("Manager").to_dict("index") if mgr is not None and len(mgr) else {}
+    today's data has no managers.parquet, so this degrades to manager-name-only entries, same
+    shape, same key set, just null attributes (not a different response shape the UI has to branch
+    on)."""
+    managers = _manager_names()
+    mgr_frame = S["frames"].get("managers")
+    by_manager = (mgr_frame.set_index("Manager").to_dict("index")
+                  if mgr_frame is not None and len(mgr_frame) else {})
     out = []
-    for b in books:
-        row = by_book.get(b, {})
-        out.append({"book": b,
+    for mgr in managers:
+        row = by_manager.get(mgr, {})
+        out.append({"manager": mgr,
                     "entity_name": _clean(row.get("EntityName")),
                     "firm_type": _clean(row.get("FirmType")),
                     "cik": _clean(row.get("CIK")),
@@ -401,25 +427,26 @@ async def meta():
                 # the cube's baked-in hypothetical shock definitions ({set: {Factor: sigma}}) —
                 # served so the Stress lens presets and the cube's Hypo:* sets share ONE source
                 "hypo_shocks": HYPO_SHOCKS,
-                # available books/managers (+ entity attributes when managers.parquet exists) —
-                # Phase 4's UI context-bar book picker reads this instead of hardcoding "Soros"
+                # available managers (+ entity attributes when managers.parquet exists) —
+                # Phase 4's UI context-bar manager picker reads this instead of hardcoding "Soros"
                 "managers": _managers_meta()}
     return await run_in_threadpool(run)
 
 
 @app.get("/risk")
-async def risk(date: str, set: str, book: str = "Soros"):
+async def risk(date: str, set: str, manager: str | None = None, book: str | None = None):
+    manager = _coalesce_manager(manager, book)
     _reject_pit(set)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         # Manager MUST be sliced. Every measure here is weight-dependent, and with more than one
-        # manager loaded the no-manager grand total is not a portfolio: `single_value` refuses to choose
-        # between two books' differing weights for a shared name, so the aggregate collapses
-        # (measured on the 11-book build: Scenario VaR 99 read 0.0013 unsliced vs 0.0352 for
-        # Soros). It read fine for years only because there was exactly one book.
+        # manager loaded the no-manager grand total is not a portfolio: `single_value` refuses to
+        # choose between two managers' differing weights for a shared name, so the aggregate
+        # collapses (measured on the 11-manager build: Scenario VaR 99 read 0.0013 unsliced vs
+        # 0.0352 for Soros). It read fine for years only because there was exactly one manager.
         df = cube.query(m["Total VaR 99"], m["Scenario VaR 99"], m["Scenario worst loss"], m["Specific vol"],
                         filter=(l["Date"] == _date(date)) & (l["ScenarioSet"] == set)
-                               & (l["Manager"] == book))
+                               & (l["Manager"] == manager))
         if not len(df):
             return {"date": date, "set": set, "empty": True}
         r = df.iloc[0]
@@ -430,31 +457,35 @@ async def risk(date: str, set: str, book: str = "Soros"):
 
 
 @app.get("/scenarios")
-async def scenarios(date: str, book: str = "Soros"):
+async def scenarios(date: str, manager: str | None = None, book: str | None = None):
+    manager = _coalesce_manager(manager, book)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         # Manager slice required — see the note on /risk. These are weight-dependent measures, so
-        # the multi-book grand total collapses instead of aggregating into a portfolio.
+        # the multi-manager grand total collapses instead of aggregating into a portfolio.
         df = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], m["Total VaR 99"],
                         levels=[l["ScenarioSet"]],
-                        filter=(l["Date"] == _date(date)) & (l["Manager"] == book))
+                        filter=(l["Date"] == _date(date)) & (l["Manager"] == manager))
         return _records(df)
     return await run_in_threadpool(run)
 
 
 @app.get("/exposures")
-async def exposures(date: str, book: str = "Soros"):
+async def exposures(date: str, manager: str | None = None, book: str | None = None):
+    manager = _coalesce_manager(manager, book)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
-        # Net exposure is x_k = sum(w * L) — meaningless without a book to supply the w.
+        # Net exposure is x_k = sum(w * L) — meaningless without a manager to supply the w.
         df = cube.query(m["Net exposure"], levels=[l["FactorGroup"], l["Factor"]],
-                        filter=(l["Date"] == _date(date)) & (l["Manager"] == book))
+                        filter=(l["Date"] == _date(date)) & (l["Manager"] == manager))
         return _records(df)
     return await run_in_threadpool(run)
 
 
 @app.get("/attribution")
-async def attribution(date: str, set: str, by: str = "sector", book: str = "Soros"):
+async def attribution(date: str, set: str, by: str = "sector",
+                      manager: str | None = None, book: str | None = None):
+    manager = _coalesce_manager(manager, book)
     _reject_pit(set)
     by = by.lower()
     if by not in BY_LEVELS:
@@ -465,7 +496,7 @@ async def attribution(date: str, set: str, by: str = "sector", book: str = "Soro
         df = cube.query(m["Net exposure"], m["Scenario VaR 99"], m["Scenario worst loss"],
                         levels=[l[BY_LEVELS[by]]],
                         filter=(l["Date"] == _date(date)) & (l["ScenarioSet"] == set)
-                               & (l["Manager"] == book))
+                               & (l["Manager"] == manager))
         recs = _records(df)
         if by == "position":           # decorate FIGI with a readable ticker
             tk = _ticker_map()
@@ -491,11 +522,12 @@ async def timeseries(set: str, measure: str = "Total VaR 99"):
 @app.get("/trends")
 async def trends(set: str = "HistFull",
                  measures: str = "Scenario VaR 99,Scenario ES 97.5,Risk HHI",
-                 by: str | None = None, book: str = "Soros"):
-    """Tidy time series of one or more book measures over the whole calendar for one ScenarioSet —
-    one cube query, so a trend panel needs a single round-trip. `by` (e.g. Factor) adds a breakdown
-    dimension: levels become [Date, by] (used for factor-exposure-over-time). Measures/by are
-    validated against the same allowlists as /pivot."""
+                 by: str | None = None, manager: str | None = None, book: str | None = None):
+    """Tidy time series of one or more portfolio measures over the whole calendar for one
+    ScenarioSet — one cube query, so a trend panel needs a single round-trip. `by` (e.g. Factor)
+    adds a breakdown dimension: levels become [Date, by] (used for factor-exposure-over-time).
+    Measures/by are validated against the same allowlists as /pivot."""
+    manager = _coalesce_manager(manager, book)
     mlist = _csv(measures)
     bad_m = [x for x in mlist if x not in MEASURE_NAMES]
     if bad_m:
@@ -514,36 +546,36 @@ async def trends(set: str = "HistFull",
         if by:
             # additive breakdown (e.g. Net exposure by Factor) — one query is safe (no P&L vectors).
             # Manager sliced for the same reason as /risk: these are weight-dependent measures and
-            # the multi-book grand total collapses rather than aggregating into a portfolio.
-            # Memoized on the same argument as the book path below (api_bench 2026-08-21): the
+            # the multi-manager grand total collapses rather than aggregating into a portfolio.
+            # Memoized on the same argument as the manager path below (api_bench 2026-08-21): the
             # measured cost is the cube query itself (~1.4 s for Date x Factor on the largest
-            # book — the SDK's per-member floor, NOT serialisation: building the records is 3 ms
+            # manager — the SDK's per-member floor, NOT serialisation: building the records is 3 ms
             # and encoding the response 10 ms), so a repeat view should not pay it again.
-            ck = ("_trends_memo", set, book, tuple(mlist), by, id(cube))
+            ck = ("_trends_memo", set, manager, tuple(mlist), by, id(cube))
             if ck in S:
                 return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             df = (cube.query(*meas, levels=[l["Date"], _lvl(l, by)],
-                             filter=set_cond & (l["Manager"] == book))
+                             filter=set_cond & (l["Manager"] == manager))
                   .rename(columns=back)
                   .reset_index().sort_values("Date"))
             recs = _records(df, reset=False)
             S[ck] = recs
         else:
-            # book-level over the calendar, DATE-BY-DATE: the scenario/HHI measures pull the full P&L
-            # vector per date, and asking for every date in one plan OOMs the cube — so loop, one
-            # date (one vector) at a time. ~100 light scalar queries; cheap and cached upstream.
-            # 2026-08-15 (api_bench): the loop is MEMOIZED per (set, book, measures) on S -- the
-            # cube never changes in-process, so the series is a constant -- and a cold fill runs
-            # the per-date queries CONCURRENTLY (8 workers; results re-assembled in date order,
-            # so records are identical to the serial loop). Measured: Vanguard HistFull default
-            # measures 70 s -> see docs/api-bench.md; Soros 5.4 s -> ~1 s.
-            ck = ("_trends_memo", set, book, tuple(mlist), by, id(cube))
+            # portfolio-level over the calendar, DATE-BY-DATE: the scenario/HHI measures pull the
+            # full P&L vector per date, and asking for every date in one plan OOMs the cube — so
+            # loop, one date (one vector) at a time. ~100 light scalar queries; cheap and cached
+            # upstream. 2026-08-15 (api_bench): the loop is MEMOIZED per (set, manager, measures)
+            # on S -- the cube never changes in-process, so the series is a constant -- and a cold
+            # fill runs the per-date queries CONCURRENTLY (8 workers; results re-assembled in date
+            # order, so records are identical to the serial loop). Measured: Vanguard HistFull
+            # default measures 70 s -> see docs/api-bench.md; Soros 5.4 s -> ~1 s.
+            ck = ("_trends_memo", set, manager, tuple(mlist), by, id(cube))
             if ck in S:
                 return {"set": set, "measures": mlist, "by": by, "records": S[ck]}
             dates = sorted({pd.Timestamp(d).date() for d in S["frames"]["specific_var"]["Date"]})
 
             def _one(d):
-                return cube.query(*meas, filter=(l["Date"] == d) & set_cond & (l["Manager"] == book))
+                return cube.query(*meas, filter=(l["Date"] == d) & set_cond & (l["Manager"] == manager))
 
             with ThreadPoolExecutor(max_workers=8) as ex:
                 results = list(ex.map(_one, dates))
@@ -581,21 +613,22 @@ async def position(date: str, position: str):
 
 
 @app.get("/validation")
-async def validation(book: str = "Soros"):
-    """Top-3 sub-book: cube scenario VaR vs an independent pandas reference (mirrors barra_excel_check)."""
+async def validation(manager: str | None = None, book: str | None = None):
+    """Top-3 sub-portfolio: cube scenario VaR vs an independent pandas reference (mirrors barra_excel_check)."""
+    manager = _coalesce_manager(manager, book)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
         f = S["frames"]
         positions, securities = f["positions"], f["securities"]
         factor_ret, specific = f["factor_returns"], f["specific_var"]
-        # Scope to one book BEFORE picking the top 3: across 11 books nlargest would mix managers,
-        # and the cube side below would read the collapsed no-book grand total. The local holding
-        # the picked rows is `top3`, NOT `book` — rebinding the parameter name inside the closure
-        # is what made /span raise UnboundLocalError.
+        # Scope to one manager BEFORE picking the top 3: across 11 managers nlargest would mix
+        # managers, and the cube side below would read the collapsed no-manager grand total. The
+        # local holding the picked rows is `top3`, NOT `manager` — rebinding the parameter name
+        # inside the closure is what made /span raise UnboundLocalError.
         if "Manager" in positions.columns:
-            positions = positions[positions["Manager"] == book]
+            positions = positions[positions["Manager"] == manager]
             if positions.empty:
-                raise HTTPException(404, f"no positions for book {book!r}")
+                raise HTTPException(404, f"no positions for manager {manager!r}")
         last = positions["Date"].max()
         top3 = (positions[positions["Date"] == last].nlargest(3, "Weight")
                 .merge(securities[["Position", "Ticker"]], on="Position"))
@@ -604,7 +637,7 @@ async def validation(book: str = "Soros"):
         # --- cube side: 3-position slice, by scenario set ---
         cdf = cube.query(m["Scenario VaR 99"], m["Scenario worst loss"], levels=[l["ScenarioSet"]],
                          filter=(l["Date"] == pd.Timestamp(last).date()) & l["Position"].isin(*figs)
-                                & (l["Manager"] == book))
+                                & (l["Manager"] == manager))
 
         # --- pandas reference: same math as the Excel workbook (Market INCLUDED: leaf loading 1.0) ---
         wide = (factor_ret
@@ -655,7 +688,7 @@ def _dim_members_via_count(cube, l, m, d: str) -> list[str]:
 def _manager_members(cube, session, l, m) -> list[str]:
     """Manager members WITHOUT the fan-out contributors.COUNT groupby (2026-08-15 cube-opt
     round 2, docs/cube-opt-round2-dims.md). That groupby is ~85-90% of /dims's cost on the
-    124-book build (13-25s of 15-28s measured across runs): Manager is an UN-MAPPED key of the
+    124-manager build (13-25s of 15-28s measured across runs): Manager is an UN-MAPPED key of the
     Positions table's partial join onto Exposures (Date+Position only, Manager left out -- the
     same partial-join trick ScenarioSet uses), so counting contributors per Manager member means fanning
     the 6M-row Exposures fact out against the matching slice of the 11.6M-row Positions table for
@@ -676,7 +709,7 @@ def _manager_members(cube, session, l, m) -> list[str]:
     then EACH candidate's existence in Positions is checked with its own tightly-filtered,
     max_rows=1 Table.query (the engine can short-circuit on the first match instead of scanning),
     run CONCURRENTLY in their own worker pool. "N/A" (an Exposures (Date, Position) row that no
-    book holds that date -- the partial join's unmatched placeholder) is checked the same way as
+    manager holds that date -- the partial join's unmatched placeholder) is checked the same way as
     before: a SINGLE-CELL FILTERED contributors.COUNT (`Manager.isin("N/A")`) instead of enumerating
     and counting all 124 members, so the engine answers from its per-member index rather than a
     full fan-out scan. One measured, disclosed gap: the Managers table (managers.parquet, Phase-2
@@ -703,8 +736,8 @@ def _manager_members(cube, session, l, m) -> list[str]:
     else:
         # no managers.parquet (pre-Phase-2 build / v1 data): fall back to the full-column scan --
         # slower (~3.5s) but still cube-native, and the only source of Manager candidates available.
-        book_df = t_pos.query(t_pos["Manager"], max_rows=20_000_000)
-        members = {str(x) for x in book_df["Manager"].unique()}
+        mgr_df = t_pos.query(t_pos["Manager"], max_rows=20_000_000)
+        members = {str(x) for x in mgr_df["Manager"].unique()}
 
     na_df = cube.query(m["contributors.COUNT"], filter=l["Manager"].isin("N/A"))
     if len(na_df) and int(na_df.iloc[0, 0]) > 0:
@@ -736,9 +769,9 @@ def _dims_response_fallback() -> dict:
     members.update(_day_members(S["session"]))
     members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
     return {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES
-                         # the book-independent attribution trio is ALWAYS rejected by
-                         # _validate_pivot on a multi-book build — don't offer it in the picker
-                         if not (x in BOOK_INDEPENDENT_MEASURES and len(_book_names()) > 1)],
+                         # the manager-independent attribution trio is ALWAYS rejected by
+                         # _validate_pivot on a multi-manager build — don't offer it in the picker
+                         if not (x in MANAGER_INDEPENDENT_MEASURES and len(_manager_names()) > 1)],
             "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
             "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
@@ -753,12 +786,12 @@ def _dims_response() -> dict:
     startup and held for the process lifetime) so every call after the first is a dict lookup.
 
     2026-08-15 cube-opt round 2 (docs/cube-opt-round2-dims.md): this used to be ten sequential
-    contributors.COUNT groupbys, one per DIM_NAMES entry, ~28s total on the 124-book build (~24s
+    contributors.COUNT groupbys, one per DIM_NAMES entry, ~28s total on the 124-manager build (~24s
     of it the Manager dimension alone -- Step 7's flagged next candidate in
     docs/cube-optimization-plan.md). Now: the nine cheap dimensions run CONCURRENTLY (same exact
     query each, just not serialized -- correctness is untouched by construction), and Manager
     is answered by _manager_members's two targeted engine queries instead of the fan-out groupby.
-    Measured end to end (124-book build, cold): see the round-2 doc.
+    Measured end to end (124-manager build, cold): see the round-2 doc.
     """
     cube, session = S["cube"], S["session"]
     key = id(cube)
@@ -777,9 +810,9 @@ def _dims_response() -> dict:
             members.update(f_day.result())
         members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
         resp = {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES
-                         # the book-independent attribution trio is ALWAYS rejected by
-                         # _validate_pivot on a multi-book build — don't offer it in the picker
-                         if not (x in BOOK_INDEPENDENT_MEASURES and len(_book_names()) > 1)],
+                         # the manager-independent attribution trio is ALWAYS rejected by
+                         # _validate_pivot on a multi-manager build — don't offer it in the picker
+                         if not (x in MANAGER_INDEPENDENT_MEASURES and len(_manager_names()) > 1)],
             "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
                 "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
@@ -871,17 +904,17 @@ def _pit_addressing(cube, fdict: dict, axis: list, mlist: list):
 # Factor contribution / Specific PnL / Realized PnL are baked PHYSICAL columns on tables keyed
 # WITHOUT Manager (deliberately, so attribution stays immune to the what-if branch — see
 # barra_factor_risk_cube.py's long "KNOWN LIMITATION" comment near `w = (positions[...]`). With
-# more than one book loaded, the merge that builds them takes the FIRST BOOK ALPHABETICALLY's
-# weight for any (Date, Position) — so they read that ONE book's numbers under every book's
-# label, not "whichever book is sliced." That is true even for an UNSLICED / grand-total query
-# (there's no live per-book weighting to fall back to, just the one baked column), so the guard
-# below is unconditional on multi-book, not just "book-sliced" queries.
-BOOK_INDEPENDENT_MEASURES = {"Factor contribution", "Specific PnL", "Realized PnL"}
+# more than one manager loaded, the merge that builds them takes the FIRST MANAGER ALPHABETICALLY's
+# weight for any (Date, Position) — so they read that ONE manager's numbers under every manager's
+# label, not "whichever manager is sliced." That is true even for an UNSLICED / grand-total query
+# (there's no live per-manager weighting to fall back to, just the one baked column), so the guard
+# below is unconditional on multi-manager, not just "manager-sliced" queries.
+MANAGER_INDEPENDENT_MEASURES = {"Factor contribution", "Specific PnL", "Realized PnL"}
 
 
-def _book_names() -> list[str]:
-    """The books on the live positions frame, sorted — MEMOIZED per frame (api_bench 2026-08-21).
-    `unique()`/`nunique()` over an 11.6M-row object column costs ~0.35 s on the 124-book build,
+def _manager_names() -> list[str]:
+    """The managers on the live positions frame, sorted — MEMOIZED per frame (api_bench 2026-08-21).
+    `unique()`/`nunique()` over an 11.6M-row object column costs ~0.35 s on the 124-manager build,
     and two hot paths ran one per call: `_validate_pivot` (so EVERY /pivot, /analysis and /ask
     tool round-trip paid it, cache hit or not — it was the fixed floor under every grid query)
     and `_managers_meta` (so every /meta, the first call each UI page load makes). The frames are
@@ -893,39 +926,41 @@ def _book_names() -> list[str]:
         return []
     # Keyed by a WEAKREF to the frame, not id(): the unit tests swap short-lived stub frames in
     # and out of S, and CPython reuses the address of a collected one — an id-keyed memo handed
-    # the next stub the previous stub's books. A weakref that no longer resolves to THIS object
+    # the next stub the previous stub's managers. A weakref that no longer resolves to THIS object
     # is a miss, so a recycled address can never be a hit.
-    hit = S.get("_book_names_memo")
+    hit = S.get("_manager_names_memo")
     if hit is not None and hit[0]() is pos:
         return hit[1]
     names = sorted(pos["Manager"].unique().tolist())
-    S["_book_names_memo"] = (weakref.ref(pos), names)
+    S["_manager_names_memo"] = (weakref.ref(pos), names)
     return names
 
 
-def _n_books() -> int:
-    return len(_book_names())
+def _n_managers() -> int:
+    return len(_manager_names())
 
 
-def _multi_book_cube() -> bool:
+def _multi_manager_cube() -> bool:
     """True once more than one Manager is loaded on the live positions frame."""
-    return _n_books() > 1
+    return _n_managers() > 1
 
 
 def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
     """Allowlist guard shared by /pivot, /analysis and /ask's query_cube tool: only whitelisted
-    dims/measures, a non-empty rows+measures selection, and (once >1 book is loaded) a refusal of
-    the three book-independent attribution measures — they cannot be trusted per-book (see
-    BOOK_INDEPENDENT_MEASURES above). Raises HTTPException(400) exactly as /pivot always has, so
+    dims/measures, a non-empty rows+measures selection, and (once >1 manager is loaded) a refusal
+    of the three manager-independent attribution measures — they cannot be trusted per-manager (see
+    MANAGER_INDEPENDENT_MEASURES above). Raises HTTPException(400) exactly as /pivot always has, so
     every caller of this guard inherits all three checks identically.
 
-    Also canonicalizes dimension ALIASES in place ("Book" -> "Manager", 2026-08-14) so every
-    guarded path — /pivot, /analysis, /ask — accepts legacy names (saved views, old URLs) while
-    the query layer and the response only ever see canonical names."""
+    Also canonicalizes dimension ALIASES in place ("Book" -> "Manager", 2026-08-14) and measure
+    ALIASES in place ("Book MV" -> "Manager MV", 2026-08-22) so every guarded path — /pivot,
+    /analysis, /ask — accepts legacy names (saved views, old URLs) while the query layer and the
+    response only ever see canonical names."""
     rlist[:] = [_canon_dim(d) for d in rlist]
     clist[:] = [_canon_dim(d) for d in clist]
     for k in [k for k in fdict if _canon_dim(k) != k]:
         fdict[_canon_dim(k)] = fdict.pop(k)
+    mlist[:] = [_canon_measure(x) for x in mlist]
     bad_d = [d for d in rlist + clist + list(fdict) if d not in DIM_NAMES]
     bad_m = [x for x in mlist if x not in MEASURE_NAMES]
     if bad_d:
@@ -936,25 +971,26 @@ def _validate_pivot(rlist: list, clist: list, mlist: list, fdict: dict) -> None:
         raise HTTPException(400, "select at least one measure")
     if not rlist:
         raise HTTPException(400, "select at least one row field")
-    if _multi_book_cube():
-        unsafe = [x for x in mlist if x in BOOK_INDEPENDENT_MEASURES]
+    if _multi_manager_cube():
+        unsafe = [x for x in mlist if x in MANAGER_INDEPENDENT_MEASURES]
         if unsafe:
-            n_books = _n_books()
+            n_managers = _n_managers()
             raise HTTPException(400,
-                f"{unsafe} are book-independent (baked columns with no Manager key — a known atoti "
-                f"0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted per-book "
-                f"with {n_books} books loaded: they would silently read one arbitrary book's "
-                "numbers under every book's label. Use barra_pnl_attribution.py's book= precompute "
-                "for correct per-book attribution instead.")
+                f"{unsafe} are manager-independent (baked columns with no Manager key — a known "
+                f"atoti 0.9.15 limitation, see barra_factor_risk_cube.py) and cannot be trusted "
+                f"per-manager with {n_managers} managers loaded: they would silently read one "
+                "arbitrary manager's numbers under every manager's label. Use "
+                "barra_pnl_attribution.py's manager= precompute for correct per-manager "
+                "attribution instead.")
 
 
 def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
     """Is this the measured pathology — a scenario measure, MANAGERS on an axis, and NO Date
     anywhere in context? Pure (no cube), so it is unit-testable.
 
-    Measured on the 124-book cube (docs/cube-optimization-plan.md, hotspot 3): `Scenario VaR 99`
+    Measured on the 124-manager cube (docs/cube-optimization-plan.md, hotspot 3): `Scenario VaR 99`
     by Manager with no Date filter is **60.2 s** on an idle cube and 500s on a loaded one — it
-    builds one P&L vector per book over the whole calendar. The SAME query with a single Date is
+    builds one P&L vector per manager over the whole calendar. The SAME query with a single Date is
     **0.76 s**. Nothing asks for the multi-date shape on purpose: it is what a field-list drag
     produces before the user picks a date."""
     return (any(x in SCEN_DEP or x in DAY_DEP or x in PRICE_DEP for x in mlist)
@@ -968,7 +1004,7 @@ def _needs_date_default(mlist: list, axis: list, fdict: dict) -> bool:
 # parallelises across every core, so on a shared box it runs 5-10x slower than the quiet-box
 # bench). The SAME numbers are already in the cube as ONE cell: `Scenario PnL vector` (per
 # breakout cell when there are breakouts) and its `Scenario dates (epoch)` dual -- ~0.15 s on the
-# largest book regardless of load. So when a /pivot query is exactly the Day shape, read the
+# largest manager regardless of load. So when a /pivot query is exactly the Day shape, read the
 # vector(s) and RESHAPE them into the identical tidy records (the /backtest, /drawdown and
 # /scenario_pnl precedent: unpacking a cube vector is reshape, not analytics -- every number is
 # still the cube's own vector element; the tie-out is pinned at 1e-12 by test_risk_measures).
@@ -1245,13 +1281,13 @@ def _pivot_query(rlist: list, clist: list, mlist: list, fdict: dict, totals: boo
     return out
 
 
-def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
+def _whatif_branch_rows(date: str, manager: str, trades: list) -> pd.DataFrame:
     """Positions rows for a transient what-if SOURCE-scenario branch: the traded names' as-of
     rows with Weight replaced (a fabricated row for a coverage name not currently held).
     Untraded names inherit the base — a branch is a delta, not a copy."""
     pos = S["frames"]["positions"]
     d_ts = pd.Timestamp(date)
-    base = pos[(pos["Manager"] == book) & (pos["Date"] == d_ts)]
+    base = pos[(pos["Manager"] == manager) & (pos["Date"] == d_ts)]
     rows = []
     for t in trades:
         p, nw = t["position"], float(t["weight"])
@@ -1259,7 +1295,7 @@ def _whatif_branch_rows(date: str, book: str, trades: list) -> pd.DataFrame:
         if len(r0):
             r = r0.iloc[0].to_dict(); r["Weight"] = nw
         else:
-            r = {"Date": d_ts, "Manager": book, "Position": p, "Weight": nw,
+            r = {"Date": d_ts, "Manager": manager, "Position": p, "Weight": nw,
                  "MV": np.nan, "ADV": np.nan}
         rows.append(r)
     # The branch load must match the CUBE table's width, which since 2026-08-14 is narrower than
@@ -1314,9 +1350,9 @@ def _hypothetical_pivot(rlist: list, clist: list, mlist: list, fdict: dict, tota
     try:
         if wtrades:
             branch = f"pivot-wf-{uuid.uuid4().hex[:12]}"
-            book = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
+            manager = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
             session.tables["Positions"].scenarios[branch].load(
-                _whatif_branch_rows(fdict["Date"][0], book, wtrades))
+                _whatif_branch_rows(fdict["Date"][0], manager, wtrades))
         if shk:
             stress_scen = f"pivot-st-{uuid.uuid4().hex[:12]}"
             sim = session.tables["StressShock"]
@@ -1348,8 +1384,8 @@ async def pivot(rows: str = "", cols: str = "", measures: str = "",
                     '"levels" forces the level plan for the Day shape (default: vector plan)'),
                 units: str | None = Query(None, description=
                     '"dollar": slice the cube\'s Units context to "$" — every DOLLAR_MEASURES '
-                    'member in `measures` is then priced at measure × Book MV, read under its '
-                    'own (unchanged) name; default "weight" (fractions of book value)')):
+                    'member in `measures` is then priced at measure × Manager MV, read under its '
+                    'own (unchanged) name; default "weight" (fractions of portfolio value)')):
     """Tidy long result of cube.query(measures, levels=rows+cols, filter=<slicers>).
 
     Slicers: `filters` is a JSON object {dimension: [members]} — AND across dimensions,
@@ -1433,7 +1469,8 @@ _EPOCH = pd.Timestamp("1970-01-01")
 @app.get("/scenario_pnl")
 async def scenario_pnl(date: str, set: str, position: str | None = None,
                        sector: str | None = None, filters: str | None = None,
-                       breakout: str | None = None, book: str = "Soros"):
+                       breakout: str | None = None,
+                       manager: str | None = None, book: str | None = None):
     """Labeled scenario P&L PATH: the `Scenario PnL vector` zipped with its `Scenario dates`
     dual, so every point carries the date that produced it. Names the worst-loss date and the
     99% VaR breach. One ScenarioSet only (the vector constraint).
@@ -1445,9 +1482,10 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
 
     `breakout` (a dimension, e.g. "Sector") adds a `dist_stacked` dataset: the cube's P&L vector
     grouped by that dimension (each member's per-day P&L — a CUBE aggregation), reshaped into
-    (date, member, pnl, rank). `rank` is the day's position once ordered by the BOOK total
+    (date, member, pnl, rank). `rank` is the day's position once ordered by the PORTFOLIO total
     (worst→best), so the chart can keep DATE labels on x while drawing the sorted loss curve.
-    Stacked, the members sum to the book P&L. The only API steps are ordering + reshape."""
+    Stacked, the members sum to the portfolio P&L. The only API steps are ordering + reshape."""
+    manager = _coalesce_manager(manager, book)
     _reject_pit(set)
     def run():
         cube = S["cube"]; l, m = cube.levels, cube.measures
@@ -1460,10 +1498,10 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
         fd = {_canon_dim(k): v for k, v in fd.items()}     # "Book" (legacy) -> "Manager"
         fd.pop("Date", None); fd.pop("ScenarioSet", None)  # those are the fixed path axis
         # Default the Manager slice when the caller didn't scope one. The P&L vector is
-        # weight-driven, so an unscoped query over several books returns the collapsed grand total
-        # rather than any portfolio's path (see /risk). An explicit Manager in `filters` still
-        # wins — that is how the chart scopes to a manager.
-        fd.setdefault("Manager", [book])
+        # weight-driven, so an unscoped query over several managers returns the collapsed grand
+        # total rather than any portfolio's path (see /risk). An explicit Manager in `filters`
+        # still wins — that is how the chart scopes to a manager.
+        fd.setdefault("Manager", [manager])
         extra = _build_filter(l, fd)
         if extra is not None:
             filt = filt & extra
@@ -1477,7 +1515,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
         n = min(len(pnl), len(days))
         pnl, days = pnl[:n], days[:n]
         # Unpacking the vector into per-day points is RESHAPE, not analytics — the cube already
-        # produced the per-day book P&L. READABLE date = the epoch-int dual converted to ISO here.
+        # produced the per-day portfolio P&L. READABLE date = the epoch-int dual converted to ISO here.
         dates = [(_EPOCH + pd.Timedelta(days=int(x))).date().isoformat() for x in days]
         points = [{"date": dates[i], "pnl": float(pnl[i])} for i in range(n)]
         # ALL distribution analytics are CUBE post-processors (no numpy percentile/min/mean/argmin):
@@ -1503,8 +1541,9 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
         }
         # optional breakout: per-scenario-day P&L stacked by a dimension (e.g. Sector). The cube
         # aggregates each member's per-day P&L (levels=[breakout]); we pair each day with its date
-        # and a `rank` = its position ordered by the BOOK total (worst→best, argsort — ordering,
-        # not aggregation), so the chart shows the SORTED loss curve but with DATE labels on x.
+        # and a `rank` = its position ordered by the PORTFOLIO total (worst→best, argsort —
+        # ordering, not aggregation), so the chart shows the SORTED loss curve but with DATE
+        # labels on x.
         if breakout and _canon_dim(breakout) in DIM_NAMES:
             bv = cube.query(m["Scenario PnL vector"], levels=[_lvl(l, _canon_dim(breakout))],
                             filter=filt)
@@ -1513,7 +1552,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
                 member = idx[-1] if isinstance(idx, tuple) else idx
                 arr = brow.iloc[0]
                 members.append((str(member), np.asarray(arr, dtype=float) if arr is not None else None))
-            order = [int(i) for i in np.argsort(pnl)]      # day indices, ascending by BOOK total
+            order = [int(i) for i in np.argsort(pnl)]      # day indices, ascending by PORTFOLIO total
             # EMIT IN RANK ORDER: each scenario day (worst→best), all its members. The dates thus
             # first-appear worst→best, so the chart's ordinal x (sort:null = data order) is sorted
             # by loss while still LABELLED by date. `rank` kept for reference.
@@ -1531,7 +1570,7 @@ async def scenario_pnl(date: str, set: str, position: str | None = None,
 
 
 # ============================================================================ desk limits (RAG)
-# Compare the cube's book numbers to a desk limit set (limits.json) and return a red/amber/green
+# Compare the cube's portfolio numbers to a desk limit set (limits.json) and return a red/amber/green
 # status per limit. Manager-level VaR/ES/HHI come from the cube (scenario-dependent -> one ScenarioSet);
 # concentration (single-name / sector weight) comes from the positions overlay as-of the date.
 
@@ -1565,19 +1604,19 @@ def _latest_date() -> str:
     return pd.Timestamp(S["frames"]["specific_var"]["Date"].max()).date().isoformat()
 
 
-def _limits_result(date: str, scen: str, book: str) -> dict:
-    """RAG status of every configured limit at (date, scenario set, book). Synchronous — call via
-    run_in_threadpool. Returns checks + the worst-of overall status + the breach list."""
+def _limits_result(date: str, scen: str, manager: str) -> dict:
+    """RAG status of every configured limit at (date, scenario set, manager). Synchronous — call
+    via run_in_threadpool. Returns checks + the worst-of overall status + the breach list."""
     cfg = _load_limits()
     cube = S["cube"]; l, m = cube.levels, cube.measures
     checks: list[dict] = []
-    have_book = "Manager" in {n for _, n in cube.hierarchies}
-    base = (l["Date"] == _date(date)) & ((l["Manager"] == book) if have_book else (l["Date"] == _date(date)))
+    have_manager = "Manager" in {n for _, n in cube.hierarchies}
+    base = (l["Date"] == _date(date)) & ((l["Manager"] == manager) if have_manager else (l["Date"] == _date(date)))
 
-    # book-level scenario measures (VaR/ES/Top-5 need a single ScenarioSet; Top-5 risk share is
-    # a cube measure since 2026-07-04 — tt.rank over the flat PositionRank hierarchy — so the
+    # portfolio-level scenario measures (VaR/ES/Top-5 need a single ScenarioSet; Top-5 risk share
+    # is a cube measure since 2026-07-04 — tt.rank over the flat PositionRank hierarchy — so the
     # generic query below serves it and it is SET-DEPENDENT like the old Risk HHI was).
-    bspec = dict(cfg.get("book", {}))
+    bspec = dict(cfg.get("manager", {}))
     if bspec:
         df = cube.query(*[m[x] for x in bspec], filter=base & (l["ScenarioSet"] == scen))
         row = df.iloc[0] if len(df) else None
@@ -1585,14 +1624,14 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
             v = row[name] if row is not None else None
             val = None if (v is None or pd.isna(v)) else _clean(v)
             status, head = _rag(val, spec.get("warn"), spec.get("limit"))
-            checks.append({"name": name, "scope": "book", "value": val, "warn": spec.get("warn"),
+            checks.append({"name": name, "scope": "manager", "value": val, "warn": spec.get("warn"),
                            "limit": spec.get("limit"), "status": status, "headroom": head, "detail": None})
 
     # concentration from the positions overlay, as-of the latest filing on/before `date`
     conc = cfg.get("concentration", {})
     if conc:
         pos = S["frames"]["positions"]
-        asof = pos[(pos["Manager"] == book) & (pos["Date"] <= pd.Timestamp(date))]
+        asof = pos[(pos["Manager"] == manager) & (pos["Date"] <= pd.Timestamp(date))]
         bp = asof[asof["Date"] == asof["Date"].max()][["Position", "Weight"]] if len(asof) else asof
         if "single_name_weight" in conc and len(bp):
             spec = conc["single_name_weight"]
@@ -1613,30 +1652,32 @@ def _limits_result(date: str, scen: str, book: str) -> dict:
 
     overall = max((c["status"] for c in checks), key=lambda s: _RAG_RANK[s], default="none")
     # Disclosure (2026-07-30, multi-manager Phase 3): limits.json is ONE flat threshold set,
-    # tuned for the book named in its own "calibrated_for" field (default "Soros" if the field is
-    # ever absent -- pre-Phase-3 limits.json had no such field, and the thresholds WERE tuned for
-    # Soros regardless). Additive fields only, so existing UI/API consumers reading date/set/book/
-    # status/checks/breaches see no shape change.
+    # tuned for the manager named in its own "calibrated_for" field (default "Soros" if the field
+    # is ever absent -- pre-Phase-3 limits.json had no such field, and the thresholds WERE tuned
+    # for Soros regardless). Additive fields only, so existing UI/API consumers reading
+    # date/set/manager/status/checks/breaches see no shape change.
     calibrated_for = cfg.get("calibrated_for", "Soros")
-    cross_book = book != calibrated_for
-    return {"date": date, "set": scen, "book": book, "status": overall, "configured": bool(checks),
+    cross_manager = manager != calibrated_for
+    return {"date": date, "set": scen, "manager": manager, "status": overall, "configured": bool(checks),
             "checks": checks, "breaches": [c for c in checks if c["status"] == "breach"],
-            "calibrated_for": calibrated_for, "cross_book_thresholds": cross_book,
+            "calibrated_for": calibrated_for, "cross_manager_thresholds": cross_manager,
             "calibration_note": (
-                f"These thresholds were calibrated for the {calibrated_for!r} book, not "
-                f"{book!r} — the RAG verdict above is being computed against another book's "
-                "limits and has not been separately tuned for this book's scale/strategy."
-                if cross_book else None)}
+                f"These thresholds were calibrated for the {calibrated_for!r} manager, not "
+                f"{manager!r} — the RAG verdict above is being computed against another manager's "
+                "limits and has not been separately tuned for this manager's scale/strategy."
+                if cross_manager else None)}
 
 
 @app.get("/limits")
-async def limits(date: str | None = None, set: str | None = None, book: str = "Soros"):
-    """RAG status of the desk limits (limits.json) for one book. Defaults: latest date, the config's
-    scenario_set. `set` overrides the scenario set the VaR/ES/HHI limits are read against."""
+async def limits(date: str | None = None, set: str | None = None,
+                 manager: str | None = None, book: str | None = None):
+    """RAG status of the desk limits (limits.json) for one manager. Defaults: latest date, the
+    config's scenario_set. `set` overrides the scenario set the VaR/ES/HHI limits are read against."""
+    manager = _coalesce_manager(manager, book)
     scen = set or _load_limits().get("scenario_set", "HistFull")
     _reject_pit(scen)
     def run():
-        return _limits_result(date or _latest_date(), scen, book)
+        return _limits_result(date or _latest_date(), scen, manager)
     return await run_in_threadpool(run)
 
 
@@ -1647,7 +1688,7 @@ async def limits(date: str | None = None, set: str | None = None, book: str = "S
 def _dq_checks() -> list[dict]:
     """barra_dq_checks.run on the live frames, MEMOIZED once per process (2026-08-15, api_bench):
     the checks are a pure function of the in-memory frames (plus the regression_stats side
-    artifact read inside run()) and cost 7-14 s per call on the 124-book frames -- the Overview's
+    artifact read inside run()) and cost 7-14 s per call on the 124-manager frames -- the Overview's
     RAG strip paid that on every load. Frames are loaded once and never change in-process; keyed
     on their identity. Prewarmed at start-up by _prewarm."""
     ck = ("_dq_memo", id(S["frames"]))
@@ -1676,40 +1717,42 @@ async def dq():
     return await run_in_threadpool(run)
 
 
-# ============================================================================ single-book artifact guard
+# ============================================================================ single-manager artifact guard
 # Multi-manager Phase 3 (2026-07-30). Several precomputed artifacts (universe_membership/funnel/span/
-# drift.parquet, pnl_attribution.parquet) were built for ONE book and carry no Manager column at all —
-# barra_universe_membership.py hardcodes SOROS_CIK and never reads positions.parquet; barra_universe_
-# funnel.py/_span.py/_drift.py and barra_pnl_attribution.py's default `run()` call all read (or were
-# called against) whatever book(s) happened to be in positions.parquet at build time, unfiltered.
-# Serving any of them under a DIFFERENT book's label would silently show that book Soros's (or
-# whichever book's) numbers — worse than an error. This guard makes that impossible: every endpoint
-# backed by one of these artifacts calls it and returns a clean status payload (HTTP 200, never a
-# 500) instead of proceeding when the requested book isn't verifiably the one the artifact covers.
+# drift.parquet, pnl_attribution.parquet) were built for ONE manager and carry no Manager column at
+# all — barra_universe_membership.py hardcodes SOROS_CIK and never reads positions.parquet; barra_
+# universe_funnel.py/_span.py/_drift.py and barra_pnl_attribution.py's default `run()` call all read
+# (or were called against) whatever manager(s) happened to be in positions.parquet at build time,
+# unfiltered. Serving any of them under a DIFFERENT manager's label would silently show that
+# manager Soros's (or whichever manager's) numbers — worse than an error. This guard makes that
+# impossible: every endpoint backed by one of these artifacts calls it and returns a clean status
+# payload (HTTP 200, never a 500) instead of proceeding when the requested manager isn't verifiably
+# the one the artifact covers.
 
-def _artifact_book(kind: str) -> tuple[str | None, str]:
-    """(book, basis) — the single Manager the named single-book artifact was built against, and how
-    that was determined. `kind` is "membership" (barra_universe_membership.py) or one of
+def _artifact_manager(kind: str) -> tuple[str | None, str]:
+    """(manager, basis) — the single Manager the named single-manager artifact was built against,
+    and how that was determined. `kind` is "membership" (barra_universe_membership.py) or one of
     "funnel"/"span"/"drift"/"pnl_attribution" (all read positions.parquet with no, or only a
     default-value, Manager filter).
 
     membership: barra_universe_membership.py hardcodes SOROS_CIK and never reads positions.parquet
-    at all, so its coverage is fixed and independent of whatever books are in the LIVE frames —
+    at all, so its coverage is fixed and independent of whatever managers are in the LIVE frames —
     resolved via barra_build_frames.MANAGERS (the CIK->book table) rather than a bare "Soros"
-    string literal, so a future rename of that manager's book label can't silently desync the two.
+    string literal, so a future rename of that manager's label can't silently desync the two.
 
-    funnel/span/drift/pnl_attribution: none of these precomputes persist a book marker on their
+    funnel/span/drift/pnl_attribution: none of these precomputes persist a manager marker on their
     artifact. The best signal available at REQUEST time is the live positions frame: if it holds
     exactly one Manager, that is (barring a stale artifact — see the WEAKNESS note below) what the
-    artifact was built against. >1 book live -> we cannot attribute a book-oblivious artifact to
-    any one of several, so `book` comes back None ("can't verify").
+    artifact was built against. >1 manager live -> we cannot attribute a manager-oblivious artifact
+    to any one of several, so `manager` comes back None ("can't verify").
 
     WEAKNESS (disclosed, not fixed here): this infers from TODAY's live data, not a build-time
     stamp on the artifact file. If the artifact on disk is stale relative to the live frames (e.g.
-    built while Soros was the sole book, then the frames were swapped to a different single-book
-    set without rerunning the precompute), this would wrongly report the NEW book as a match. The
-    seven/eight-frame contract has no artifact<->frame version linkage to catch that; a real gap
-    for whoever builds the per-book artifact story out further, flagged rather than papered over.
+    built while Soros was the sole manager, then the frames were swapped to a different
+    single-manager set without rerunning the precompute), this would wrongly report the NEW
+    manager as a match. The seven/eight-frame contract has no artifact<->frame version linkage to
+    catch that; a real gap for whoever builds the per-manager artifact story out further, flagged
+    rather than papered over.
     """
     if kind == "membership":
         for m in _bf.MANAGERS:
@@ -1720,62 +1763,65 @@ def _artifact_book(kind: str) -> tuple[str | None, str]:
     pos = S["frames"].get("positions")
     if pos is None or pos.empty or "Manager" not in pos.columns:
         return None, "no positions frame loaded"
-    books = pos["Manager"].unique()
-    if len(books) == 1:
-        return str(books[0]), "inferred from the live positions frame (exactly one Manager present)"
-    # Several books live. Inferring from the frames is useless here, but the precomputes are NOT
-    # book-oblivious any more: funnel/span/drift/pnl_attribution each take `run(..., book=...)`
+    managers = pos["Manager"].unique()
+    if len(managers) == 1:
+        return str(managers[0]), "inferred from the live positions frame (exactly one Manager present)"
+    # Several managers live. Inferring from the frames is useless here, but the precomputes are NOT
+    # manager-oblivious any more: funnel/span/drift/pnl_attribution each take `run(..., manager=...)`
     # with a default, and that default IS the contract for what an unattended rerun produced.
     # Read it off the signature rather than hardcoding "Soros", so renaming the default in one of
     # those scripts cannot silently desync the guard from the artifact it is describing.
-    # Without this the guard fired for EVERY book once the multi-manager build landed, including
+    # Without this the guard fired for EVERY manager once the multi-manager build landed, including
     # the one the artifacts genuinely cover -- blocking Soros from its own Universe/Drift/
     # Attribution lenses.
     mod = {"funnel": _uf, "span": _us, "drift": _ud, "pnl_attribution": _pnl}.get(kind)
     if mod is not None:
         try:
-            dflt = inspect.signature(mod.run).parameters["book"].default
+            dflt = inspect.signature(mod.run).parameters["manager"].default
         except (AttributeError, KeyError, ValueError):
             dflt = inspect.Parameter.empty
         if isinstance(dflt, str) and dflt:
-            return dflt, (f"{len(books)} books live; taken from {mod.__name__}.run()'s book= default "
-                          f"({dflt!r}), which is what an unattended rerun of that precompute built")
-    return None, (f"live positions frame has {len(books)} distinct Books and {kind}'s precompute "
-                  "exposes no book= default to resolve against, so its artifact cannot be "
-                  "attributed to any single book")
+            return dflt, (f"{len(managers)} managers live; taken from {mod.__name__}.run()'s "
+                          f"manager= default ({dflt!r}), which is what an unattended rerun of "
+                          "that precompute built")
+    return None, (f"live positions frame has {len(managers)} distinct Managers and {kind}'s "
+                  "precompute exposes no manager= default to resolve against, so its artifact "
+                  "cannot be attributed to any single manager")
 
 
-def _book_guard(kind: str, requested_book: str) -> dict | None:
-    """None when `requested_book` is verifiably the book the `kind` artifact covers (proceed
-    normally — the covered-book case is BYTE-IDENTICAL to pre-Phase-3 behaviour, since today's
-    single-book data always resolves to 'Soros' and every endpoint still defaults book='Soros').
-    Otherwise a structured mismatch payload, HTTP 200, mirroring the repo's existing `/drawdown`
-    status idiom (never a 500) so the UI can render it cleanly."""
-    covered, basis = _artifact_book(kind)
-    if covered is not None and covered == requested_book:
+def _manager_guard(kind: str, requested_manager: str) -> dict | None:
+    """None when `requested_manager` is verifiably the manager the `kind` artifact covers (proceed
+    normally — the covered-manager case is BYTE-IDENTICAL to pre-Phase-3 behaviour, since today's
+    single-manager data always resolves to 'Soros' and every endpoint still defaults
+    manager='Soros'). Otherwise a structured mismatch payload, HTTP 200, mirroring the repo's
+    existing `/drawdown` status idiom (never a 500) so the UI can render it cleanly."""
+    covered, basis = _artifact_manager(kind)
+    if covered is not None and covered == requested_manager:
         return None
     if covered is not None:
-        reason = (f"the {kind} artifact was computed for the {covered!r} book, not "
-                  f"{requested_book!r} — serving it under another book's label would be silently "
-                  "wrong data, not just stale data")
+        reason = (f"the {kind} artifact was computed for the {covered!r} manager, not "
+                  f"{requested_manager!r} — serving it under another manager's label would be "
+                  "silently wrong data, not just stale data")
     else:
-        reason = (f"cannot verify which book the {kind} artifact covers ({basis}) — refusing to "
-                  f"serve it as {requested_book!r} rather than risk mislabeling another book's data")
-    return {"status": "book_mismatch", "kind": kind, "requested_book": requested_book,
-            "artifact_book": covered, "basis": basis, "reason": reason}
+        reason = (f"cannot verify which manager the {kind} artifact covers ({basis}) — refusing "
+                  f"to serve it as {requested_manager!r} rather than risk mislabeling another "
+                  "manager's data")
+    return {"status": "manager_mismatch", "kind": kind, "requested_manager": requested_manager,
+            "artifact_manager": covered, "basis": basis, "reason": reason}
 
 
-def _resolve_artifact(mod, kind: str, book: str):
-    """(path, mismatch) — which artifact file to serve for `book` (manager-aware precomputes,
-    2026-08-14). Each precompute module exposes artifact_path(book): the DEFAULT book maps to the
-    legacy unsuffixed file, any other book to <stem>.<Book>.parquet. A book's own suffixed file
-    wins outright when present — it was built FOR that book, no inference needed. Otherwise fall
-    back to the legacy file gated by the Phase-3 `_book_guard` (unchanged single-book behaviour,
-    including all its can't-verify cases). Exactly one of (path, mismatch) is non-None."""
-    p = mod.artifact_path(book)
+def _resolve_artifact(mod, kind: str, manager: str):
+    """(path, mismatch) — which artifact file to serve for `manager` (manager-aware precomputes,
+    2026-08-14). Each precompute module exposes artifact_path(manager): the DEFAULT manager maps
+    to the legacy unsuffixed file, any other manager to <stem>.<Manager>.parquet. A manager's own
+    suffixed file wins outright when present — it was built FOR that manager, no inference needed.
+    Otherwise fall back to the legacy file gated by the Phase-3 `_manager_guard` (unchanged
+    single-manager behaviour, including all its can't-verify cases). Exactly one of (path,
+    mismatch) is non-None."""
+    p = mod.artifact_path(manager)
     if p != mod.ARTIFACT and p.exists():
         return p, None
-    mism = _book_guard(kind, book)
+    mism = _manager_guard(kind, manager)
     if mism is not None:
         return None, mism
     return mod.ARTIFACT, None
@@ -1783,19 +1829,23 @@ def _resolve_artifact(mod, kind: str, book: str):
 
 # ============================================================================ universe membership
 # Bitemporal index-membership diagnostic (Phase 1; docs/universe-diagnostics-plan.md). Serves the
-# precomputed artifact written by barra_universe_membership.py — for each 13F filing, the book's
+# precomputed artifact written by barra_universe_membership.py — for each 13F filing, the portfolio's
 # weight split across {S&P 500 PIT, S&P 400/600 current, Outside S&P 1500, Unclassified}. No cube
 # dependency and no network at request time (the artifact is built offline like the frames).
 
 @app.get("/universe")
 async def universe(date: str | None = Query(None, description="filing report_date; default latest"),
-                   book: str = Query("Soros", description="the artifact is single-book — see /dq-"
-                                     "style book_mismatch status if this isn't the covered book")):
-    """Index-membership of the Soros book by filing: a weight-by-bucket time series, the latest (or
-    `date`) filing's split + the 'outside S&P 1500' headline, and the names in the Outside/Unclassified
-    buckets. Reads data/universe_membership.parquet (run barra_universe_membership.py to (re)build)."""
+                   manager: str | None = Query(None, description="the artifact is single-manager — "
+                                     "see /dq-style manager_mismatch status if this isn't the "
+                                     "covered manager"),
+                   book: str | None = Query(None)):
+    """Index-membership of the Soros portfolio by filing: a weight-by-bucket time series, the
+    latest (or `date`) filing's split + the 'outside S&P 1500' headline, and the names in the
+    Outside/Unclassified buckets. Reads data/universe_membership.parquet (run
+    barra_universe_membership.py to (re)build)."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art, mism = _resolve_artifact(_um, "membership", book)
+        art, mism = _resolve_artifact(_um, "membership", manager)
         if mism is not None:
             return mism
         if not art.exists():
@@ -1841,13 +1891,16 @@ async def universe(date: str | None = Query(None, description="filing report_dat
 
 @app.get("/funnel")
 async def funnel(date: str | None = Query(None, description="funnel month; default latest"),
-                 book: str = Query("Soros", description="the artifact's 'held' flag is single-book")):
+                 manager: str | None = Query(None, description="the artifact's 'held' flag is "
+                                     "single-manager"),
+                 book: str | None = Query(None)):
     """Estimation-universe filtration funnel by month: a population→survivors waterfall with the drop
     count per stage, the survivor count (and how many are held), the selected month's drop list (name
     + the stage that dropped it + its metrics), and the documented thresholds. The funnel is near-flat
     by design — the S&P 500 is pre-curated, so the filters confirm a clean input rather than carve."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art, mism = _resolve_artifact(_uf, "funnel", book)
+        art, mism = _resolve_artifact(_uf, "funnel", manager)
         if mism is not None:
             return mism
         if not art.exists():
@@ -1897,17 +1950,20 @@ async def funnel(date: str | None = Query(None, description="funnel month; defau
 @app.get("/span")
 async def span(date: str | None = Query(None, description="month; default latest"),
                fx: str = Query("Size"), fy: str = Query("ResidVol"),
-               book: str = Query("Soros", description="the artifact + live scatter are single-book")):
-    """Span / high-confidence check: a per-month time series of the book weight INSIDE the estimation
-    universe's factor space, the selected month's per-name verdict (D², inside/outside, which factors
-    push a name out), and a 2D `fx`×`fy` scatter of the estimation cloud vs the held book — the literal
-    version of Chris's VALUE/SIZE illustration. ~90% of the book sits inside on average; it has drifted
-    from ~95% pre-2021 to ~85% since."""
+               manager: str | None = Query(None, description="the artifact + live scatter are "
+                                     "single-manager"),
+               book: str | None = Query(None)):
+    """Span / high-confidence check: a per-month time series of the portfolio weight INSIDE the
+    estimation universe's factor space, the selected month's per-name verdict (D², inside/outside,
+    which factors push a name out), and a 2D `fx`×`fy` scatter of the estimation cloud vs the held
+    portfolio — the literal version of Chris's VALUE/SIZE illustration. ~90% of the portfolio sits
+    inside on average; it has drifted from ~95% pre-2021 to ~85% since."""
+    manager = _coalesce_manager(manager, book)
     if fx not in _us.STYLE or fy not in _us.STYLE:
         raise HTTPException(400, f"fx/fy must be style factors: {_us.STYLE}")
 
     def run():
-        art, mism = _resolve_artifact(_us, "span", book)
+        art, mism = _resolve_artifact(_us, "span", manager)
         if mism is not None:
             return mism
         if not art.exists():
@@ -1926,7 +1982,7 @@ async def span(date: str | None = Query(None, description="month; default latest
         detail = (gm.sort_values("d2", ascending=False)
                   [["issuer", "ticker", "weight", "d2", "edge", "inside", "extreme"]])
 
-        # live 2D scatter from the exposures frame (cloud = funnel survivors, held = the book)
+        # live 2D scatter from the exposures frame (cloud = funnel survivors, held = the portfolio)
         exp = S["frames"]["exposures"]; D = pd.Timestamp(sel)
         w = (exp[(exp["Date"] == D) & (exp["Factor"].isin([fx, fy]))]
              .pivot_table(index="Position", columns="Factor", values="Loading"))
@@ -1948,9 +2004,9 @@ async def span(date: str | None = Query(None, description="month; default latest
         # nothing at these sizes and makes the response reproducible.
         cloud = [pt(p) for p in sorted(cloud_pos)
                  if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
-        # NB not `book`: that name is the endpoint's parameter, closed over by _book_guard above.
-        # Rebinding it here made Python treat it as local for the whole closure, so the guard call
-        # raised UnboundLocalError and /span 500'd for every request.
+        # NB not `manager`: that name is the endpoint's parameter, closed over by _manager_guard
+        # above. Rebinding it here made Python treat it as local for the whole closure, so the
+        # guard call raised UnboundLocalError and /span 500'd for every request.
         held_pts = [{**pt(p), "inside": bool(inside_map.get(p, False)), "issuer": iss.get(p, "")}
                     for p in sorted(held_pos)
                     if not (np.isnan(w.loc[p, fx]) or np.isnan(w.loc[p, fy]))]
@@ -1970,7 +2026,7 @@ async def span(date: str | None = Query(None, description="month; default latest
 
 
 # ============================================================================ style-drift attribution
-# Phase 4 (docs/universe-diagnostics-plan.md). The book's net factor exposure x_k(t) over time, the
+# Phase 4 (docs/universe-diagnostics-plan.md). The portfolio's net factor exposure x_k(t) over time, the
 # pre/post-`split` drift per factor, and an attribution of each factor's drift into entered / exited /
 # reweighted / loading_drift — making Chris's intentional-vs-not question empirical: drift dominated by
 # NEW names rotating in leans intentional (→ benchmark); drift from HELD names' loadings drifting leans
@@ -1978,14 +2034,17 @@ async def span(date: str | None = Query(None, description="month; default latest
 
 @app.get("/drift")
 async def drift(split: str = Query("2021-01-01", description="pre/post boundary for the drift"),
-                book: str = Query("Soros", description="both the artifact and the live attribution "
-                                  "below (book_at has no Manager filter) are single-book")):
+                manager: str | None = Query(None, description="both the artifact and the live "
+                                  "attribution below (book_at has no Manager filter) are "
+                                  "single-manager"),
+                book: str | None = Query(None)):
     """Style-drift attribution: per-factor net-exposure trend, the pre/post-`split` drift ranked by
     magnitude, and a decomposition of each factor's drift into entered / exited / reweighted /
     loading_drift — with a per-factor 'lean' (rotation → intentional → benchmark; re-pricing →
     unintentional → hedge). The final verdict needs desk knowledge; this lays out the evidence."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art, mism = _resolve_artifact(_ud, "drift", book)
+        art, mism = _resolve_artifact(_ud, "drift", manager)
         if mism is not None:
             return mism
         if not art.exists():
@@ -1996,14 +2055,14 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
 
         exp, pos = S["frames"]["exposures"], S["frames"]["positions"]
         # The live attribution below (book_at → decompose) has no Manager concept of its own; with
-        # the multi-book frames the requested book must be filtered HERE or x_k sums across every
-        # manager at once (the same bug barra_universe_drift.run fixed for the artifact side).
+        # the multi-manager frames the requested manager must be filtered HERE or x_k sums across
+        # every manager at once (the same bug barra_universe_drift.run fixed for the artifact side).
         if "Manager" in pos.columns:
-            pos = pos[pos["Manager"] == book]
+            pos = pos[pos["Manager"] == manager]
             if pos.empty:
-                return {"status": "book_mismatch", "kind": "drift", "requested_book": book,
-                        "artifact_book": None, "basis": "no positions rows for this book",
-                        "reason": f"no positions for book {book!r} in the live frames"}
+                return {"status": "manager_mismatch", "kind": "drift", "requested_manager": manager,
+                        "artifact_manager": None, "basis": "no positions rows for this manager",
+                        "reason": f"no positions for manager {manager!r} in the live frames"}
         months = pd.DatetimeIndex(sorted(pd.to_datetime(pos["Date"].unique())))
         pre = months[months < sp]
         t0 = pre[-1] if len(pre) else months[0]
@@ -2032,7 +2091,7 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
             "factors": _ud.STYLE, "sources": _ud.SOURCES, "split": str(sp.date()),
             "t0": str(t0.date()), "t1": str(t1.date()),
             "series": srecs, "summary": sumrecs,
-            "note": ("Net book exposure x_k = Σ w·L per factor. Drift Δx_k between the pre-split book "
+            "note": ("Net portfolio exposure x_k = Σ w·L per factor. Drift Δx_k between the pre-split portfolio "
                      "and the latest is split into entered / exited (rotation) / reweighted (resizing) "
                      "/ loading_drift (held names' own loadings moving). Rotation-dominated drift leans "
                      "intentional (mandate shifted → update the benchmark); loading-drift-dominated "
@@ -2043,10 +2102,10 @@ async def drift(split: str = Query("2021-01-01", description="pre/post boundary 
 
 
 # ============================================================================ VaR backtest
-# Constant-portfolio backtest: take the current book's daily factor-P&L series (the HistFull
+# Constant-portfolio backtest: take the current portfolio's daily factor-P&L series (the HistFull
 # scenario vector + its date dual), roll a window to estimate VaR each day, and count exceptions
-# where the realized day beat VaR. Tests the VaR METHODOLOGY against history (the 13F book has no
-# live daily P&L track record). Kupiec POF test + Basel traffic-light from the binomial CDF.
+# where the realized day beat VaR. Tests the VaR METHODOLOGY against history (the 13F portfolio has
+# no live daily P&L track record). Kupiec POF test + Basel traffic-light from the binomial CDF.
 # Pure stats split out (no cube) so they're unit-testable.
 
 def _kupiec_lr(n_exc: int, n_obs: int, p: float) -> float:
@@ -2114,17 +2173,17 @@ def _var_thresholds(pnl: np.ndarray, window: int, alpha: float, method: str, lam
     return thr
 
 
-def _backtest_result(date: str, scen: str, book: str, alpha: float, window: int,
+def _backtest_result(date: str, scen: str, manager: str, alpha: float, window: int,
                      method: str = "equal", lam: float = 0.94) -> dict:
-    """Rolling-window VaR backtest of the book's daily factor-P&L series for one scenario set."""
+    """Rolling-window VaR backtest of the portfolio's daily factor-P&L series for one scenario set."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
-    have_book = "Manager" in {n for _, n in cube.hierarchies}
+    have_manager = "Manager" in {n for _, n in cube.hierarchies}
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == scen)
-    if have_book:
-        flt = flt & (l["Manager"] == book)
+    if have_manager:
+        flt = flt & (l["Manager"] == manager)
     pv = cube.query(m["Scenario PnL vector"], filter=flt)
     dv = cube.query(m["Scenario dates (epoch)"], filter=flt)
-    base = {"set": scen, "book": book, "date": date, "alpha": alpha, "window": window,
+    base = {"set": scen, "manager": manager, "date": date, "alpha": alpha, "window": window,
             "method": method, "lam": (lam if method in ("ewma", "fhs") else None)}
     if not len(pv) or pv.iloc[0, 0] is None or not len(dv):
         return {**base, "tested": 0, "status": "insufficient", "exceptions": 0}
@@ -2151,14 +2210,17 @@ def _backtest_result(date: str, scen: str, book: str, alpha: float, window: int,
 
 
 @app.get("/backtest")
-async def backtest(set: str = "HistFull", date: str | None = None, book: str = "Soros",
+async def backtest(set: str = "HistFull", date: str | None = None,
+                   manager: str | None = None, book: str | None = None,
                    alpha: float = 0.99, window: int = 250, method: str = "fhs", lam: float = 0.94):
-    """Rolling-window VaR backtest (Kupiec POF + Basel traffic-light) on a book's daily factor-P&L
-    series. method = fhs (default — filtered historical simulation, EWMA-vol-scaled empirical tail) |
-    equal (plain historical sim) | ewma (RiskMetrics parametric-normal). `lam` is the EWMA decay.
-    The fhs/lam=0.94 default was chosen by a sweep: at 99% it gives ~1.0% breaches (Kupiec-green),
-    where equal HS under-covers (amber) and parametric ewma over-breaches on the fat tail (red).
-    Defaults: HistFull (only set with a long daily history), latest date, 99% / 250-day."""
+    """Rolling-window VaR backtest (Kupiec POF + Basel traffic-light) on a portfolio's daily
+    factor-P&L series. method = fhs (default — filtered historical simulation, EWMA-vol-scaled
+    empirical tail) | equal (plain historical sim) | ewma (RiskMetrics parametric-normal). `lam`
+    is the EWMA decay. The fhs/lam=0.94 default was chosen by a sweep: at 99% it gives ~1.0%
+    breaches (Kupiec-green), where equal HS under-covers (amber) and parametric ewma over-breaches
+    on the fat tail (red). Defaults: HistFull (only set with a long daily history), latest date,
+    99% / 250-day."""
+    manager = _coalesce_manager(manager, book)
     _reject_pit(set)
     if not (0.5 < alpha < 1):
         raise HTTPException(400, "alpha must be in (0.5, 1)")
@@ -2169,22 +2231,22 @@ async def backtest(set: str = "HistFull", date: str | None = None, book: str = "
     if not (0.0 < lam < 1.0):
         raise HTTPException(400, "lam (EWMA decay) must be in (0, 1)")
     def run():
-        return _backtest_result(date or _latest_date(), set, book, alpha, window, method, lam)
+        return _backtest_result(date or _latest_date(), set, manager, alpha, window, method, lam)
     return await run_in_threadpool(run)
 
 
 # ============================================================================ drawdown (path lens)
 def _max_drawdown(pnl, days) -> dict | None:
-    """Constant-portfolio max drawdown of the book's simulated daily P&L PATH (geometric equity
-    curve), with peak/trough dates, recovery, and the longest underwater run. pnl/days are the
-    cube's `Scenario PnL vector` + its `Scenario dates` dual; date-ordered here. Pure stats (no
+    """Constant-portfolio max drawdown of the portfolio's simulated daily P&L PATH (geometric
+    equity curve), with peak/trough dates, recovery, and the longest underwater run. pnl/days are
+    the cube's `Scenario PnL vector` + its `Scenario dates` dual; date-ordered here. Pure stats (no
     cube) so it unit-tests directly. Drawdown is path-dependent — the lens VaR/ES can't see."""
     pnl = np.asarray(pnl, float); days = np.asarray(days, int)
     n = min(len(pnl), len(days))
     if n == 0:
         return None
     order = np.argsort(days[:n]); pnl, days = pnl[:n][order], days[:n][order]
-    eq = np.cumprod(1.0 + pnl)                       # held book compounded over the factor path
+    eq = np.cumprod(1.0 + pnl)                       # held portfolio compounded over the factor path
     peak = np.maximum.accumulate(eq)
     dd = eq / peak - 1.0                              # <= 0 everywhere
     i_tr = int(np.argmin(dd)); max_dd = float(dd[i_tr])
@@ -2208,17 +2270,17 @@ def _max_drawdown(pnl, days) -> dict | None:
     }
 
 
-def _drawdown_result(date: str, scen: str, book: str) -> dict:
-    """Pull the book P&L vector for one (Date, ScenarioSet) and reduce to the drawdown summary +
-    path. Same vector source as /backtest and /scenario_pnl."""
+def _drawdown_result(date: str, scen: str, manager: str) -> dict:
+    """Pull the portfolio P&L vector for one (Date, ScenarioSet) and reduce to the drawdown
+    summary + path. Same vector source as /backtest and /scenario_pnl."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
-    have_book = "Manager" in {n for _, n in cube.hierarchies}
+    have_manager = "Manager" in {n for _, n in cube.hierarchies}
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == scen)
-    if have_book:
-        flt = flt & (l["Manager"] == book)
+    if have_manager:
+        flt = flt & (l["Manager"] == manager)
     pv = cube.query(m["Scenario PnL vector"], filter=flt)
     dv = cube.query(m["Scenario dates (epoch)"], filter=flt)
-    base = {"set": scen, "book": book, "date": date}
+    base = {"set": scen, "manager": manager, "date": date}
     if not len(pv) or pv.iloc[0, 0] is None or not len(dv):
         return {**base, "status": "insufficient", "n": 0}
     dd = _max_drawdown(pv.iloc[0, 0], dv.iloc[0, 0])
@@ -2228,23 +2290,26 @@ def _drawdown_result(date: str, scen: str, book: str) -> dict:
 
 
 @app.get("/drawdown")
-async def drawdown(set: str = "HistFull", date: str | None = None, book: str = "Soros"):
-    """Constant-portfolio max drawdown: cumulate the current book's daily factor-P&L over the
+async def drawdown(set: str = "HistFull", date: str | None = None,
+                   manager: str | None = None, book: str | None = None):
+    """Constant-portfolio max drawdown: cumulate the current portfolio's daily factor-P&L over the
     scenario set's path (geometric equity curve) and take peak-to-trough. Like /backtest this is a
-    what-if on the *held* book over history, not a live track record. Drawdown is a path lens that
-    VaR/ES miss. Most meaningful on HistFull (long path); event sets give the drawdown over that
-    window; hypo (length-1) sets are degenerate -> status insufficient."""
+    what-if on the *held* portfolio over history, not a live track record. Drawdown is a path lens
+    that VaR/ES miss. Most meaningful on HistFull (long path); event sets give the drawdown over
+    that window; hypo (length-1) sets are degenerate -> status insufficient."""
+    manager = _coalesce_manager(manager, book)
     _reject_pit(set)
     def run():
-        return _drawdown_result(date or _latest_date(), set, book)
+        return _drawdown_result(date or _latest_date(), set, manager)
     return await run_in_threadpool(run)
 
 
 # ============================================================================ stress (custom / reverse)
-# A hypothetical shock's book P&L is linear: dPnL = Σ_k x_k * (sigma_k * vol_k), where x_k is the book
-# net exposure to factor k and vol_k is that factor's return vol (same convention build_scenarios uses
-# for the baked-in Hypo sets). So custom (user-defined sigmas) and reverse (solve the sigma that
-# breaches a loss) stress are computed in the API from exposures + vols — no cube rebuild.
+# A hypothetical shock's portfolio P&L is linear: dPnL = Σ_k x_k * (sigma_k * vol_k), where x_k is
+# the portfolio net exposure to factor k and vol_k is that factor's return vol (same convention
+# build_scenarios uses for the baked-in Hypo sets). So custom (user-defined sigmas) and reverse
+# (solve the sigma that breaches a loss) stress are computed in the API from exposures + vols — no
+# cube rebuild.
 
 def _factor_vols() -> dict:
     """Per-factor return vol — served from the cube's `Factor return vol` measure (std of the
@@ -2259,20 +2324,20 @@ def _factor_vols() -> dict:
     return S["factor_vols"]
 
 
-def _factor_exposures(date: str, book: str) -> dict:
-    """Book net factor exposure x_k by Factor at a date (cube Net exposure — scenario-independent)."""
+def _factor_exposures(date: str, manager: str) -> dict:
+    """Portfolio net factor exposure x_k by Factor at a date (cube Net exposure — scenario-independent)."""
     cube = S["cube"]; l, m = cube.levels, cube.measures
     flt = (l["Date"] == _date(date))
     if "Manager" in {n for _, n in cube.hierarchies}:
-        flt = flt & (l["Manager"] == book)
+        flt = flt & (l["Manager"] == manager)
     df = cube.query(m["Net exposure"], levels=[l["Factor"]], filter=flt).reset_index()
     return {str(r["Factor"]): float(r["Net exposure"]) for _, r in df.iterrows()}
 
 
-def _stress_result(shocks: dict, date: str, book: str) -> dict:
-    """Book P&L under a user-defined set of per-factor sigma shocks (one-day hypothetical)."""
+def _stress_result(shocks: dict, date: str, manager: str) -> dict:
+    """Portfolio P&L under a user-defined set of per-factor sigma shocks (one-day hypothetical)."""
     vols = _factor_vols()
-    x = _factor_exposures(date, book)
+    x = _factor_exposures(date, manager)
     comps, total = [], 0.0
     for f, sigma in shocks.items():
         xf, vf = x.get(f, 0.0), vols.get(f, 0.0)
@@ -2282,7 +2347,7 @@ def _stress_result(shocks: dict, date: str, book: str) -> dict:
         comps.append({"factor": f, "exposure": xf, "sigma": float(sigma), "vol": vf,
                       "shock_return": shock_ret, "pnl": pnl})
     comps.sort(key=lambda c: c["pnl"])               # worst contributor first
-    return {"date": date, "book": book, "shocks": shocks,
+    return {"date": date, "manager": manager, "shocks": shocks,
             "total_pnl": total, "loss": -total, "components": comps}
 
 
@@ -2294,11 +2359,11 @@ def _conditional_shock(F: np.ndarray, idx: list[int], s: np.ndarray) -> np.ndarr
     return F[:, idx] @ np.linalg.solve(sub, np.asarray(s, dtype=float))
 
 
-def _conditional_stress_result(shocks: dict, date: str, book: str) -> dict:
+def _conditional_stress_result(shocks: dict, date: str, manager: str) -> dict:
     """Correlated version of _stress_result: condition the whole factor system on the shocked
     factors via the factor covariance, then dPnL = Σ x_k·E[f_k | shock]. The naive single-factor
     read understates a real event because the co-moving factors don't stay still."""
-    L, w, _s, R = _book_inputs(date, book)
+    L, w, _s, R = _manager_inputs(date, manager)
     factors = list(L.columns)
     missing = [f for f in shocks if f not in factors]
     if missing:
@@ -2324,21 +2389,23 @@ def _conditional_stress_result(shocks: dict, date: str, book: str) -> dict:
 class StressBody(BaseModel):
     shocks: dict[str, float]                          # {Factor: sigma}
     date: str | None = None
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
     # correlated (conditional) mode: propagate the shock through the factor covariance and add a
-    # `conditional` block — implied return per factor + the conditional book P&L.
+    # `conditional` block — implied return per factor + the conditional portfolio P&L.
     conditional: bool = False
     # correlation-stress mode (Step 15 §4): scale factor vols by vol_mult and blend correlations
-    # toward 1 by rho — adds a `correlation_stress` block (base vs stressed book vol) to the result.
+    # toward 1 by rho — adds a `correlation_stress` block (base vs stressed portfolio vol) to the
+    # result.
     vol_mult: float | None = None
     rho: float | None = None
 
 
-def _corr_stress_result(date: str, book: str, vol_mult: float, rho: float) -> dict:
-    """Book daily vol under a vols-and-correlations shock: F' = _stressed_cov(F). The base↔stressed
-    gap on the BOOK (not any single factor) is the diversification the book leans on — where
-    correlation risk lives. Normal-approx VaR99 = 2.326σ for scale."""
-    L, w, s, R = _book_inputs(date, book)
+def _corr_stress_result(date: str, manager: str, vol_mult: float, rho: float) -> dict:
+    """Portfolio daily vol under a vols-and-correlations shock: F' = _stressed_cov(F). The
+    base↔stressed gap on the PORTFOLIO (not any single factor) is the diversification the
+    portfolio leans on — where correlation risk lives. Normal-approx VaR99 = 2.326σ for scale."""
+    L, w, s, R = _manager_inputs(date, manager)
     x = L.to_numpy().T @ w.to_numpy()
     F = np.cov(R, rowvar=False)
     svar = float(np.sum(w.to_numpy() ** 2 * s.to_numpy()))
@@ -2350,11 +2417,11 @@ def _corr_stress_result(date: str, book: str, vol_mult: float, rho: float) -> di
             "base_var99_normal": _Z99 * base, "stressed_var99_normal": _Z99 * stressed}
 
 
-def _corr_stress_cube(date: str, book: str, vol_mult: float, rho: float) -> dict:
+def _corr_stress_cube(date: str, manager: str, vol_mult: float, rho: float) -> dict:
     """The correlation-stress read SERVED from the cube's `Stressed model vol` (a transient
     CorrStress parameter scenario), with the numpy _corr_stress_result as the live cross-check.
     Falls back to serving the numpy numbers on any cube failure."""
-    ref = _corr_stress_result(date, book, vol_mult, rho)
+    ref = _corr_stress_result(date, manager, vol_mult, rho)
     scen = f"corr-{uuid.uuid4().hex[:12]}"
     sim = None
     try:
@@ -2363,7 +2430,7 @@ def _corr_stress_cube(date: str, book: str, vol_mult: float, rho: float) -> dict
         sim.append((scen, float(vol_mult), float(rho)))
         flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
         if "Manager" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Manager"] == book)
+            flt &= (l["Manager"] == manager)
         base = cube.query(mm["Model vol"], filter=flt)
         stressed = cube.query(mm["Stressed model vol"],
                               filter=flt & (l["CorrStress"] == scen))
@@ -2388,10 +2455,11 @@ def _corr_stress_cube(date: str, book: str, vol_mult: float, rho: float) -> dict
 
 @app.post("/stress")
 async def stress(body: StressBody):
-    """Custom one-day stress: book P&L under user-defined per-factor sigma shocks (and a per-factor
-    contribution breakdown). dPnL = Σ x_k·(sigma_k·vol_k) — the same math as the baked-in Hypo sets;
-    vols come from the cube's `Factor return vol` measure (via _factor_vols).
+    """Custom one-day stress: portfolio P&L under user-defined per-factor sigma shocks (and a
+    per-factor contribution breakdown). dPnL = Σ x_k·(sigma_k·vol_k) — the same math as the
+    baked-in Hypo sets; vols come from the cube's `Factor return vol` measure (via _factor_vols).
     Optional vol_mult/rho add a correlation-stress read (vols up, correlations toward 1)."""
+    manager = _coalesce_manager(body.manager, body.book)
     known = set(S["frames"]["factor_meta"]["Factor"].astype(str))
     bad = [f for f in body.shocks if f not in known]
     if bad:
@@ -2401,10 +2469,11 @@ async def stress(body: StressBody):
     def run():
         d = body.date or _latest_date()
         # numpy reference — retained as the live cross-check
-        ref = _stress_result(body.shocks, d, body.book)
+        ref = _stress_result(body.shocks, d, manager)
         # cube-served naive shock (the StressShock parameter simulation — one transient scenario
         # per request): per-factor components from Custom stress PnL / Net exposure /
-        # Factor return vol, footing to the book total. Falls back to serving the numpy numbers.
+        # Factor return vol, footing to the portfolio total. Falls back to serving the numpy
+        # numbers.
         scen = f"req-{uuid.uuid4().hex[:12]}"
         sim = None
         try:
@@ -2414,7 +2483,7 @@ async def stress(body: StressBody):
             flt = ((l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
                    & (l["StressShock"] == scen))
             if "Manager" in {n for _, n in cube.hierarchies}:
-                flt &= (l["Manager"] == body.book)
+                flt &= (l["Manager"] == manager)
             dfF = (cube.query(mm["Custom stress PnL"], mm["Net exposure"], mm["Factor return vol"],
                               levels=[l["Factor"]], filter=flt).reset_index())
             byf = dfF.set_index("Factor")
@@ -2429,7 +2498,7 @@ async def stress(body: StressBody):
             comps.sort(key=lambda c: c["pnl"])
             total = float(sum(c["pnl"] for c in comps))
             ref_pnl = {c["factor"]: c["pnl"] for c in ref["components"]}
-            res = {"date": d, "book": body.book, "shocks": body.shocks,
+            res = {"date": d, "manager": manager, "shocks": body.shocks,
                    "total_pnl": total, "loss": -total, "components": comps,
                    "source": "cube",
                    "verification": {
@@ -2448,24 +2517,26 @@ async def stress(body: StressBody):
                 except Exception:
                     pass
         if body.conditional:
-            res["conditional"] = _conditional_stress_result(body.shocks, d, body.book)
+            res["conditional"] = _conditional_stress_result(body.shocks, d, manager)
         if body.vol_mult is not None or body.rho is not None:
             res["correlation_stress"] = _corr_stress_cube(
-                d, body.book, body.vol_mult or 1.0, body.rho or 0.0)
+                d, manager, body.vol_mult or 1.0, body.rho or 0.0)
         return res
     return await run_in_threadpool(run)
 
 
 @app.get("/reverse_stress")
-async def reverse_stress(loss: float | None = None, date: str | None = None, book: str = "Soros"):
-    """Reverse stress: for a target book loss `L`, the single-factor sigma move that would produce it,
-    per factor, ranked by |sigma| (smallest = the book's most vulnerable factor). Default L = the
-    Total VaR 99 desk limit (limits.json), else 0.05."""
-    L = loss if loss is not None else (_load_limits().get("book", {})
+async def reverse_stress(loss: float | None = None, date: str | None = None,
+                         manager: str | None = None, book: str | None = None):
+    """Reverse stress: for a target portfolio loss `L`, the single-factor sigma move that would
+    produce it, per factor, ranked by |sigma| (smallest = the portfolio's most vulnerable factor).
+    Default L = the Total VaR 99 desk limit (limits.json), else 0.05."""
+    manager = _coalesce_manager(manager, book)
+    L = loss if loss is not None else (_load_limits().get("manager", {})
                                        .get("Scenario VaR 99", {}).get("limit") or 0.05)
     def run():
         d = date or _latest_date()
-        vols = _factor_vols(); x = _factor_exposures(d, book)
+        vols = _factor_vols(); x = _factor_exposures(d, manager)
         rows = []
         for f, vf in vols.items():
             denom = x.get(f, 0.0) * vf
@@ -2473,22 +2544,22 @@ async def reverse_stress(loss: float | None = None, date: str | None = None, boo
             rows.append({"factor": f, "exposure": x.get(f, 0.0), "vol": vf,
                          "sigma_to_breach": sigma, "abs_sigma": (abs(sigma) if sigma is not None else None)})
         ranked = sorted((r for r in rows if r["abs_sigma"] is not None), key=lambda r: r["abs_sigma"])
-        return {"date": d, "book": book, "loss": L, "factors": ranked,
+        return {"date": d, "manager": manager, "loss": L, "factors": ranked,
                 "weakest": ranked[0] if ranked else None}
     return await run_in_threadpool(run)
 
 
 # ============================================================================ pre-trade / what-if
-# Recompute book risk under a modified weight vector — the cube's risk math reproduced in numpy so a
+# Recompute portfolio risk under a modified weight vector — the cube's risk math reproduced in numpy so a
 # hypothetical trade (resize / add / drop) needs no cube rebuild. Factor P&L vector = R · (Lᵀ w), the
 # diagonal specific block = Σ wᵢ²σᵢ², and HHI from the marginal-Total-VaR shares (self-consistent:
-# the marginals sum to book Total VaR, so shares sum to 1). "Before" ≈ the cube's reported figures
-# (small quantile-interpolation differences); the value is the BEFORE→AFTER delta.
+# the marginals sum to portfolio Total VaR, so shares sum to 1). "Before" ≈ the cube's reported
+# figures (small quantile-interpolation differences); the value is the BEFORE→AFTER delta.
 
 _Z99 = 2.326
 
 
-def _book_inputs(date: str, book: str):
+def _manager_inputs(date: str, manager: str):
     """Universe loadings L (Position×Factor, incl Market), as-of weights w, specific var s, and the
     daily factor-return panel R aligned to L's factors — the pieces the risk math needs."""
     f = S["frames"]; d = pd.Timestamp(date)
@@ -2498,7 +2569,7 @@ def _book_inputs(date: str, book: str):
     factors = [c for c in L.columns if c in wide.columns]
     L = L[factors]
     R = wide[factors].to_numpy()
-    pos = f["positions"]; asof = pos[(pos["Manager"] == book) & (pos["Date"] <= d)]
+    pos = f["positions"]; asof = pos[(pos["Manager"] == manager) & (pos["Date"] <= d)]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     held = bp.set_index("Position")["Weight"] if len(bp) else pd.Series(dtype=float)
     w = pd.Series(0.0, index=L.index)
@@ -2510,10 +2581,10 @@ def _book_inputs(date: str, book: str):
 
 
 def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarray) -> dict:
-    """Book risk for a weight vector. `model_vol_1d` (σ = √(x'Fx + w'Δw)) is the desk's REFERENCE
-    risk number (2026-07-03 decision); the scenario VaR/ES quantiles are the LIMIT metrics;
-    `total_var_99` is the legacy house composite, kept but demoted. Plus gross/net and the top-5
-    CTR share (the ch-09 concentration idiom: the 5 largest names' share of the
+    """Portfolio risk for a weight vector. `model_vol_1d` (σ = √(x'Fx + w'Δw)) is the desk's
+    REFERENCE risk number (2026-07-03 decision); the scenario VaR/ES quantiles are the LIMIT
+    metrics; `total_var_99` is the legacy house composite, kept but demoted. Plus gross/net and
+    the top-5 CTR share (the ch-09 concentration idiom: the 5 largest names' share of the
     marginal-Total-VaR contributions — replaced Risk HHI)."""
     wv, Lv, sv = w.to_numpy(), L.to_numpy(), s.to_numpy()
     x = Lv.T @ wv
@@ -2527,10 +2598,10 @@ def _risk_from_weights(w: pd.Series, L: pd.DataFrame, s: pd.Series, R: np.ndarra
     var975 = float(-np.quantile(pnl, 0.025))
     es = lambda a: float(-np.mean(np.sort(pnl)[:max(1, int(np.ceil((1 - a) * n)))]))
     total99 = (var99 * var99 + (_Z99 * specvol) ** 2) ** 0.5
-    # top-5 share of the marginal-Total-VaR contributions (read off the book's 1% tail day)
+    # top-5 share of the marginal-Total-VaR contributions (read off the portfolio's 1% tail day)
     ti = int(np.argsort(pnl)[int(np.floor(0.01 * (n - 1)))])
     msv = -(wv * (Lv @ R[ti]))                       # marginal Scenario VaR per name
-    Fro = float(np.sum(msv))                          # = -pnl[ti]; book factor-VaR read-off
+    Fro = float(np.sum(msv))                          # = -pnl[ti]; portfolio factor-VaR read-off
     T = (Fro * Fro + _Z99 * _Z99 * svar) ** 0.5
     top5 = None
     if T > 0:
@@ -2565,24 +2636,25 @@ def _euler_contributions(w: np.ndarray, Lv: np.ndarray, F: np.ndarray, sv: np.nd
 
 
 @app.get("/contributions")
-async def contributions(date: str | None = None, book: str = "Soros"):
+async def contributions(date: str | None = None, manager: str | None = None, book: str | None = None):
     """Euler risk contributions — the ch-09 standard reports, SERVED FROM THE CUBE measures
     (`Marginal Model vol` per name == CTR; `Factor variance contribution` per factor == CTV;
-    `Model vol` book σ) so this endpoint and the pivot grid can never disagree. The retained
+    `Model vol` portfolio σ) so this endpoint and the pivot grid can never disagree. The retained
     numpy implementation (_euler_contributions) is recomputed on every call as an independent
     cross-check and reported in `verification` — the tie-out made permanent.
 
-    Memoized per (date, book) (api_bench 2026-08-21): the payload is a pure function of the two,
-    and its cost is the by-Position cube query (~0.8 s on the widest book), not serialisation."""
+    Memoized per (date, manager) (api_bench 2026-08-21): the payload is a pure function of the two,
+    and its cost is the by-Position cube query (~0.8 s on the widest portfolio), not serialisation."""
+    manager = _coalesce_manager(manager, book)
     def run():
         d = date or _latest_date()
-        ck = ("_contrib_memo", d, book, id(S["cube"]))
+        ck = ("_contrib_memo", d, manager, id(S["cube"]))
         if ck in S:
             return S[ck]
         # numpy reference — the independent implementation, kept as a live cross-check
-        L, w, s, R = _book_inputs(d, book)
+        L, w, s, R = _manager_inputs(d, manager)
         if not float(np.abs(w.to_numpy()).sum()):
-            raise HTTPException(404, f"no {book} positions at {d}")
+            raise HTTPException(404, f"no {manager} positions at {d}")
         F = np.cov(R, rowvar=False)
         e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
         ref_ctv = {str(f): float(e["ctv"][i]) for i, f in enumerate(L.columns)}
@@ -2591,7 +2663,7 @@ async def contributions(date: str | None = None, book: str = "Soros"):
         cube = S["cube"]; l, m = cube.levels, cube.measures
         flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
         if "Manager" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Manager"] == book)
+            flt &= (l["Manager"] == manager)
         bk = cube.query(m["Model vol"], m["Scenario PnL vol"], m["Specific variance"], filter=flt)
         if not len(bk):
             raise HTTPException(404, f"no cube cell at {d} / HistFull")
@@ -2601,7 +2673,7 @@ async def contributions(date: str | None = None, book: str = "Soros"):
         total_var = fac_var + svar
         dfF = (cube.query(m["Net exposure"], m["Factor variance contribution"],
                           levels=[l["Factor"]], filter=flt).reset_index())
-        # (the Position query below is the expensive half on a wide book: ~3.6k members, the
+        # (the Position query below is the expensive half on a wide portfolio: ~3.6k members, the
         #  SDK's per-member floor again — measured, not serialisation; see the memo at the top)
         dfP = (cube.query(m["Marginal Model vol"], levels=[l["Position"]], filter=flt)
                .reset_index())
@@ -2630,7 +2702,7 @@ async def contributions(date: str | None = None, book: str = "Soros"):
                                      for p_ in positions), default=0.0),
         }
         out = {
-            "date": d, "book": book, "source": "cube",
+            "date": d, "manager": manager, "source": "cube",
             "vol_1d": vol, "var99_normal": _Z99 * vol,
             "factor_variance": fac_var, "specific_variance": svar,
             "total_variance": total_var,
@@ -2639,12 +2711,12 @@ async def contributions(date: str | None = None, book: str = "Soros"):
             "sum_ctv": float(dfF["Factor variance contribution"].sum()),   # = factor_variance
             "factors": factors, "positions": positions,
             "verification": verification,
-            "note": ("CTR (positions) is in VOL units and sums exactly to book vol; CTV (factors) "
-                     "is in VARIANCE units and sums to factor variance — different unit pairings, "
-                     "never compare directly. Negative CTV = the exposure hedges the book. MCR is "
-                     "a rate (risk per unit weight), nothing to sum. Model vol on the full "
-                     "factor-return history — distinct from the scenario-VaR views. Served from "
-                     "the cube measures; `verification` is the live numpy cross-check."),
+            "note": ("CTR (positions) is in VOL units and sums exactly to portfolio vol; CTV "
+                     "(factors) is in VARIANCE units and sums to factor variance — different unit "
+                     "pairings, never compare directly. Negative CTV = the exposure hedges the "
+                     "portfolio. MCR is a rate (risk per unit weight), nothing to sum. Model vol "
+                     "on the full factor-return history — distinct from the scenario-VaR views. "
+                     "Served from the cube measures; `verification` is the live numpy cross-check."),
         }
         S[ck] = out
         return out
@@ -2659,13 +2731,13 @@ _CUBE_RISK_KEYS = {"model_vol_1d": "Model vol", "scenario_var_99": "Scenario VaR
 _WHATIF_AUX_KEYS: tuple = ()                            # every key is cube-served now
 
 
-def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
-    """The what-if risk keys read from the CUBE at (date, book, HistFull) — optionally on a
+def _cube_risk_block(date: str, manager: str, scenario: str | None = None) -> dict:
+    """The what-if risk keys read from the CUBE at (date, manager, HistFull) — optionally on a
     transient what-if source-scenario branch. One query."""
     cube = S["cube"]; l, mm = cube.levels, cube.measures
     flt = (l["Date"] == _date(date)) & (l["ScenarioSet"] == "HistFull")
     if "Manager" in {n for _, n in cube.hierarchies}:
-        flt &= (l["Manager"] == book)
+        flt &= (l["Manager"] == manager)
     kw = {"scenario": scenario} if scenario is not None else {}
     q = cube.query(*[mm[v] for v in _CUBE_RISK_KEYS.values()], filter=flt, **kw)
     if not len(q):
@@ -2674,14 +2746,14 @@ def _cube_risk_block(date: str, book: str, scenario: str | None = None) -> dict:
     return {k: float(row[v]) for k, v in _CUBE_RISK_KEYS.items()}
 
 
-def _whatif_result(date: str, book: str, trades: list) -> dict:
-    """Before/after book risk under a set of trades. The risk keys are SERVED FROM THE CUBE
+def _whatif_result(date: str, manager: str, trades: list) -> dict:
+    """Before/after portfolio risk under a set of trades. The risk keys are SERVED FROM THE CUBE
     (base cell + a transient source-scenario branch carrying the trades), so /whatif, the grid
     and every other cube consumer share one implementation; the numpy engine
     (_risk_from_weights) is recomputed on every call as the live cross-check (`verification`)
     and still supplies the weight arithmetic (gross/net) and the mtv-based top-5 share. Falls
     back to serving the numpy numbers (source="numpy_fallback") if the cube path fails."""
-    L, w, s, R = _book_inputs(date, book)
+    L, w, s, R = _manager_inputs(date, manager)
     tk = _ticker_map()
     unknown = [t["position"] for t in trades if t["position"] not in w.index]
     if unknown:
@@ -2696,12 +2768,12 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     ref_after = _risk_from_weights(w2, L, s, R) if trades else ref_before
     source, branch, session = "cube", None, S["session"]
     try:
-        cube_before = _cube_risk_block(date, book)
+        cube_before = _cube_risk_block(date, manager)
         if trades:
             branch = f"whatif-{uuid.uuid4().hex[:12]}"
             session.tables["Positions"].scenarios[branch].load(
-                _whatif_branch_rows(date, book, trades))
-            cube_after = _cube_risk_block(date, book, scenario=branch)
+                _whatif_branch_rows(date, manager, trades))
+            cube_after = _cube_risk_block(date, manager, scenario=branch)
         else:
             cube_after = dict(cube_before)
         _vk = ("model_vol_1d", "specific_vol", "gross", "net")
@@ -2737,10 +2809,10 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     holdings = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
                 for p, wt in w[w != 0].sort_values(ascending=False).items()]
     # held names with NO loadings this date (foreign/unpriced on free data — e.g. a TSX-only
-    # name) are invisible to the risk math; disclose them rather than let the book quietly
+    # name) are invisible to the risk math; disclose them rather than let the portfolio quietly
     # sum below 1. holdings + unpriced together recover the full 13F weight.
     pos = S["frames"]["positions"]
-    asof = pos[(pos["Manager"] == book) & (pos["Date"] <= pd.Timestamp(date))]
+    asof = pos[(pos["Manager"] == manager) & (pos["Date"] <= pd.Timestamp(date))]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     unpriced = [{"position": p, "ticker": tk.get(p, p), "weight": float(wt)}
                 for p, wt in bp.set_index("Position")["Weight"].items() if p not in L.index]
@@ -2749,7 +2821,7 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
     # a name that isn't currently held, not just resize/drop holdings.
     universe = [{"position": p, "ticker": tk.get(p, p)} for p in L.index]
     universe.sort(key=lambda u: u["ticker"])
-    return {"date": date, "book": book, "trades": applied, "before": before, "after": after,
+    return {"date": date, "manager": manager, "trades": applied, "before": before, "after": after,
             "delta": delta, "holdings": holdings, "universe": universe,
             "unpriced": unpriced, "priced_weight": float(w.sum()),
             "source": source, "verification": verification}
@@ -2758,19 +2830,22 @@ def _whatif_result(date: str, book: str, trades: list) -> dict:
 class WhatIfBody(BaseModel):
     trades: list[dict] = []          # [{position, weight}] — absolute target weight (0 = drop)
     date: str | None = None
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
 
 
 @app.post("/whatif")
 async def whatif(body: WhatIfBody):
-    """Pre-trade what-if: book VaR/ES/Total VaR/Specific vol/HHI before vs after a set of hypothetical
-    trades (absolute target weight per position; 0 drops it; a universe name not currently held adds
-    it), plus gross/net. Empty `trades` returns the current holdings so the UI can bootstrap the
-    editor. Risk is recomputed in numpy from the same loadings/returns/specvar the cube uses."""
+    """Pre-trade what-if: portfolio VaR/ES/Total VaR/Specific vol/HHI before vs after a set of
+    hypothetical trades (absolute target weight per position; 0 drops it; a universe name not
+    currently held adds it), plus gross/net. Empty `trades` returns the current holdings so the UI
+    can bootstrap the editor. Risk is recomputed in numpy from the same loadings/returns/specvar
+    the cube uses."""
+    manager = _coalesce_manager(body.manager, body.book)
     for t in body.trades:
         if "position" not in t or "weight" not in t:
             raise HTTPException(400, "each trade needs {position, weight}")
-    return await run_in_threadpool(_whatif_result, body.date or _latest_date(), body.book, body.trades)
+    return await run_in_threadpool(_whatif_result, body.date or _latest_date(), manager, body.trades)
 
 
 # ============================================================================ liquidity risk
@@ -2789,19 +2864,21 @@ def _days_to_liquidate(mv: pd.Series, adv: pd.Series, participation: float) -> p
 
 @app.get("/liquidity")
 async def liquidity(date: str | None = Query(None, description="as-of date; default latest"),
-                    book: str = Query("Soros"),
+                    manager: str | None = Query(None), book: str | None = Query(None),
                     participation: float = Query(0.20, gt=0, le=1,
                                                  description="fraction of ADV traded per day"),
                     horizon: float = Query(5.0, gt=0, description="days to flag a name as illiquid")):
-    """Days-to-liquidate for the held book: per name MV / (participation·ADV), the share of book value
-    liquidatable within `horizon` days, the weighted-average days, and the worst (least-liquid) names.
-    Names with no ADV are reported separately, never counted as instantly liquid."""
+    """Days-to-liquidate for the held portfolio: per name MV / (participation·ADV), the share of
+    portfolio value liquidatable within `horizon` days, the weighted-average days, and the worst
+    (least-liquid) names. Names with no ADV are reported separately, never counted as instantly
+    liquid."""
+    manager = _coalesce_manager(manager, book)
     def run():
         f = S["frames"]; pos = f["positions"]
         d = pd.Timestamp(date) if date else pd.Timestamp(pos["Date"].max())
-        bk = pos[(pos["Manager"] == book) & (pos["Date"] == d)].copy()
+        bk = pos[(pos["Manager"] == manager) & (pos["Date"] == d)].copy()
         if bk.empty:
-            raise HTTPException(404, f"no positions for {book} on {d.date()}")
+            raise HTTPException(404, f"no positions for {manager} on {d.date()}")
         if "ADV" not in bk.columns:
             raise HTTPException(503, "positions frame has no ADV column — rebuild with the Step-11 builder")
         sec = f["securities"][["Position", "Issuer", "Ticker", "Sector"]]
@@ -2816,7 +2893,7 @@ async def liquidity(date: str | None = Query(None, description="as-of date; defa
         detail = (measurable.sort_values("days", ascending=False)
                   [["Issuer", "Ticker", "Sector", "Weight", "MV", "ADV", "days"]])
         return {
-            "date": str(d.date()), "book": book,
+            "date": str(d.date()), "manager": manager,
             "participation": participation, "horizon_days": horizon,
             "n_names": int(len(bk)),
             "pct_mv_within_horizon": float(within["MV"].sum() / tot_mv) if tot_mv else None,
@@ -2831,7 +2908,7 @@ async def liquidity(date: str | None = Query(None, description="as-of date; defa
                              for _, r in no_adv.sort_values("Weight", ascending=False).iterrows()],
             "note": ("Days-to-liquidate = position MV ÷ (participation × ADV); ADV is the trailing-63d "
                      "mean daily $ volume on the positions frame. A constant-portfolio liquidity read "
-                     "on the held book — not a live order book."),
+                     "on the held portfolio — not a live order book."),
         }
     return await run_in_threadpool(run)
 
@@ -2847,7 +2924,7 @@ async def liquidity(date: str | None = Query(None, description="as-of date; defa
 def _attr_artifact(path=None) -> pd.DataFrame:
     """The precompute artifact, cached on S (keyed per file since the manager-aware precomputes,
     2026-08-14) and reloaded when the file changes. `path` defaults to the legacy Soros artifact;
-    guarded endpoints pass the path `_resolve_artifact` picked for the requested book."""
+    guarded endpoints pass the path `_resolve_artifact` picked for the requested manager."""
     p = path if path is not None else _pnl.ARTIFACT
     if not p.exists():
         raise HTTPException(404, f"{p.name} missing — run barra_pnl_attribution.py "
@@ -2875,7 +2952,7 @@ def _attr_window(art: pd.DataFrame, frm: str | None, to: str | None):
     return w, lo, hi
 
 
-def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
+def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, manager: str,
                monthly: bool = False):
     """Per-name factor/specific/realized PnL over the window, on the AS-OF monthly weights — the
     same convention (and numbers) as the cube's attribution measures. Index Position, columns
@@ -2890,7 +2967,7 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     d0s = [pd.Timestamp(d) for d in exp_dates if lo <= pd.Timestamp(d) < hi]
     # 2026-08-15 (api_bench): the per-month selections come off cached row indices instead of
     # full-frame boolean masks -- specific_returns is the DAILY residual frame (~13M rows on the
-    # 124-book build) and scanning it once per month was most of /pnl_attribution/residual's
+    # 124-manager build) and scanning it once per month was most of /pnl_attribution/residual's
     # cost. Same rows selected, same arithmetic (see _frame_rows_by).
     pos_by = _frame_rows_by("positions", ("Manager", "Date"))
     exp_by = _frame_rows_by("exposures", ("Date",))
@@ -2898,7 +2975,7 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     for d0 in d0s:
         nxt = exp_dates[np.searchsorted(exp_dates, np.datetime64(d0)) + 1] \
             if np.searchsorted(exp_dates, np.datetime64(d0)) + 1 < len(exp_dates) else None
-        pidx = pos_by.get((book, d0))
+        pidx = pos_by.get((manager, d0))
         w_ = (pos.iloc[pidx] if pidx is not None else pos.iloc[:0]).groupby("Position")["Weight"].sum()
         if w_.empty:
             continue
@@ -2930,15 +3007,15 @@ def _name_attr(lo: pd.Timestamp, hi: pd.Timestamp, book: str,
     return out
 
 
-def _drill_contrib(T: str, to: str, book: str):
+def _drill_contrib(T: str, to: str, manager: str):
     """Per (Position, Factor) live PnL contribution over the window [T, to) (fwd-month
     convention), plus per-position specific PnL and the T-date loadings — the reconcile drawers'
-    live replacement for the baked (book-independent) `Factor contribution` cube measure
-    (2026-08-22, see CLAUDE.md "book-independent attribution limitation"). This is EXACTLY
+    live replacement for the baked (manager-independent) `Factor contribution` cube measure
+    (2026-08-22, see CLAUDE.md "manager-independent attribution limitation"). This is EXACTLY
     `_name_attr`'s per-month loop with the factor axis kept instead of collapsed
     (`Ld[facs] @ fsum[facs]` there == `Ld[facs].mul(fsum[facs])` summed over factors here), so a
     position's per-factor bars + its specific PnL sum to the SAME `realized` `_name_attr` (and
-    therefore `/pnl_attribution/linkage`'s `positions[].realized`) reports for (book, T, to,
+    therefore `/pnl_attribution/linkage`'s `positions[].realized`) reports for (manager, T, to,
     position) — that identity is the acceptance test, not a separate reconciliation.
     Returns (contrib: DataFrame Position×Factor, specific: Series Position, loadings_T: DataFrame
     Position×Factor loadings as-of T)."""
@@ -2958,7 +3035,7 @@ def _drill_contrib(T: str, to: str, book: str):
     for d0 in d0s:
         nxt = exp_dates[np.searchsorted(exp_dates, np.datetime64(d0)) + 1] \
             if np.searchsorted(exp_dates, np.datetime64(d0)) + 1 < len(exp_dates) else None
-        pidx = pos_by.get((book, d0))
+        pidx = pos_by.get((manager, d0))
         w_ = (pos.iloc[pidx] if pidx is not None else pos.iloc[:0]).groupby("Position")["Weight"].sum()
         if w_.empty:
             continue
@@ -2976,7 +3053,7 @@ def _drill_contrib(T: str, to: str, book: str):
         eps_i = eps.reindex(w_.index).fillna(0.0)
         spec_parts.append(w_ * eps_i)
     if not contrib_parts:
-        raise HTTPException(404, f"no {book} positions in [{t0.date()}, {t1.date()})")
+        raise HTTPException(404, f"no {manager} positions in [{t0.date()}, {t1.date()})")
     contrib = pd.concat(contrib_parts).groupby(level=0).sum()
     specific = pd.concat(spec_parts).groupby(level=0).sum()
     eidx0 = exp_by.get(t0)
@@ -3006,14 +3083,15 @@ def _attr_headline() -> dict | None:
 
 @app.get("/pnl_attribution")
 async def pnl_attribution(frm: str | None = Query(None, alias="from"), to: str | None = None,
-                          book: str = "Soros",
+                          manager: str | None = None, book: str | None = None,
                           by: str | None = Query(None, description="sector|name for a breakdown")):
-    """Period PnL attribution headline: realized book return (geometric, Carino-linked) split into
-    factor + specific, the cumulative hero series, the by-factor table (avg exposure, cumulative
-    factor return, linked contribution, t-stat), coverage, and an optional sector/name breakdown.
-    Default window: trailing 12 months of the artifact."""
+    """Period PnL attribution headline: realized portfolio return (geometric, Carino-linked) split
+    into factor + specific, the cumulative hero series, the by-factor table (avg exposure,
+    cumulative factor return, linked contribution, t-stat), coverage, and an optional sector/name
+    breakdown. Default window: trailing 12 months of the artifact."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", manager)
         if mism is not None:
             return mism
         art = _attr_artifact(art_path)
@@ -3051,7 +3129,7 @@ async def pnl_attribution(frm: str | None = Query(None, alias="from"), to: str |
         unp = art[(art["Kind"] == "unpriced") & (art["Date"] >= lo) & (art["Date"] <= hi)]
         unp_latest = unp[unp["Date"] == unp["Date"].max()] if len(unp) else unp
         res = {
-            "from": str(lo.date()), "to": str(hi.date()), "book": book,
+            "from": str(lo.date()), "to": str(hi.date()), "manager": manager,
             "n_days": int(len(c)),
             "calendar": {"min": _clean(art["Date"].min()), "max": _clean(art["Date"].max())},
             "headline": {
@@ -3072,7 +3150,7 @@ async def pnl_attribution(frm: str | None = Query(None, alias="from"), to: str |
                      "buy-and-hold weights between 13F filings."),
         }
         if by in ("sector", "name"):
-            na = _name_attr(lo, hi, book)
+            na = _name_attr(lo, hi, manager)
             tk = _ticker_map()
             if by == "name":
                 na = na.sort_values("realized", key=lambda s: s.abs(), ascending=False)
@@ -3096,7 +3174,7 @@ def _monthly(series: pd.Series) -> pd.Series:
 def _frame_rows_by(name: str, keys: tuple) -> dict:
     """{key: int row positions} for a frame grouped by `keys` -- computed ONCE per process per
     (frame, keys) and cached on S (frames are loaded once and never change in-process). Replaces
-    the per-month full-frame boolean masks in _pred_book_vols: 126 months x (an 11.6M-row
+    the per-month full-frame boolean masks in _pred_manager_vols: 126 months x (an 11.6M-row
     positions scan + a 6M-row exposures scan + a specific_var scan) was most of /calibration's
     107 s cold call (api_bench 2026-08-15)."""
     fr = S["frames"][name]
@@ -3106,22 +3184,22 @@ def _frame_rows_by(name: str, keys: tuple) -> dict:
     return S[ck]
 
 
-def _book_date_rows(book: str) -> dict:
-    """{Date: row positions in the positions frame} for ONE book — the (Manager, Date) row index
-    projected onto its book. `pos[pos["Manager"] == book]` is an 11.6M-row scan on the 124-book
-    build and the endpoints that needed it did one per call (/whatchanged did several)."""
+def _manager_date_rows(manager: str) -> dict:
+    """{Date: row positions in the positions frame} for ONE manager — the (Manager, Date) row
+    index projected onto its manager. `pos[pos["Manager"] == manager]` is an 11.6M-row scan on the
+    124-manager build and the endpoints that needed it did one per call (/whatchanged did several)."""
     fr = S["frames"]["positions"]
-    ck = ("_book_dates", book, id(fr))
+    ck = ("_manager_dates", manager, id(fr))
     if ck not in S:
         S[ck] = {pd.Timestamp(d): idx
                  for (b, d), idx in _frame_rows_by("positions", ("Manager", "Date")).items()
-                 if b == book}
+                 if b == manager}
     return S[ck]
 
 
 def _sr_rows_between(lo, hi) -> pd.DataFrame:
     """specific_returns rows with lo < Date <= hi, off the cached per-Date row index — the frame
-    is the DAILY residual panel (~13M rows on the 124-book build) and a boolean mask over it is
+    is the DAILY residual panel (~13M rows on the 124-manager build) and a boolean mask over it is
     the single most expensive scan in the API. Same rows, same order (dates ascending, and the
     frame's own row order within a date)."""
     sr = S["frames"].get("specific_returns")
@@ -3139,13 +3217,13 @@ def _sr_rows_between(lo, hi) -> pd.DataFrame:
     return sr.iloc[np.concatenate(idx)] if idx else sr.iloc[:0]
 
 
-def _pred_month_numpy(d0, book: str, frw: pd.DataFrame):
-    """The numpy F(<=t) point-in-time book/specific/per-factor daily vols for ONE month-start,
-    or None when the book is empty that month or history is under the 60-obs floor. Pure
-    function of the frames -- the same arithmetic _pred_book_vols always ran, just fed from the
-    cached row index instead of full-frame masks."""
+def _pred_month_numpy(d0, manager: str, frw: pd.DataFrame):
+    """The numpy F(<=t) point-in-time manager/specific/per-factor daily vols for ONE month-start,
+    or None when the manager is empty that month or history is under the 60-obs floor. Pure
+    function of the frames -- the same arithmetic _pred_manager_vols always ran, just fed from
+    the cached row index instead of full-frame masks."""
     f = S["frames"]
-    pos_idx = _frame_rows_by("positions", ("Manager", "Date")).get((book, d0))
+    pos_idx = _frame_rows_by("positions", ("Manager", "Date")).get((manager, d0))
     if pos_idx is None or len(pos_idx) == 0:
         return None
     w_ = f["positions"].iloc[pos_idx].groupby("Position")["Weight"].sum()
@@ -3166,18 +3244,18 @@ def _pred_month_numpy(d0, book: str, frw: pd.DataFrame):
     sv = (f["specific_var"].iloc[sv_idx] if sv_idx is not None
           else f["specific_var"].iloc[:0]).set_index("Position")["SpecificVar"]
     svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
-    ref_book = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
+    ref_vol = float(np.sqrt(max(x.to_numpy() @ F @ x.to_numpy() + svar, 0.0)))
     ref_spec = float(np.sqrt(svar))
     ref_fac = {f_: abs(float(x[f_])) * float(hist[f_].std()) for f_ in facs}
-    return ref_book, ref_spec, ref_fac
+    return ref_vol, ref_spec, ref_fac
 
 
-def _pred_month_cube(d0, book: str, ref):
+def _pred_month_cube(d0, manager: str, ref):
     """The cube-served PIT read for one month: (bv, sv, fv, diff) or None where the PIT set is
     absent (numpy stands). Raises on a cube error (the caller records it and falls back)."""
-    ref_book, ref_spec, ref_fac = ref
+    ref_vol, ref_spec, ref_fac = ref
     cube = S["cube"]; l, mm = cube.levels, cube.measures
-    have_book = "Manager" in {n for _, n in cube.hierarchies}
+    have_manager = "Manager" in {n for _, n in cube.hierarchies}
     # The PIT sets moved to their own hierarchy + mirrored measures on 2026-08-14 (cube
     # optimization Step 2 — they were 95% of ScenarioSet's members and every group-by paid
     # for them). Same set NAMES, same numbers; a pre-split cube still answers via ScenarioSet.
@@ -3187,8 +3265,8 @@ def _pred_month_cube(d0, book: str, ref):
                      else ("Scenario PnL vol", "Model vol"))
     pit = f"PIT:{pd.Timestamp(d0).date()}"
     flt = (l["Date"] == _date(str(pd.Timestamp(d0).date()))) & (set_lvl == pit)
-    if have_book:
-        flt &= (l["Manager"] == book)
+    if have_manager:
+        flt &= (l["Manager"] == manager)
     q = cube.query(mm[mvol_n], mm["Specific vol"], filter=flt)
     if not len(q) or pd.isna(q.iloc[0][mvol_n]):
         return None                                    # no PIT set for this month — numpy stands
@@ -3196,21 +3274,21 @@ def _pred_month_cube(d0, book: str, ref):
     bv, sv_ = float(q.iloc[0][mvol_n]), float(q.iloc[0]["Specific vol"])
     fv = {str(r["Factor"]): float(r[vol_n]) for _, r in qf.iterrows()
           if not pd.isna(r[vol_n])}
-    diff = {"book": abs(bv - ref_book), "specific": abs(sv_ - ref_spec),
+    diff = {"manager": abs(bv - ref_vol), "specific": abs(sv_ - ref_spec),
             "factor": max([0.0] + [abs(fv[k] - v) for k, v in ref_fac.items() if k in fv])}
     return bv, sv_, {k: fv.get(k, ref_fac.get(k)) for k in ref_fac}, diff
 
 
-def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
-    """Per month-start d0: predicted DAILY book vol sqrt(x'Fx + Σw²σ²), predicted daily specific
-    vol, and per-factor daily vol |x_k|·σ_k — all POINT-IN-TIME (history ≤ d0, no look-ahead).
-    SERVED FROM THE CUBE's PIT:* truncated-history sets (Model vol / Specific vol / per-factor
-    Scenario PnL vol at (Date=d0, ScenarioSet=PIT:d0)); the numpy F(≤t) implementation is
-    recomputed alongside as the live cross-check (max diffs stashed in
+def _pred_manager_vols(months: list, manager: str) -> tuple[dict, dict, dict]:
+    """Per month-start d0: predicted DAILY portfolio vol sqrt(x'Fx + Σw²σ²), predicted daily
+    specific vol, and per-factor daily vol |x_k|·σ_k — all POINT-IN-TIME (history ≤ d0, no
+    look-ahead). SERVED FROM THE CUBE's PIT:* truncated-history sets (Model vol / Specific vol /
+    per-factor Scenario PnL vol at (Date=d0, ScenarioSet=PIT:d0)); the numpy F(≤t) implementation
+    is recomputed alongside as the live cross-check (max diffs stashed in
     S["pred_vols_verification"], served by /calibration), and is the per-month fallback where a
     PIT set is absent (early months under the 60-obs floor).
 
-    2026-08-15 (api_bench, cube-opt round 3): MEMOIZED per (book, month) on S -- /calibration
+    2026-08-15 (api_bench, cube-opt round 3): MEMOIZED per (manager, month) on S -- /calibration
     (full calendar) and /pnl_attribution/residual (its window) share the months, and the frames
     and cube never change in-process -- with the numpy half fed from cached per-Date row indices
     and the per-month PIT cube queries run CONCURRENTLY (8 workers). Same arithmetic, same
@@ -3218,17 +3296,17 @@ def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
     changes (/calibration cold 107 s -> see docs/api-bench.md)."""
     memo = S.setdefault("_pred_vols_memo", {})
     f = S["frames"]
-    todo = [d0 for d0 in months if (book, d0) not in memo]
+    todo = [d0 for d0 in months if (manager, d0) not in memo]
     err = None
     if todo:
         frw = (f["factor_returns"].pivot(index="Date", columns="Factor", values="Return")
                .dropna(how="any"))
-        refs = {d0: _pred_month_numpy(d0, book, frw) for d0 in todo}
+        refs = {d0: _pred_month_numpy(d0, manager, frw) for d0 in todo}
         cube_res = {}
 
         def _one(d0):
             try:
-                return d0, _pred_month_cube(d0, book, refs[d0]), None
+                return d0, _pred_month_cube(d0, manager, refs[d0]), None
             except Exception as e:                       # noqa: BLE001 -- recorded, numpy stands
                 return d0, None, f"{e.__class__.__name__}: {e}"
 
@@ -3239,40 +3317,42 @@ def _pred_book_vols(months: list, book: str) -> tuple[dict, dict, dict]:
         for d0 in todo:
             ref = refs[d0]
             if ref is None:
-                memo[(book, d0)] = None
+                memo[(manager, d0)] = None
                 continue
             res = cube_res.get(d0)
             if res is None:
-                memo[(book, d0)] = (ref[0], ref[1], dict(ref[2]), None)
+                memo[(manager, d0)] = (ref[0], ref[1], dict(ref[2]), None)
             else:
-                memo[(book, d0)] = res
-    book_v, spec_v, fac_v = {}, {}, {}
-    diffs = {"book": 0.0, "specific": 0.0, "factor": 0.0, "months_from_cube": 0}
+                memo[(manager, d0)] = res
+    mgr_v, spec_v, fac_v = {}, {}, {}
+    diffs = {"manager": 0.0, "specific": 0.0, "factor": 0.0, "months_from_cube": 0}
     for d0 in months:
-        ent = memo.get((book, d0))
+        ent = memo.get((manager, d0))
         if ent is None:
             continue
         bv, sv_, fv, diff = ent
-        book_v[d0], spec_v[d0], fac_v[d0] = bv, sv_, dict(fv)
+        mgr_v[d0], spec_v[d0], fac_v[d0] = bv, sv_, dict(fv)
         if diff is not None:
-            for k in ("book", "specific", "factor"):
+            for k in ("manager", "specific", "factor"):
                 diffs[k] = max(diffs[k], diff[k])
             diffs["months_from_cube"] += 1
     if err:
         diffs["error"] = err
     S["pred_vols_verification"] = diffs
-    return book_v, spec_v, fac_v
+    return mgr_v, spec_v, fac_v
 
 
 @app.get("/pnl_attribution/residual")
 async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
-                                   to: str | None = None, book: str = "Soros"):
+                                   to: str | None = None,
+                                   manager: str | None = None, book: str | None = None):
     """§2 residual diagnostics with plain RAG verdicts: is the residual LARGE (specific share, IR,
     realized-vs-predicted specific vol, explained share) and is it CORRELATED (lag-1/2
-    autocorrelation, residual-vs-factor regression) — plus the Barra bias statistics (book /
+    autocorrelation, residual-vs-factor regression) — plus the Barra bias statistics (portfolio /
     specific / per-factor) and residual concentration + hit rate. Thresholds start loose."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", manager)
         if mism is not None:
             return mism
         art = _attr_artifact(art_path)
@@ -3288,7 +3368,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
         f = S["frames"]
         exp_dates = [pd.Timestamp(d) for d in np.sort(f["exposures"]["Date"].unique())]
         months = [d for d in exp_dates if lo <= d < hi]
-        book_v, spec_v, fac_v = _pred_book_vols(months, book)
+        mgr_v, spec_v, fac_v = _pred_manager_vols(months, manager)
         # realized vs predicted specific vol (daily)
         vr = (float(u_d.std(ddof=1)) / float(np.mean(list(spec_v.values())))
               if spec_v and float(np.mean(list(spec_v.values()))) > 0 else None)
@@ -3306,7 +3386,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
             pv = pd.Series({(pd.Timestamp(k) + pd.offsets.MonthEnd(1)): v for k, v in pred_daily.items()})
             pred_m = (pv * np.sqrt(ndays.reindex(pv.index).astype(float))).dropna()
             return _pnl._bias_stat(realized_m.reindex(pred_m.index), pred_m)
-        bias_book, bw_book = _z(r_m, book_v)
+        bias_mgr, bw_mgr = _z(r_m, mgr_v)
         bias_spec, bw_spec = _z(u_m, spec_v)
         fac_bias = []
         if fac_v:
@@ -3321,7 +3401,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
                     fac_bias.append({"factor": f_, "bias": b, "band": bw})
             fac_bias.sort(key=lambda r: -abs(r["bias"] - 1.0))
         # concentration + hit rate of the specific PnL across names
-        na = _name_attr(lo, hi, book)
+        na = _name_attr(lo, hi, manager)
         conc = _pnl._concentration_hhi(na["specific_pnl"]) if len(na) else {"hhi": None,
                                                                             "top5_share": None, "n": 0}
         hit_names = _pnl._hit_rate(na["specific_pnl"]) if len(na) else None
@@ -3357,7 +3437,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
             checks.append(_chk("Residual-vs-factor R²", reg["r2"], st_,
                                "orthogonal — clean alpha" if st_ == "green" else
                                (f"hidden beta — loads on {top['factor']}" if top else "hidden beta")))
-        for nm, b, bw in (("Bias stat — book", bias_book, bw_book),
+        for nm, b, bw in (("Bias stat — portfolio", bias_mgr, bw_mgr),
                           ("Bias stat — specific", bias_spec, bw_spec)):
             if b is None:
                 continue
@@ -3369,7 +3449,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
         order = {"red": 0, "amber": 1, "green": 2}
         overall = min((ch["status"] for ch in checks), key=lambda s: order[s], default="green")
         return {
-            "from": str(lo.date()), "to": str(hi.date()), "book": book,
+            "from": str(lo.date()), "to": str(hi.date()), "manager": manager,
             "n_months": int(len(u_m)), "status": overall, "checks": checks,
             "specific_share": spec_share, "explained_share": expl,
             "factor_regression": reg, "factor_bias": fac_bias,
@@ -3377,7 +3457,7 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
             "hit_rate": {"names": hit_names, "months": hit_months},
             "note": ("Uncorrelated, well-sized residual = genuine diversified stock-picking. "
                      "Autocorrelation = a slow unhedged bet; factor correlation = hidden beta; "
-                     "thresholds start loose (tighten once the book's distribution is seen)."),
+                     "thresholds start loose (tighten once the portfolio's distribution is seen)."),
         }
     return await run_in_threadpool(run)
 
@@ -3402,7 +3482,7 @@ def _driver_text(x_t: float, x_win: float | None, cum_f: float | None, drv: dict
 @app.get("/pnl_attribution/linkage")
 async def pnl_attribution_linkage(T: str | None = None,
                                   horizon: int = Query(3, ge=1, le=24, description="months"),
-                                  book: str = "Soros",
+                                  manager: str | None = None, book: str | None = None,
                                   vol_mult: float = Query(1.25, gt=0),
                                   rho: float = Query(0.75, ge=0, le=1),
                                   min_weight: float = Query(
@@ -3412,13 +3492,14 @@ async def pnl_attribution_linkage(T: str | None = None,
                                                   "positions would otherwise crowd the table); "
                                                   "sub-floor breaches are disclosed, not dropped")):
     """§4 linkage: the risk decomposition at T read against the realized PnL over T→T+horizon.
-    Per factor (plus Specific and the book total): the start-of-period ±2σ BASE band, a STRESSED
-    band (vols ×vol_mult, correlations blended toward 1 by rho — correlations only enter the
-    aggregate, so the book band widens more than any factor's), the realized contribution (dot),
-    the surprise z-score, and a within/stress/investigate verdict. Plus per-position surprises
-    (weight ≥ min_weight; sub-floor breaches listed in `dust_excluded`)."""
+    Per factor (plus Specific and the portfolio total): the start-of-period ±2σ BASE band, a
+    STRESSED band (vols ×vol_mult, correlations blended toward 1 by rho — correlations only enter
+    the aggregate, so the portfolio band widens more than any factor's), the realized contribution
+    (dot), the surprise z-score, and a within/stress/investigate verdict. Plus per-position
+    surprises (weight ≥ min_weight; sub-floor breaches listed in `dust_excluded`)."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", manager)
         if mism is not None:
             return mism
         art = _attr_artifact(art_path)
@@ -3440,7 +3521,7 @@ async def pnl_attribution_linkage(T: str | None = None,
             raise HTTPException(404, f"no realized days in ({t0.date()}, {t1.date()}]")
         h = float(len(win))
         # in-window exposure path for the driver read — the band freezes x at T, this is what
-        # the book actually carried (the artifact's daily drifting exposures)
+        # the portfolio actually carried (the artifact's daily drifting exposures)
         xe = (art[art["Kind"] == "exposure"]
               .pivot_table(index="Date", columns="Source", values="Value", aggfunc="first")
               .sort_index())
@@ -3449,11 +3530,11 @@ async def pnl_attribution_linkage(T: str | None = None,
         # Every frame selection here rides the cached row indices (api_bench 2026-08-21) — the
         # same treatment /calibration and _name_attr already had; same rows, same arithmetic.
         pos = f["positions"]
-        pos_by = _book_date_rows(book)
+        pos_by = _manager_date_rows(manager)
         w_ = (pos.iloc[pos_by[t0]] if t0 in pos_by
               else pos.iloc[:0]).groupby("Position")["Weight"].sum()
         if w_.empty:
-            raise HTTPException(404, f"no {book} positions at {t0.date()}")
+            raise HTTPException(404, f"no {manager} positions at {t0.date()}")
         exp_by = _frame_rows_by("exposures", ("Date",))
         exp_d = f["exposures"].iloc[exp_by[t0]] if t0 in exp_by else f["exposures"].iloc[:0]
         Lu = exp_d.pivot_table(index="Position", columns="Factor", values="Loading",
@@ -3471,8 +3552,8 @@ async def pnl_attribution_linkage(T: str | None = None,
         svar = float((w_ ** 2 * sv.reindex(w_.index).fillna(0.0)).sum())
         sig = np.sqrt(np.diag(F));  sig_s = np.sqrt(np.diag(Fs))
         xv = x.to_numpy()
-        sd_book = float(np.sqrt(max(xv @ F @ xv + svar, 0.0)) * np.sqrt(h))
-        sd_book_s = float(np.sqrt(max(xv @ Fs @ xv + svar * vol_mult ** 2, 0.0)) * np.sqrt(h))
+        sd_mgr = float(np.sqrt(max(xv @ F @ xv + svar, 0.0)) * np.sqrt(h))
+        sd_mgr_s = float(np.sqrt(max(xv @ Fs @ xv + svar * vol_mult ** 2, 0.0)) * np.sqrt(h))
 
         def _verdict(r, b, s):
             if b and abs(r) <= 2 * b:
@@ -3506,7 +3587,7 @@ async def pnl_attribution_linkage(T: str | None = None,
                     row["driver"] = drv
             rows.append(row)
         def _agg_driver(realized_, sd_, verdict_, what):
-            # specific/book rows have no exposure to migrate — a breach there is the risk
+            # specific/manager rows have no exposure to migrate — a breach there is the risk
             # forecast itself; point at the calibration machinery
             if verdict_ == "within" or sd_ <= 0:
                 return None
@@ -3528,17 +3609,17 @@ async def pnl_attribution_linkage(T: str | None = None,
             sp_row["driver"] = drv_sp
         rows.append(sp_row)
         rows.sort(key=lambda r: -abs(r["z"] or 0.0))
-        real_book = float(win["Realized"].sum()) if "Realized" in win else 0.0
-        book_verdict = _verdict(real_book, sd_book, sd_book_s)
-        book_row = {"name": "Book total", "kind": "book", "exposure": None, "risk_share": 1.0,
-                    "realized": real_book, "sd_base": sd_book, "sd_stressed": sd_book_s,
-                    "z": (real_book / sd_book) if sd_book > 0 else None,
-                    "verdict": book_verdict}
-        drv_bk = _agg_driver(real_book, sd_book, book_verdict, "the book bias stat and /backtest")
+        real_mgr = float(win["Realized"].sum()) if "Realized" in win else 0.0
+        mgr_verdict = _verdict(real_mgr, sd_mgr, sd_mgr_s)
+        mgr_row = {"name": "Manager total", "kind": "manager", "exposure": None, "risk_share": 1.0,
+                   "realized": real_mgr, "sd_base": sd_mgr, "sd_stressed": sd_mgr_s,
+                   "z": (real_mgr / sd_mgr) if sd_mgr > 0 else None,
+                   "verdict": mgr_verdict}
+        drv_bk = _agg_driver(real_mgr, sd_mgr, mgr_verdict, "the portfolio bias stat and /backtest")
         if drv_bk:
-            book_row["driver"] = drv_bk
+            mgr_row["driver"] = drv_bk
         # per-position surprises: realized name PnL vs its own ex-ante sd at T
-        na = _name_attr(t0, t1, book)
+        na = _name_attr(t0, t1, manager)
         tk = _ticker_map()
         Lv = L.to_numpy()
         name_var = np.einsum("ij,jk,ik->i", Lv, F, Lv) + sv.reindex(w_.index).fillna(0.0).to_numpy()
@@ -3573,7 +3654,7 @@ async def pnl_attribution_linkage(T: str | None = None,
                         f"{w_win:.1%} in-window (13F re-anchor / resize); on the in-window "
                         f"weight z = {drv['z_window']:+.1f}, within ±2. Check the filing, "
                         f"not the name.")
-            top_s = (f"{top_f} {top_v * w_t:+.2%} of book" if top_f else "n/a")
+            top_s = (f"{top_f} {top_v * w_t:+.2%} of portfolio" if top_f else "n/a")
             if drv["kind"] == "specific_move":
                 return (f"idiosyncratic — specific is {drv['specific_share']:.0%} of the move "
                         f"({spec_pnl:+.2%} of {r_i:+.2%}); a stock event the factor block can't "
@@ -3609,7 +3690,7 @@ async def pnl_attribution_linkage(T: str | None = None,
                    "realized": r_i, "factor_pnl": fac_i, "specific_pnl": spec_i,
                    "sd_base": float(sd_i), "z": r_i / float(sd_i), "verdict": verdict}
             # materiality floor: z is scale-invariant (band σ ∝ weight), so a 1bp position can
-            # out-rank real holdings on |z| while being unable to move the book. Below the floor
+            # out-rank real holdings on |z| while being unable to move the portfolio. Below the floor
             # the row skips the table (and the co-movement set) but a breach is still disclosed.
             if w_t < min_weight:
                 if verdict != "within":
@@ -3666,58 +3747,60 @@ async def pnl_attribution_linkage(T: str | None = None,
                     comove = st_
         return {
             "T": str(t0.date()), "to": str(t1.date()), "horizon_months": horizon,
-            "n_days": int(h), "book": book,
+            "n_days": int(h), "manager": manager,
             "stress": {"vol_mult": vol_mult, "rho_blend": rho},
-            "book_total": book_row, "rows": rows, "positions": positions[:15],
+            "manager_total": mgr_row, "rows": rows, "positions": positions[:15],
             "min_weight": min_weight,
             "dust_excluded": {"n": len(dust),
                               "names": [{"name": r["name"], "weight": r["weight"],
                                          "z": r["z"], "verdict": r["verdict"]}
                                         for r in dust[:10]]},
             "breach_comovement": comove,
-            "surprises": [r for r in rows + [book_row] if r["verdict"] == "investigate"],
+            "surprises": [r for r in rows + [mgr_row] if r["verdict"] == "investigate"],
             "note": ("Bands are the start-of-period risk made visible: half-width = 2σ where σ² = "
                      "x'Fx (+ the diagonal specific block), scaled √days. The model forecasts "
                      "dispersion, not direction — bands centre at zero. Realized inside base = "
                      "risk understood; outside base but inside stressed = a stress regime; outside "
                      "stressed = a risk the decomposition missed — investigate (gain or loss "
-                     "alike). Correlations only enter the aggregate rows, so the book band widens "
-                     "under the correlation shock even where no single factor's does. Rows outside "
-                     "the base band carry a driver read: the band freezes x at T, so a breach is "
-                     "either a genuine factor move or the exposure migrating inside the window "
-                     "(loading refresh / 13F re-anchor) — an ill-conditioned z, not a factor "
-                     "event."),
+                     "alike). Correlations only enter the aggregate rows, so the portfolio band "
+                     "widens under the correlation shock even where no single factor's does. Rows "
+                     "outside the base band carry a driver read: the band freezes x at T, so a "
+                     "breach is either a genuine factor move or the exposure migrating inside the "
+                     "window (loading refresh / 13F re-anchor) — an ill-conditioned z, not a "
+                     "factor event."),
         }
     return await run_in_threadpool(run)
 
 
 @app.get("/pnl_attribution/drill")
-async def pnl_attribution_drill(T: str, to: str, book: str = "Soros",
+async def pnl_attribution_drill(T: str, to: str, manager: str | None = None, book: str | None = None,
                                 position: str | None = None, factor: str | None = None):
-    """Live per-book reconcile drill for the Vite Attribution drawers (2026-08-22). The baked
-    `Factor contribution` cube measure is book-INDEPENDENT above one book (it carries ONE
-    arbitrary book's weight per name — see CLAUDE.md "book-independent attribution limitation")
-    and `_validate_pivot` rejects it outright once >1 book is loaded, which 400'd the drawers on
-    the 123-book build. This recomputes the identical forward-month-convention math live from
-    `S["frames"]` for the REQUESTED book's own as-of weights (`_drill_contrib`, which mirrors
-    `_name_attr`/`/pnl_attribution/linkage` exactly), so it works on ANY loaded book — no
-    artifact, no `_book_guard` (unlike /universe, /funnel, /span, /drift, the other
-    /pnl_attribution* routes: those read a single-book PRECOMPUTED artifact with no book concept
-    of its own; this reads the live per-book frames directly, so there is nothing to mismatch).
+    """Live per-manager reconcile drill for the Vite Attribution drawers (2026-08-22). The baked
+    `Factor contribution` cube measure is manager-INDEPENDENT above one manager (it carries ONE
+    arbitrary manager's weight per name — see CLAUDE.md "manager-independent attribution
+    limitation") and `_validate_pivot` rejects it outright once >1 manager is loaded, which 400'd
+    the drawers on the 123-manager build. This recomputes the identical forward-month-convention
+    math live from `S["frames"]` for the REQUESTED manager's own as-of weights (`_drill_contrib`,
+    which mirrors `_name_attr`/`/pnl_attribution/linkage` exactly), so it works on ANY loaded
+    manager — no artifact, no `_manager_guard` (unlike /universe, /funnel, /span, /drift, the
+    other /pnl_attribution* routes: those read a single-manager PRECOMPUTED artifact with no
+    manager concept of its own; this reads the live per-manager frames directly, so there is
+    nothing to mismatch).
 
     `position=` (PositionDrawer): that name's per-factor contribution over [T, to) + its specific
     PnL + its T-date loadings; `bars`' contributions plus `specific_pnl` sum to `realized` to
     float precision by construction (same arithmetic as `_name_attr`, factor axis kept instead of
     collapsed). `factor=` (FactorDrawer): the inverse who-carried-it view — that factor's
-    contribution over [T, to) for the book, by Issuer; `bars` sum to `total`."""
+    contribution over [T, to) for the manager, by Issuer; `bars` sum to `total`."""
+    manager = _coalesce_manager(manager, book)
     if (position is None) == (factor is None):
         raise HTTPException(400, "pass exactly one of position= or factor=")
     def run():
-        contrib, specific, loadings_T = _drill_contrib(T, to, book)
+        contrib, specific, loadings_T = _drill_contrib(T, to, manager)
         if position is not None:
             row = contrib.loc[position] if position in contrib.index else pd.Series(dtype=float)
             if row.empty and position not in specific.index:
-                raise HTTPException(404, f"no {book} exposure/PnL for {position} in [{T}, {to})")
+                raise HTTPException(404, f"no {manager} exposure/PnL for {position} in [{T}, {to})")
             spec_pnl = float(specific.get(position, 0.0))
             lt = loadings_T.loc[position] if position in loadings_T.index else pd.Series(dtype=float)
             bars = [{"factor": f_, "contribution": float(v),
@@ -3726,18 +3809,18 @@ async def pnl_attribution_drill(T: str, to: str, book: str = "Soros",
             bars.sort(key=lambda b: -abs(b["contribution"]))
             realized = float(row.sum()) + spec_pnl
             tk = _ticker_map()
-            return {"book": book, "T": T, "to": to, "position": position,
+            return {"manager": manager, "T": T, "to": to, "position": position,
                     "ticker": tk.get(position, position),
                     "bars": bars, "specific_pnl": spec_pnl, "realized": realized,
                     "n_factors_at_T": int(lt.notna().sum())}
         if factor not in contrib.columns:
-            raise HTTPException(404, f"no {factor} exposure for {book} in [{T}, {to})")
+            raise HTTPException(404, f"no {factor} exposure for {manager} in [{T}, {to})")
         col = contrib[factor]
         sec = S["frames"]["securities"][["Position", "Issuer"]].set_index("Position")["Issuer"]
         by_issuer = col.groupby(sec.reindex(col.index).fillna("Unknown")).sum()
         bars = [{"issuer": str(iss), "contribution": float(v)} for iss, v in by_issuer.items() if v != 0.0]
         bars.sort(key=lambda b: -abs(b["contribution"]))
-        return {"book": book, "T": T, "to": to, "factor": factor,
+        return {"manager": manager, "T": T, "to": to, "factor": factor,
                 "bars": bars, "total": float(col.sum())}
     return await run_in_threadpool(run)
 
@@ -3799,10 +3882,11 @@ async def regression_health():
 
 @app.get("/calibration")
 async def calibration(window: int = Query(24, ge=6, le=60, description="rolling window, months"),
-                      book: str = "Soros"):
+                      manager: str | None = None, book: str | None = None):
     """Fit-for-purpose calibration over time: the ROLLING bias statistic b = std(realized /
     predicted vol) over a trailing window, with the 1 ± √(2/window) acceptance band — run for
-    the whole book and the specific block — plus 2σ exceedance counts (expected ≈ 4.6%)."""
+    the whole portfolio and the specific block — plus 2σ exceedance counts (expected ≈ 4.6%)."""
+    manager = _coalesce_manager(manager, book)
     def run():
         art = _attr_artifact()
         c = (art[art["Kind"] == "contribution"]
@@ -3813,13 +3897,13 @@ async def calibration(window: int = Query(24, ge=6, le=60, description="rolling 
         f = S["frames"]
         months = [pd.Timestamp(d) for d in np.sort(f["exposures"]["Date"].unique())
                   if pd.Timestamp(d) <= c.index.max()]
-        key = ("pred_vols_full", book, str(months[-1].date()) if months else "")
+        key = ("pred_vols_full", manager, str(months[-1].date()) if months else "")
         if S.get("pred_vols_key") != key:
-            S["pred_vols"], S["pred_vols_key"] = _pred_book_vols(months, book), key
+            S["pred_vols"], S["pred_vols_key"] = _pred_manager_vols(months, manager), key
             # pin THIS computation's cross-check to the cache (the stash is last-writer-wins
-            # and /pnl_attribution/residual also calls _pred_book_vols on its own window)
+            # and /pnl_attribution/residual also calls _pred_manager_vols on its own window)
             S["pred_vols_verif_cal"] = S.get("pred_vols_verification")
-        book_v, spec_v, _fv = S["pred_vols"]
+        mgr_v, spec_v, _fv = S["pred_vols"]
         ndays = c["Realized"].resample("ME").count()
 
         def pred_m(pred_daily: dict) -> pd.Series:
@@ -3828,7 +3912,7 @@ async def calibration(window: int = Query(24, ge=6, le=60, description="rolling 
             return (pv * np.sqrt(ndays.reindex(pv.index).astype(float))).dropna()
 
         out = {}
-        for name, realized, pred in (("book", r_m, pred_m(book_v)),
+        for name, realized, pred in (("manager", r_m, pred_m(mgr_v)),
                                      ("specific", u_m, pred_m(spec_v))):
             r_ = realized.reindex(pred.index).dropna()
             p_ = pred.reindex(r_.index)
@@ -3841,14 +3925,14 @@ async def calibration(window: int = Query(24, ge=6, le=60, description="rolling 
                 "n_months": int(len(z)),
             }
         return {
-            "window": window, "book": book, "expected_exceedance_2s": 0.0455,
+            "window": window, "manager": manager, "expected_exceedance_2s": 0.0455,
             "source": "cube",
             "pit_verification": S.get("pred_vols_verif_cal"),
             "series": out,
             "note": ("b ≈ 1 = calibrated; b > 1 = risk under-forecast (the dangerous direction); "
                      "the band is the 95% acceptance range 1 ± √(2/window). Exceedances are "
                      "months beyond ±2 predicted σ — a fat-tail read the std-based b can miss. "
-                     "Realized is the attribution artifact's book return (drifting weights, "
+                     "Realized is the attribution artifact's portfolio return (drifting weights, "
                      "price-only); predicted is the model risk at each prior month-end."),
         }
     return await run_in_threadpool(run)
@@ -3881,13 +3965,13 @@ async def factor_cov(date: str | None = None):
             "note": ("Daily vols; recent = trailing year. A recent/full vol ratio well above 1 "
                      "is the vol-clustering warning — full-window bands (backtest, reconcile) "
                      "understate the current regime there. Correlations rising toward the "
-                     "recent window is the diversification the book leans on decaying — the "
-                     "stressed band's ρ→1 blend is the deliberate exaggeration of that."),
+                     "recent window is the diversification the portfolio leans on decaying — "
+                     "the stressed band's ρ→1 blend is the deliberate exaggeration of that."),
         }
     return await run_in_threadpool(run)
 
 
-# ---- exposure profile (ch 03: what each factor IS, and where the book sits in it) ----
+# ---- exposure profile (ch 03: what each factor IS, and where the portfolio sits in it) ----
 
 FACTOR_RECIPES = {
     "Market": "intercept — every name loads 1.0; carries the cross-sectional average return",
@@ -3933,11 +4017,13 @@ def _snap_exposure_date(exp: pd.DataFrame, date: str | None) -> pd.Timestamp:
 
 
 @app.get("/exposure_profile")
-async def exposure_profile(factor: str, date: str | None = None, book: str = "Soros"):
+async def exposure_profile(factor: str, date: str | None = None,
+                           manager: str | None = None, book: str | None = None):
     """One factor's cross-section at a date: the loading distribution (histogram + quantiles),
     the ±3 estimation winsor bounds, the uncapped tail beyond them (coverage names showing their
-    true tilt), and the held book overlaid — the 'model-conditional: this is what OUR {factor}
-    means' view, with the descriptor recipe attached."""
+    true tilt), and the held portfolio overlaid — the 'model-conditional: this is what OUR
+    {factor} means' view, with the descriptor recipe attached."""
+    manager = _coalesce_manager(manager, book)
     def run():
         f = S["frames"]; exp = f["exposures"]
         d0 = _snap_exposure_date(exp, date)
@@ -3946,7 +4032,7 @@ async def exposure_profile(factor: str, date: str | None = None, book: str = "So
         if sub.empty:
             raise HTTPException(400, f"unknown factor or no loadings: {factor}")
         pos = f["positions"]
-        w_ = pos[(pos["Manager"] == book) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
+        w_ = pos[(pos["Manager"] == manager) & (pos["Date"] == d0)].groupby("Position")["Weight"].sum()
         tk = _ticker_map()
         held = sorted(
             [{"ticker": tk.get(p, p), "weight": float(wt), "loading": float(sub[p])}
@@ -3956,7 +4042,7 @@ async def exposure_profile(factor: str, date: str | None = None, book: str = "So
         cnt, _ = np.histogram(sub, bins=edges)
         beyond = sub[sub.abs() > 3].abs().sort_values(ascending=False)
         return {
-            "factor": factor, "date": _clean(d0), "book": book,
+            "factor": factor, "date": _clean(d0), "manager": manager,
             "recipe": FACTOR_RECIPES.get(factor, ""),
             "n_names": int(len(sub)),
             "quantiles": {q: float(np.percentile(sub, p))
@@ -3979,7 +4065,7 @@ async def exposure_profile(factor: str, date: str | None = None, book: str = "So
 # ---- hedging (appendix D6 + mini-example §7–8: remove the risk you don't want) ----
 
 def _hedge_table(x: np.ndarray, F: np.ndarray, svar: float, factors: list[str]) -> dict:
-    """Per factor: book vol before/after NEUTRALIZING it (x_k → 0 via -x_k units of the pure
+    """Per factor: portfolio vol before/after NEUTRALIZING it (x_k → 0 via -x_k units of the pure
     factor-k portfolio — ch-07's investable dual), ranked by vol saved. Plus the D6 single-
     instrument minimum-variance hedge with the pure Market portfolio as the instrument:
     h* = −Cov(r_h, r_p)/Var(r_h) = −(Fx)_mkt/F_mm."""
@@ -4004,18 +4090,19 @@ def _hedge_table(x: np.ndarray, F: np.ndarray, svar: float, factors: list[str]) 
 
 
 @app.get("/hedge")
-async def hedge(date: str | None = None, book: str = "Soros"):
+async def hedge(date: str | None = None, manager: str | None = None, book: str | None = None):
     """What hedging each factor would do — SERVED FROM THE CUBE measures (`Vol ex factor` per
     factor = vol after zeroing that net exposure with the specific block kept; `Min-variance
     hedge ratio` / `Vol at min-variance hedge` = the D6 single-instrument hedge), ranked by vol
     saved. The retained numpy `_hedge_table` is recomputed on every call as an independent
     cross-check (`verification`). Specific risk is untouched by construction."""
+    manager = _coalesce_manager(manager, book)
     def run():
         d = date or _latest_date()
         # numpy reference — the independent implementation, kept as a live cross-check
-        L, w, s, R = _book_inputs(d, book)
+        L, w, s, R = _manager_inputs(d, manager)
         if not float(np.abs(w.to_numpy()).sum()):
-            raise HTTPException(404, f"no {book} positions at {d}")
+            raise HTTPException(404, f"no {manager} positions at {d}")
         F = np.cov(R, rowvar=False)
         x = L.to_numpy().T @ w.to_numpy()
         svar = float(np.sum(w.to_numpy() ** 2 * s.to_numpy()))
@@ -4025,7 +4112,7 @@ async def hedge(date: str | None = None, book: str = "Soros"):
         cube = S["cube"]; l, m = cube.levels, cube.measures
         flt = (l["Date"] == _date(d)) & (l["ScenarioSet"] == "HistFull")
         if "Manager" in {n for _, n in cube.hierarchies}:
-            flt &= (l["Manager"] == book)
+            flt &= (l["Manager"] == manager)
         bk = cube.query(m["Model vol"], m["Specific vol"], filter=flt)
         if not len(bk):
             raise HTTPException(404, f"no cube cell at {d} / HistFull")
@@ -4055,32 +4142,33 @@ async def hedge(date: str | None = None, book: str = "Soros"):
                                 if mkt and ref.get("market_hedge") else None),
         }
         return {
-            "date": d, "book": book, "source": "cube",
+            "date": d, "manager": manager, "source": "cube",
             "vol_base": vol_base, "specific_vol": spec_vol,
             "rows": rows, "market_hedge": mkt,
             "verification": verification,
             "note": ("hedge_units = −x_k of the pure factor-k portfolio (ch 07's f̂ = Pr dual) — "
                      "implementable in principle, but pure portfolios carry real leverage/turnover "
                      "cost. The market h* is the D6 single-instrument minimum-variance hedge "
-                     "(h* = −β of the book on the Market factor). Vol is model vol σ² = x'Fx + "
-                     "w'Δw; the specific block survives any factor hedge. Served from the cube "
+                     "(h* = −β of the portfolio on the Market factor). Vol is model vol σ² = x'Fx "
+                     "+ w'Δw; the specific block survives any factor hedge. Served from the cube "
                      "measures; `verification` is the live numpy cross-check."),
         }
     return await run_in_threadpool(run)
 
 
 # ============================================================================ Model vs Price (the bridge)
-# docs/price-var-plan.md. The MODEL prices the book on a linear factor block + a Gaussian diagonal
-# specific block; the PRICE family prices the SAME book on raw historical stock returns — no model
-# at all. Five numbers in a fixed order, each changing ONE thing, so the differences are the whole
-# gap by construction: T0 Scenario VaR 99 (factor-only) -> T1 Total VaR 99 (+ Gaussian specific) ->
-# T2 full-sim VaR (the Gaussian specific block replaced by REALIZED daily residual paths) -> T3
-# Price VaR on covered names (today's fixed loadings replaced by each day's own — r_t =
-# L_i(t)·f_t + u_i,t exactly, the model's own identity) -> T4 Price VaR 99 (names priced but
-# uncovered by the model are added). T0/T1/T4 are cube measures; T2/T3 are numpy on the SAME
-# population/calendar `_book_inputs` already uses, so every step prices the identical book.
+# docs/price-var-plan.md. The MODEL prices the portfolio on a linear factor block + a Gaussian
+# diagonal specific block; the PRICE family prices the SAME portfolio on raw historical stock
+# returns — no model at all. Five numbers in a fixed order, each changing ONE thing, so the
+# differences are the whole gap by construction: T0 Scenario VaR 99 (factor-only) -> T1 Total VaR
+# 99 (+ Gaussian specific) -> T2 full-sim VaR (the Gaussian specific block replaced by REALIZED
+# daily residual paths) -> T3 Price VaR on covered names (today's fixed loadings replaced by each
+# day's own — r_t = L_i(t)·f_t + u_i,t exactly, the model's own identity) -> T4 Price VaR 99
+# (names priced but uncovered by the model are added). T0/T1/T4 are cube measures; T2/T3 are
+# numpy on the SAME population/calendar `_manager_inputs` already uses, so every step prices the
+# identical portfolio.
 
-def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> dict:
+def _var_bridge_result(date: str | None, manager: str, set_: str, alpha: float) -> dict:
     cube = S["cube"]
     if "Price VaR 99" not in cube.measures:
         raise HTTPException(404, "Price family not available — rebuild with stock_returns.parquet "
@@ -4091,26 +4179,26 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
                                  "not a historical window).")
     d = date or _latest_date()
     l, m = cube.levels, cube.measures
-    L, w, s_, R = _book_inputs(d, book)
+    L, w, s_, R = _manager_inputs(d, manager)
     if not float(np.abs(w.to_numpy()).sum()):
-        raise HTTPException(404, f"no {book} positions at {d}")
+        raise HTTPException(404, f"no {manager} positions at {d}")
     f = S["frames"]
-    has_book_hier = "Manager" in {n for _, n in cube.hierarchies}
+    has_manager_hier = "Manager" in {n for _, n in cube.hierarchies}
 
     # T0 / T1 -- straight from the cube (ScenarioSet=set_)
     flt_scn = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_)
-    if has_book_hier:
-        flt_scn &= (l["Manager"] == book)
+    if has_manager_hier:
+        flt_scn &= (l["Manager"] == manager)
     scn_row = cube.query(m["Scenario VaR 99"], m["Total VaR 99"], filter=flt_scn)
     if not len(scn_row):
         raise HTTPException(404, f"no cube cell at {d} / ScenarioSet={set_}")
     t0 = float(scn_row.iloc[0]["Scenario VaR 99"])
     t1 = float(scn_row.iloc[0]["Total VaR 99"])
 
-    # T4 + the book's own coverage-at-tail -- straight from the cube (PriceSet=set_)
+    # T4 + the manager's own coverage-at-tail -- straight from the cube (PriceSet=set_)
     flt_price = (l["Date"] == _date(d)) & (l["PriceSet"] == set_)
-    if has_book_hier:
-        flt_price &= (l["Manager"] == book)
+    if has_manager_hier:
+        flt_price &= (l["Manager"] == manager)
     price_row = cube.query(m["Price VaR 99"], m["Price coverage at tail"], filter=flt_price)
     if not len(price_row):
         raise HTTPException(404, f"no cube cell at {d} / PriceSet={set_}")
@@ -4149,7 +4237,7 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
 
     # numpy verification twin of T4 (Price VaR 99, ALL priced names — /contributions' pattern)
     pos = f["positions"]; dts = pd.Timestamp(d)
-    asof = pos[(pos["Manager"] == book) & (pos["Date"] <= dts)]
+    asof = pos[(pos["Manager"] == manager) & (pos["Date"] <= dts)]
     bp = asof[asof["Date"] == asof["Date"].max()] if len(asof) else asof
     held = bp.set_index("Position")["Weight"] if len(bp) else pd.Series(dtype=float)
     priced_names = set(r_wide.columns)
@@ -4180,8 +4268,8 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
     # `likely_driver` is a per-name HEURISTIC (coverage is exact; specific vs exposure/distribution
     # is a magnitude comparison, not a true per-name T2/T3 split — disclosed, see docs).
     flt_names = (l["Date"] == _date(d)) & (l["ScenarioSet"] == set_) & (l["PriceSet"] == set_)
-    if has_book_hier:
-        flt_names &= (l["Manager"] == book)
+    if has_manager_hier:
+        flt_names &= (l["Manager"] == manager)
     dfN = cube.query(m["Marginal Total VaR 99"], m["Marginal Price VaR 99"], m["Specific variance"],
                      m["Net weight"],
                      levels=[l["Position"]], filter=flt_names).reset_index()
@@ -4229,7 +4317,7 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
          "what_changes": "names with prices but no loadings are added"},
     ]
     return {
-        "date": d, "book": book, "set": set_, "alpha": alpha,
+        "date": d, "manager": manager, "set": set_, "alpha": alpha,
         "steps": steps, "terms": terms,
         "coverage": {
             "at_tail": coverage_at_tail,
@@ -4261,13 +4349,14 @@ def _var_bridge_result(date: str | None, book: str, set_: str, alpha: float) -> 
 
 
 @app.get("/var_bridge")
-async def var_bridge(date: str | None = None, book: str = "Soros", set: str = "HistFull",
-                     alpha: float = 0.01):
+async def var_bridge(date: str | None = None, manager: str | None = None, book: str | None = None,
+                     set: str = "HistFull", alpha: float = 0.01):
     """The Model-vs-Price bridge (docs/price-var-plan.md): T0 Scenario VaR 99 -> T1 Total VaR 99
     -> T2 full-sim (realized residuals) -> T3 Price VaR on covered names -> T4 Price VaR 99, the
-    four sequential differences, coverage on the book's own Price-VaR tail day, the per-name
+    four sequential differences, coverage on the portfolio's own Price-VaR tail day, the per-name
     disagreement table, and a numpy verification twin of T4 (like /contributions)."""
-    return await run_in_threadpool(_var_bridge_result, date, book, set, alpha)
+    manager = _coalesce_manager(manager, book)
+    return await run_in_threadpool(_var_bridge_result, date, manager, set, alpha)
 
 
 # ---- factor portfolio inspector (ch 07: a factor return IS a portfolio return, f̂ = Pr) ----
@@ -4360,17 +4449,19 @@ async def factor_portfolio(factor: str, date: str | None = None):
 
 @app.get("/pnl_attribution/names")
 async def pnl_attribution_names(frm: str | None = Query(None, alias="from"), to: str | None = None,
-                                book: str = "Soros", top: int = Query(12, ge=3, le=50)):
+                                manager: str | None = None, book: str | None = None,
+                                top: int = Query(12, ge=3, le=50)):
     """The specific PnL name by name over the window: top winners and losers by |specific|, each
     with sign persistence (share of consecutive same-sign months — a real edge or a stale 13F
     reads persistent; noise mean-reverts) and the share of months positive."""
+    manager = _coalesce_manager(manager, book)
     def run():
-        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", book)
+        art_path, mism = _resolve_artifact(_pnl, "pnl_attribution", manager)
         if mism is not None:
             return mism
         art = _attr_artifact(art_path)
         _c, lo, hi = _attr_window(art, frm, to)
-        na, panel = _name_attr(lo, hi, book, monthly=True)
+        na, panel = _name_attr(lo, hi, manager, monthly=True)
         if na.empty:
             raise HTTPException(404, "no attribution rows in the window")
         tk = _ticker_map()
@@ -4390,7 +4481,7 @@ async def pnl_attribution_names(frm: str | None = Query(None, alias="from"), to:
         winners = [r for r in rows if r["specific_pnl"] > 0][:top]
         losers = [r for r in rows if r["specific_pnl"] < 0][:top]
         return {
-            "from": str(lo.date()), "to": str(hi.date()), "book": book,
+            "from": str(lo.date()), "to": str(hi.date()), "manager": manager,
             "winners": winners, "losers": losers,
             "note": ("Specific = the part of each name's PnL the factors don't explain, on the "
                      "as-of monthly weights (the cube convention). sign_persistence is the share "
@@ -4422,13 +4513,13 @@ specific person.
 Tone:
 - Plain declarative sentences. Short. No hedging filler ("it seems", "arguably", "somewhat"),
   no hype, no exclamation marks, no emoji.
-- Dry and occasionally aphoristic — one compressed line that lands ("most of this book is one
-  bet on the market") beats a paragraph.
+- Dry and occasionally aphoristic — one compressed line that lands ("most of this portfolio is
+  one bet on the market") beats a paragraph.
 - Cite the figure next to every claim. A sentence without a number is a candidate to cut.
 - If the honest read is one line, write one line. Never pad.
 
 Doctrine — the lens for every read:
-- The risk team's job is to understand ALL the risks the book is taking, not to avoid losses.
+- The risk team's job is to understand ALL the risks the portfolio is taking, not to avoid losses.
   Money made or lost on a bet you didn't know you had is the same failure; the direction was
   luck. An unexplained GAIN gets investigated with the same energy as an unexplained loss.
 - It's usually just beta. Before crediting skill or blaming stock-picking, check what the
@@ -4446,14 +4537,15 @@ Doctrine — the lens for every read:
 
 ANALYST_SYSTEM = CHRIS_VOICE + """
 You are writing a short commentary on one view from a Barra-style
-equity factor-risk model. The book is the Soros Fund Management 13F holdings, run as a long-only
-weight overlay; monthly calendar from 2016 to the latest build.
+equity factor-risk model. The portfolio is the Soros Fund Management 13F holdings, run as a
+long-only weight overlay; monthly calendar from 2016 to the latest build.
 
 The model has two risk blocks: a linear FACTOR P&L block and a diagonal SPECIFIC (idiosyncratic)
 block. Read the measures as follows:
-- Numbers are fractions of book value. 0.035 means 3.5%. VaR/ES/vol are losses, reported positive.
+- Numbers are fractions of portfolio value. 0.035 means 3.5%. VaR/ES/vol are losses, reported
+  positive.
 - Net exposure: aggregated factor loading (weight x loading). Market carries a loading of 1.0 per
-  name, so a fully invested book has ~unit Market exposure.
+  name, so a fully invested portfolio has ~unit Market exposure.
 - Scenario VaR 95/97.5/99: loss at that confidence. Scenario ES 97.5/99: expected shortfall — the
   mean loss in the tail beyond VaR (coherent; Basel FRTB's VaR replacement). Scenario worst loss:
   the single worst scenario. Scenario PnL vol: dispersion of scenario P&L. Scenario mean PnL: ~0
@@ -4464,24 +4556,25 @@ block. Read the measures as follows:
   factor/specific split; the LIMITS are written on Scenario VaR 99 / ES 97.5 (Kupiec-backtested).
   Quote Total VaR only when the view offers nothing better.
 - Marginal Scenario VaR 99 / Marginal Scenario ES 97.5 / Marginal Total VaR 99: a member's ADDITIVE
-  contribution to the book number (the contributions sum to the book total). "% of ..." is that
-  share, summing to 100%. Incremental VaR: the risk RELEASED by removing a member — diversification-
-  aware, NOT additive (it does not sum to the book total), so there is no "% of" for it.
-- Marginal Model vol: the member's EULER contribution to book model vol (per name this IS the
+  contribution to the portfolio number (the contributions sum to the portfolio total). "% of ..."
+  is that share, summing to 100%. Incremental VaR: the risk RELEASED by removing a member —
+  diversification-aware, NOT additive (it does not sum to the portfolio total), so there is no
+  "% of" for it.
+- Marginal Model vol: the member's EULER contribution to portfolio model vol (per name this IS the
   ch-09 CTR = w·(Σw)/σ); sums exactly to Model vol; read it in by-NAME views (by Factor the
   specific block fans out). Incremental Model vol: the vol released by removing the member —
   sub-additive like Incremental VaR, no "% of".
-- VaR sensitivity: per-unit dVaR/dexposure. Risk HHI: Herfindahl index of each name's share of book
-  Total VaR — 1/N for an evenly diversified book up to 1.0 for a single name; 1/HHI ~ the effective
-  number of independent risk bets.
-- drawdown (separate `drawdown` block, not a pivot measure): max peak-to-trough of the book's
-  cumulative P&L if the *current* book had been held over the scenario set's daily path — a
+- VaR sensitivity: per-unit dVaR/dexposure. Risk HHI: Herfindahl index of each name's share of
+  portfolio Total VaR — 1/N for an evenly diversified portfolio up to 1.0 for a single name; 1/HHI
+  ~ the effective number of independent risk bets.
+- drawdown (separate `drawdown` block, not a pivot measure): max peak-to-trough of the portfolio's
+  cumulative P&L if the *current* portfolio had been held over the scenario set's daily path — a
   path-dependent lens VaR/ES cannot see. `max_drawdown` is a negative fraction; `longest_underwater_obs`
   is the longest run (trading days) below a prior peak; `recovered` says whether it climbed back.
 - Factor contribution / Specific PnL / Realized PnL: REALIZED monthly PnL attribution (not risk).
   Additive; Realized = Σ factor contributions + Specific. FORWARD-month convention: the value at
   Date d0 is the PnL over the month AFTER d0. Specific PnL is per-name (it fans out by Factor —
-  read it in by-name or book views). No ScenarioSet needed.
+  read it in by-name or portfolio views). No ScenarioSet needed.
 - Price VaR/ES family (Price VaR 95/97.5/99, Price ES 97.5/99, Price worst loss, Price mean PnL,
   Price PnL vol, Marginal/Incremental Price VaR 99, Price coverage at tail): the MODEL-FREE twin of
   the Scenario family — historical simulation on raw daily STOCK returns, no factor model at all.
@@ -4498,7 +4591,7 @@ Scenario sets (the shock source):
 - HistFull: full historical simulation. Evt:* : a past window replayed (COVID2020, Rates2022,
   Selloff2018). Hypo:* : hand-set sigma shocks (ValueRotation, RiskOff, MomentumCrash).
 - KEY CAVEAT: every name shares the uniform Market loading of 1.0, so in any set that contains real
-  market moves (HistFull, the Evt:* replays), Market dominates book risk (~95%) and risk is as
+  market moves (HistFull, the Evt:* replays), Market dominates portfolio risk (~95%) and risk is as
   diversified as the weights — high effective-name count, low HHI. The Hypo:* shocks set the Market
   move to zero and bump only style factors, so risk collapses onto the few names carrying those
   tilts — concentration (HHI) jumps sharply. If you see a Hypo:* set reading far more concentrated
@@ -4518,8 +4611,8 @@ Hard rules:
   (>0.3 reliable alpha, ~0 noise, negative destroys value). Price-only, dividends excluded.
 - If a `hypothetical` block is present, the WHOLE VIEW is priced under those what-if trades
   and/or factor shocks on a transient scenario branch — SAY SO IN THE HEADLINE, and read the
-  numbers as the hypothetical book, not the held one. Limits/drawdown/attribution context blocks
-  remain the BASE book.
+  numbers as the hypothetical portfolio, not the held one. Limits/drawdown/attribution context
+  blocks remain the BASE portfolio.
 - If a `warning` field is present, the requested scenario measures had no single-ScenarioSet context
   and those cells are blank — say so plainly rather than guessing. Scenario risk is only meaningful
   sliced to one ScenarioSet.
@@ -4604,20 +4697,20 @@ async def analysis(body: AnalysisBody):
                                        bool(body.totals), wtrades, shk)
     else:
         data = await run_in_threadpool(_pivot_result, rlist, clist, mlist, fdict, bool(body.totals))
-    # desk-limit status + drawdown for the view's own date/set/book (so the model can lead with a
+    # desk-limit status + drawdown for the view's own date/set/manager (so the model can lead with a
     # breach and cite the path-drawdown lens VaR/ES miss). Headline only — the dd path is dropped.
     lim = dd = None
     ldate = (fdict.get("Date") or [None])[0]
-    lbook = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
+    lmanager = (fdict.get("Manager") or fdict.get("Book") or ["Soros"])[0]
     if ldate:
         lset = (fdict.get("ScenarioSet") or [_load_limits().get("scenario_set", "HistFull")])[0]
         try:
-            lim = await run_in_threadpool(_limits_result, ldate, lset, lbook)
+            lim = await run_in_threadpool(_limits_result, ldate, lset, lmanager)
         except Exception:
             lim = None
         ddset = (fdict.get("ScenarioSet") or ["HistFull"])[0]
         try:
-            d = await run_in_threadpool(_drawdown_result, ldate, ddset, lbook)
+            d = await run_in_threadpool(_drawdown_result, ldate, ddset, lmanager)
             dd = ({k: d[k] for k in ("set", "max_drawdown", "peak_date", "trough_date",
                                      "recovered", "longest_underwater_obs")}
                   if d.get("status") == "ok" else None)
@@ -4653,10 +4746,11 @@ async def analysis(body: AnalysisBody):
 
 
 OVERVIEW_SYSTEM = CHRIS_VOICE + """
-You are writing the MORNING RISK SUMMARY of the whole book — the read a risk manager gives the
-desk from the monitor screen. The book is the Soros Fund Management 13F holdings, run long-only
-as a weight overlay; monthly calendar from 2016 to the latest build, Barra-style factor model (linear factor block
-+ diagonal specific block). Numbers are fractions of book value unless marked.
+You are writing the MORNING RISK SUMMARY of the whole portfolio — the read a risk manager gives
+the desk from the monitor screen. The portfolio is the Soros Fund Management 13F holdings, run
+long-only as a weight overlay; monthly calendar from 2016 to the latest build, Barra-style factor
+model (linear factor block + diagonal specific block). Numbers are fractions of portfolio value
+unless marked.
 
 The payload mirrors the daily loop — read it in this order:
 1. `limits` — the hard desk limits. LEAD with any breach (value vs limit), then ambers. All
@@ -4665,7 +4759,7 @@ The payload mirrors the daily loop — read it in this order:
    REFERENCE risk number — lead the risk read with it and its factor_share split; scenario
    VaR/ES are the limit metrics; total_var_99 is a legacy house composite, quote it only
    against its limit history. top_ctv are contributions to variance (negative = hedges the
-   book); top5_ctr_share is the 5 largest names' share of Total VaR.
+   portfolio); top5_ctr_share is the 5 largest names' share of Total VaR.
 3. `reconcile` — realized PnL vs the start-of-period risk bands (the risk-understood check).
    `flagged` rows/positions are outside their base band; each carries a driver read: an
    exposure/weight migration is a band ARTIFACT (frozen at T), a factor_move is systematic,
@@ -4680,24 +4774,26 @@ Hard rules:
 - Distinguish artifacts from risk events before recommending anything.
 - End with "**Do next:**" — the one or two most valuable actions, drawn from the numbers.
 
-Output: tight GitHub-flavoured markdown. One-line headline first (the state of the book in a
-sentence). Then short sections following the loop order. 150–300 words unless a breach demands
+Output: tight GitHub-flavoured markdown. One-line headline first (the state of the portfolio in
+a sentence). Then short sections following the loop order. 150–300 words unless a breach demands
 more."""
 
 
 class OverviewAnalysisBody(BaseModel):
     date: str | None = None
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
     set: str | None = None         # scenario set for the limits read
     notes: str | None = None
 
 
 @app.post("/overview/analysis")
 async def overview_analysis(body: OverviewAnalysisBody):
-    """Streamed morning-summary commentary on the WHOLE book — the Overview monitor narrated in
-    the desk's risk-manager voice (CHRIS_VOICE). Assembles the same numbers the Overview shows
+    """Streamed morning-summary commentary on the WHOLE portfolio — the Overview monitor narrated
+    in the desk's risk-manager voice (CHRIS_VOICE). Assembles the same numbers the Overview shows
     (limits, Euler decomposition, reconcile verdicts + drivers, backtest, attribution headline,
     DQ) and hands them to the Messages API with no tools."""
+    manager = _coalesce_manager(body.manager, body.book)
     _rate_limit()
     client = _anthropic()
     d = body.date or _latest_date()
@@ -4709,7 +4805,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
     # merged in the original order, so the payload the model sees is key-for-key what it was.
     def _f_limits():
         try:
-            lim = _limits_result(d, scen, body.book)
+            lim = _limits_result(d, scen, manager)
             return {"limits": {"status": lim["status"],
                                "checks": [{k: c[k] for k in ("name", "value", "warn", "limit",
                                                              "status")} for c in lim["checks"]]}}
@@ -4718,7 +4814,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
 
     def _f_risk():
         try:
-            L, w, s, R = _book_inputs(d, body.book)
+            L, w, s, R = _manager_inputs(d, manager)
             risk = _risk_from_weights(w, L, s, R)
             F = np.cov(R, rowvar=False)
             e = _euler_contributions(w.to_numpy(), L.to_numpy(), F, s.to_numpy())
@@ -4738,7 +4834,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
 
     def _f_backtest():
         try:
-            bt = _backtest_result(d, "HistFull", body.book, 0.01, 250, "fhs", 0.94)
+            bt = _backtest_result(d, "HistFull", manager, 0.01, 250, "fhs", 0.94)
             return {"calibration_and_backtest": (
                 {k: bt.get(k) for k in ("kupiec_reject", "rate", "exceptions", "expected",
                                         "tested")} if bt.get("status") == "ok" else None)}
@@ -4755,7 +4851,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
             return {"dq": None}
 
     def collect():
-        out: dict = {"as_of": d, "book": body.book, "scenario_set": scen}
+        out: dict = {"as_of": d, "manager": manager, "scenario_set": scen}
         blocks = [_f_limits, _f_risk, _f_backtest,
                   lambda: {"pnl_attribution_t12m": _attr_headline()}, _f_dq]
         with ThreadPoolExecutor(max_workers=len(blocks)) as ex:
@@ -4766,7 +4862,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
     # reconcile (risk↔PnL) — reuse the linkage route's computation, trimmed to verdicts + drivers.
     # It shares nothing with collect(), so the two run concurrently.
     lk_task = asyncio.ensure_future(pnl_attribution_linkage(
-        T=None, horizon=3, book=body.book, vol_mult=1.25, rho=0.75, min_weight=0.001))
+        T=None, horizon=3, manager=manager, vol_mult=1.25, rho=0.75, min_weight=0.001))
     try:
         payload = await run_in_threadpool(collect)
     except BaseException:
@@ -4781,7 +4877,7 @@ async def overview_analysis(body: OverviewAnalysisBody):
             return o
         payload["reconcile"] = {
             "window": f"{lk['T']} → {lk['to']}",
-            "book_total": trim(lk["book_total"]),
+            "manager_total": trim(lk["manager_total"]),
             "flagged": [trim(r) for r in lk["rows"] if r["verdict"] != "within"],
             "positions_flagged": [trim(p) for p in lk["positions"] if p.get("driver")][:8],
             "comovement": (lk.get("breach_comovement") or {}).get("text"),
@@ -4806,19 +4902,20 @@ async def overview_analysis(body: OverviewAnalysisBody):
 
 
 TRENDS_SYSTEM = CHRIS_VOICE + """
-You are writing a short read of the book's RISK TRENDS — monthly time series over the whole
-calendar (2016 → the latest build) for one scenario set. The book is the Soros 13F overlay on a Barra-style
-factor model. Numbers are fractions of book value; VaR/ES/vol are 1-day losses.
+You are writing a short read of the portfolio's RISK TRENDS — monthly time series over the whole
+calendar (2016 → the latest build) for one scenario set. The portfolio is the Soros 13F overlay
+on a Barra-style factor model. Numbers are fractions of portfolio value; VaR/ES/vol are 1-day
+losses.
 
 The payload:
-- `risk_series` — monthly book measures. `Model vol` (σ = √(x'Fx + w'Δw)) is the REFERENCE
+- `risk_series` — monthly portfolio measures. `Model vol` (σ = √(x'Fx + w'Δw)) is the REFERENCE
   series — lead with it; Scenario VaR 99 / ES 97.5 are the limit metrics; Total VaR 99 is the
   legacy composite. The trend matters more than the level: where each series sits NOW vs its
   own history, and when it last shifted regime.
 - `exposure_series` — net factor exposures by month (quarterly-sampled) + per-factor start/end.
-  Exposure paths are the mandate made visible: a persistent move is the book changing character,
-  not noise. Whether drift is intentional (rotation) or re-pricing belongs to the drift
-  attribution — flag the move here, don't guess the cause.
+  Exposure paths are the mandate made visible: a persistent move is the portfolio changing
+  character, not noise. Whether drift is intentional (rotation) or re-pricing belongs to the
+  drift attribution — flag the move here, don't guess the cause.
 - `limits` — the standing desk limits, so a rising series can be read against its ceiling
   (headroom shrinking is the story before the breach is).
 
@@ -4830,32 +4927,34 @@ Hard rules:
 - Call out the factor exposures whose paths moved most since 2021, with start → end values.
 
 Output: tight GitHub-flavoured markdown. One-line headline (what the trend history says about
-today's book). Then short sections: risk trend, exposure drift, headroom. End with "**Watch:**"
-— the one or two series most likely to matter next. 120–250 words."""
+today's portfolio). Then short sections: risk trend, exposure drift, headroom. End with
+"**Watch:**" — the one or two series most likely to matter next. 120–250 words."""
 
 
 class TrendsAnalysisBody(BaseModel):
     set: str = "HistFull"
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
     notes: str | None = None
 
 
 @app.post("/trends/analysis")
 async def trends_analysis(body: TrendsAnalysisBody):
-    """Streamed CHRIS_VOICE read of the risk-trends lens: the monthly book-measure series and the
-    factor-exposure paths, narrated — regimes, current level vs history, drift, headroom vs the
-    desk limits. Same no-tools Messages-API pattern and rate limit as /analysis."""
+    """Streamed CHRIS_VOICE read of the risk-trends lens: the monthly portfolio-measure series and
+    the factor-exposure paths, narrated — regimes, current level vs history, drift, headroom vs
+    the desk limits. Same no-tools Messages-API pattern and rate limit as /analysis."""
+    manager = _coalesce_manager(body.manager, body.book)
     _rate_limit()
     client = _anthropic()
-    book_ts = await trends(set=body.set,
-                           measures="Model vol,Scenario VaR 99,Scenario ES 97.5,"
-                                    "Specific vol,Total VaR 99",
-                           book=body.book)
-    fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor", book=body.book)
+    mgr_ts = await trends(set=body.set,
+                          measures="Model vol,Scenario VaR 99,Scenario ES 97.5,"
+                                   "Specific vol,Total VaR 99",
+                          manager=manager)
+    fac_ts = await trends(set=body.set, measures="Net exposure", by="Factor", manager=manager)
 
     def rnd(v):
         return round(v, 4) if isinstance(v, (int, float)) else v
-    risk_series = [{k: rnd(v) for k, v in r.items()} for r in book_ts["records"]]
+    risk_series = [{k: rnd(v) for k, v in r.items()} for r in mgr_ts["records"]]
     # exposures: quarterly-sampled monthly paths per factor + start/end, to keep the payload lean
     fr: dict[str, list] = {}
     for r in fac_ts["records"]:
@@ -4867,10 +4966,10 @@ async def trends_analysis(body: TrendsAnalysisBody):
     }
     payload = json.dumps({
         "scenario_set": body.set,
-        "book": body.book,
+        "manager": manager,
         "risk_series": risk_series,
         "exposure_series": exposure_series,
-        "limits": _load_limits().get("book", {}),
+        "limits": _load_limits().get("manager", {}),
         "desk_notes": body.notes or "",
     }, default=str)
 
@@ -4894,7 +4993,7 @@ async def trends_analysis(body: TrendsAnalysisBody):
 # residual RAG diagnostics, and the linkage verdicts — same no-tools Messages-API pattern.
 
 PNLATTR_SYSTEM = CHRIS_VOICE + """
-You are writing a short read of the book's REALIZED PnL ATTRIBUTION over one window — the
+You are writing a short read of the portfolio's REALIZED PnL ATTRIBUTION over one window — the
 Soros 13F overlay on a Barra-style factor model. Returns are fractions (0.12 = 12%). The parts
 are Cariño-linked: factor contributions + specific sum to the geometric window return EXACTLY.
 
@@ -4902,19 +5001,19 @@ The payload:
 - `headline` — realized geometric return, linked factor total, linked specific total. Specific is
   stock-selection money the factor block can't explain. Understand ALL of it: an unexplained GAIN
   gets investigated exactly like a loss — it is risk that happened to pay.
-- `factors` — per factor: avg_exposure (book's mean net loading over the window),
+- `factors` — per factor: avg_exposure (portfolio's mean net loading over the window),
   cum_factor_return (what the factor itself did — portfolio-agnostic), contribution (the money,
   linked), pct_of_total, t_stat (mean daily contribution / SE — t = IR·√T humility: a big
   contribution with |t| < 2 is one good year, not proof; only |t| > 2 is a reliable flow).
   Read exposure-without-return (a tilt that paid nothing) and return-without-exposure (a factor
-  that ran while the book stood flat) as findings, not trivia.
+  that ran while the portfolio stood flat) as findings, not trivia.
 - `residual_checks` — the RAG diagnostics on the specific stream (IR, realized/predicted specific
   vol, autocorrelation, residual-vs-factor regression, bias stats, residual HHI, hit rate).
   Correlated residuals = a missing factor. A red here outranks any contribution number.
 - `linkage` — the risk↔PnL reconcile verdicts at T (factor rows + positions outside their ex-ante
   bands, with driver reads: exposure_migration is a band artifact, not an event; hidden_beta means
   suspect the loading, not the factor).
-- `coverage` — priced share of the book; name the unpriced weight if material.
+- `coverage` — priced share of the portfolio; name the unpriced weight if material.
 
 Hard rules:
 - Reason ONLY from the payload; cite the figure next to every claim. Never invent a name or value.
@@ -4943,9 +5042,9 @@ async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
     client = _anthropic()          # 502 before the work if there's no key
     # NB internal calls must pass EVERY Query-defaulted param explicitly — a bare call would
     # receive the FastAPI Query objects, not their values (the /overview min_weight lesson)
-    attr = await pnl_attribution(body.frm, body.to, book="Soros", by=None)
-    resid = await pnl_attribution_residual(body.frm, body.to, book="Soros")
-    link = await pnl_attribution_linkage(None, body.horizon, book="Soros",
+    attr = await pnl_attribution(body.frm, body.to, manager="Soros", by=None)
+    resid = await pnl_attribution_residual(body.frm, body.to, manager="Soros")
+    link = await pnl_attribution_linkage(None, body.horizon, manager="Soros",
                                          vol_mult=1.25, rho=0.75, min_weight=0.001)
 
     def rnd(v):
@@ -4964,7 +5063,7 @@ async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
                 {"name": r["name"], "z": rnd(r["z"]), "verdict": r["verdict"],
                  "driver": (r.get("driver") or {}).get("kind"),
                  "text": (r.get("driver") or {}).get("text")}
-                for r in link["rows"] + [link["book_total"]] if r["verdict"] != "within"],
+                for r in link["rows"] + [link["manager_total"]] if r["verdict"] != "within"],
             "position_breaches": [
                 {"name": p["name"], "weight": rnd(p["weight"]), "z": rnd(p["z"]),
                  "verdict": p["verdict"], "driver": (p.get("driver") or {}).get("kind"),
@@ -4995,8 +5094,9 @@ async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
 # ============================================================================ what changed (QoQ, LLM)
 # Step 9: diff this 13F filing against the prior and narrate the risk delta. The deterministic diff
 # (/whatchanged) is positions in/out/resized + the factor-exposure drift decomposed with Phase 4's
-# attribution + the book risk delta from the what-if math (cube-consistent). /whatchanged/analysis
-# hands that tidy diff to the Messages API (no tools, streamed) for a written read, like /analysis.
+# attribution + the portfolio risk delta from the what-if math (cube-consistent).
+# /whatchanged/analysis hands that tidy diff to the Messages API (no tools, streamed) for a written
+# read, like /analysis.
 
 WHATCHANGED_SYSTEM = CHRIS_VOICE + """
 You are writing a short "what changed" note between two consecutive
@@ -5005,15 +5105,17 @@ ONLY from it and cite the figures. Never invent a position, issuer, date, or val
 
 The payload has:
 - positions: names that ENTERED (new), EXITED (dropped), or were RESIZED (weight change) between the
-  `from` and `to` filings, with 13F weights (fractions of book, 0.03 = 3%).
-- exposure_attribution: the book's net factor exposure (Σ weight·loading) before/after per style
-  factor, and the drift Δ split into four sources that sum to Δ exactly — `src_entered`/`src_exited`
-  (names rotated in/out = ROTATION), `src_reweighted` (held names resized), `src_loading_drift` (held
-  names whose own loadings moved = RE-PRICING). Rotation-dominated drift is a deliberate tilt → the
-  desk may update the BENCHMARK; loading-drift-dominated is market re-pricing → update the HEDGE.
-- risk: book Scenario VaR 99/97.5, ES 97.5/99, Specific vol, Total VaR 99, Risk HHI, gross/net —
-  before vs after vs delta, computed on the full factor-return history (HistFull-equivalent, the
-  Market factor included so these read as real long-equity book risk). All are losses, positive.
+  `from` and `to` filings, with 13F weights (fractions of portfolio, 0.03 = 3%).
+- exposure_attribution: the portfolio's net factor exposure (Σ weight·loading) before/after per
+  style factor, and the drift Δ split into four sources that sum to Δ exactly —
+  `src_entered`/`src_exited` (names rotated in/out = ROTATION), `src_reweighted` (held names
+  resized), `src_loading_drift` (held names whose own loadings moved = RE-PRICING).
+  Rotation-dominated drift is a deliberate tilt → the desk may update the BENCHMARK;
+  loading-drift-dominated is market re-pricing → update the HEDGE.
+- risk: portfolio Scenario VaR 99/97.5, ES 97.5/99, Specific vol, Total VaR 99, Risk HHI, gross/net
+  — before vs after vs delta, computed on the full factor-return history (HistFull-equivalent, the
+  Market factor included so these read as real long-equity portfolio risk). All are losses,
+  positive.
 
 Hard rules:
 - LEAD with the single biggest change (a big new/dropped position, the factor that drifted most, or
@@ -5026,10 +5128,10 @@ Hard rules:
 
 def _prior_filing_date(bpos: pd.DataFrame, d1: pd.Timestamp, by: dict | None = None):
     """The latest date strictly before d1 whose held-name set differs from d1's — i.e. the previous
-    distinct 13F book (the positions frame is monthly and flat between quarterly filings).
+    distinct 13F filing (the positions frame is monthly and flat between quarterly filings).
 
-    `by` is an optional {Date: row positions into `bpos`} index (from `_book_date_rows`): without
-    it this re-scanned the whole frame once per candidate date walking backwards."""
+    `by` is an optional {Date: row positions into `bpos`} index (from `_manager_date_rows`):
+    without it this re-scanned the whole frame once per candidate date walking backwards."""
     if by is None:
         by = {pd.Timestamp(k): v for k, v in bpos.groupby("Date").indices.items()}
     dates = sorted(d for d in by if d < d1)
@@ -5046,14 +5148,14 @@ def _prior_filing_date(bpos: pd.DataFrame, d1: pd.Timestamp, by: dict | None = N
     return dates[0]
 
 
-def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros") -> dict:
+def _whatchanged_result(date: str | None, prev: str | None, manager: str = "Soros") -> dict:
     f = S["frames"]; exp, pos, sec = f["exposures"], f["positions"], f["securities"]
-    # every positions selection below rides the cached per-book row index rather than masking the
-    # 11.6M-row frame (api_bench 2026-08-21): same rows, same order.
-    by = _book_date_rows(book)
+    # every positions selection below rides the cached per-manager row index rather than masking
+    # the 11.6M-row frame (api_bench 2026-08-21): same rows, same order.
+    by = _manager_date_rows(manager)
     alldates = sorted(by)
     if not alldates:
-        raise HTTPException(404, f"no positions for book {book}")
+        raise HTTPException(404, f"no positions for manager {manager}")
     d1 = max(d for d in alldates if d <= pd.Timestamp(date)) if date else alldates[-1]
     d0 = (max(d for d in alldates if d <= pd.Timestamp(prev)) if prev
           else _prior_filing_date(pos, d1, by))
@@ -5079,11 +5181,11 @@ def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros")
                      key=lambda r: -abs(r["delta"]))
 
     # factor-exposure attribution (Phase 4 machinery) — delta = sum of the four sources exactly.
-    # book_at has no Manager concept of its own, so it must be handed the REQUESTED BOOK's rows: on
-    # the multi-book frames it was reading `pos` whole, and `dict(zip(Position, Weight))` collapsed
-    # all 124 managers' rows to one arbitrary weight per name — every book returned the same
-    # (wrong) net exposure. Same fix /drift already carries. Slicing exposures by date too: the
-    # attribution only ever reads the two dates.
+    # book_at has no Manager concept of its own, so it must be handed the REQUESTED MANAGER's
+    # rows: on the multi-manager frames it was reading `pos` whole, and
+    # `dict(zip(Position, Weight))` collapsed all 124 managers' rows to one arbitrary weight per
+    # name — every manager returned the same (wrong) net exposure. Same fix /drift already
+    # carries. Slicing exposures by date too: the attribution only ever reads the two dates.
     exp_by = _frame_rows_by("exposures", ("Date",))
     e0 = exp.iloc[exp_by[d0]] if d0 in exp_by else exp.iloc[:0]
     e1 = exp.iloc[exp_by[d1]] if d1 in exp_by else exp.iloc[:0]
@@ -5096,16 +5198,16 @@ def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros")
                  **{f"src_{k}": _clean(attr[fc][k]) for k in _ud.SOURCES}}
                 for fc in sorted(_ud.STYLE, key=lambda k: abs(attr[k]["delta"]), reverse=True)]
 
-    # book risk delta — cube-consistent (the what-if math), full factor-return history
-    L0, wv0, s0, R = _book_inputs(str(d0.date()), book)
-    L1, wv1, s1, _ = _book_inputs(str(d1.date()), book)
+    # portfolio risk delta — cube-consistent (the what-if math), full factor-return history
+    L0, wv0, s0, R = _manager_inputs(str(d0.date()), manager)
+    L1, wv1, s1, _ = _manager_inputs(str(d1.date()), manager)
     r0, r1 = _risk_from_weights(wv0, L0, s0, R), _risk_from_weights(wv1, L1, s1, R)
     risk = {k: {"before": _clean(r0[k]), "after": _clean(r1[k]),
                 "delta": _clean(r1[k] - r0[k]) if (r0[k] is not None and r1[k] is not None) else None}
             for k in r0}
 
     return {
-        "book": book, "from": str(d0.date()), "to": str(d1.date()),
+        "manager": manager, "from": str(d0.date()), "to": str(d1.date()),
         "positions": {"entered": entered[:25], "exited": exited[:25], "resized": resized[:25],
                       "n_entered": len(set1 - set0), "n_exited": len(set0 - set1),
                       "n_before": len(set0), "n_after": len(set1)},
@@ -5119,17 +5221,19 @@ def _whatchanged_result(date: str | None, prev: str | None, book: str = "Soros")
 @app.get("/whatchanged")
 async def whatchanged(date: str | None = Query(None, description="the 'to' filing; default latest"),
                       prev: str | None = Query(None, description="the 'from' filing; default prior"),
-                      book: str = Query("Soros")):
+                      manager: str | None = Query(None), book: str | None = Query(None)):
     """Deterministic quarter-over-quarter diff between two 13F filings: positions entered / exited /
     resized, the net factor-exposure drift attributed (rotation vs loading drift, Phase 4), and the
-    book risk delta (VaR/ES/HHI/specific vol, what-if math). Grounds /whatchanged/analysis."""
-    return await run_in_threadpool(_whatchanged_result, date, prev, book)
+    portfolio risk delta (VaR/ES/HHI/specific vol, what-if math). Grounds /whatchanged/analysis."""
+    manager = _coalesce_manager(manager, book)
+    return await run_in_threadpool(_whatchanged_result, date, prev, manager)
 
 
 class WhatChangedBody(BaseModel):
     date: str | None = None
     prev: str | None = None
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
     notes: str | None = None
 
 
@@ -5138,9 +5242,10 @@ async def whatchanged_analysis(body: WhatChangedBody):
     """Streamed risk-manager 'what changed' read between two filings. Computes the same deterministic
     diff /whatchanged returns, then hands only those tidy numbers to the Messages API (no tools) for a
     written read. Streams markdown. The model gets the diff and nothing else."""
+    manager = _coalesce_manager(body.manager, body.book)
     _rate_limit()
     client = _anthropic()          # 502 before the work if there's no key
-    diff = await run_in_threadpool(_whatchanged_result, body.date, body.prev, body.book)
+    diff = await run_in_threadpool(_whatchanged_result, body.date, body.prev, manager)
     payload = json.dumps({**diff, "desk_notes": body.notes or ""}, default=str)
 
     def gen():
@@ -5164,10 +5269,10 @@ async def whatchanged_analysis(body: WhatChangedBody):
 
 BRIDGE_SYSTEM = CHRIS_VOICE + """
 You are writing a short "Model vs Price" read for a Barra-style equity
-factor-risk model. The MODEL prices the book on a linear factor block + a Gaussian diagonal
-specific block; the PRICE family prices the SAME book on raw historical stock returns — no model
-at all, pure historical simulation. You receive only the tidy bridge between them; reason ONLY
-from it and cite the figures. Never invent a position, issuer, date, or value.
+factor-risk model. The MODEL prices the portfolio on a linear factor block + a Gaussian diagonal
+specific block; the PRICE family prices the SAME portfolio on raw historical stock returns — no
+model at all, pure historical simulation. You receive only the tidy bridge between them; reason
+ONLY from it and cite the figures. Never invent a position, issuer, date, or value.
 
 The payload has:
 - `steps`: five numbers in a FIXED order, each changing ONE thing from the previous: T0 Scenario
@@ -5175,22 +5280,22 @@ The payload has:
   specific block replaced by REALIZED daily residual paths) -> T3 Price VaR on covered names
   (today's fixed loadings replaced by each day's own — the model's own identity r_t = L_i(t)·f_t +
   u_i,t) -> T4 Price VaR 99 (names priced but not covered by the model are added). All are losses,
-  positive fractions of book value.
+  positive fractions of portfolio value.
 - `terms`: the four sequential differences (T1-T0, T2-T1, T3-T2, T4-T3) — they sum to T4-T0
   EXACTLY, by construction. `specific_risk_dropped` is the Gaussian specific block itself (not yet
   tested against reality). `specific_distribution` is fat tails + REALIZED RESIDUAL CORRELATION —
   large here is the missing-factor signal (correlated residuals across names that a single
   Gaussian diagonal block cannot represent). `exposure_drift` is today's loadings vs each day's
-  own realized loadings — large here means the book's exposures moved a lot over the window
+  own realized loadings — large here means the portfolio's exposures moved a lot over the window
   (rotation, if deliberate → update the benchmark; re-pricing, if not → update the hedge; the
   /drift endpoint has the rotation-vs-loading-drift split). `coverage` is priced names the model
   doesn't span (no factor loadings that date) — large here is a model BLIND SPOT, not a risk
   number to act on directly.
-- `coverage`: `at_tail` is the weight share that was actually priced on the book's own Price-VaR
-  tail day (below 100% means part of the book's worst day is imputed as zero return, understating
-  that day); `never_priced_weight`/`never_priced_names` are held names with NO price history at
-  all (contribute nothing to either VaR); `added_by_coverage_weight`/`_names` are held names with a
-  price but no factor loading (the T3→T4 population change).
+- `coverage`: `at_tail` is the weight share that was actually priced on the portfolio's own
+  Price-VaR tail day (below 100% means part of the portfolio's worst day is imputed as zero
+  return, understating that day); `never_priced_weight`/`never_priced_names` are held names with
+  NO price history at all (contribute nothing to either VaR); `added_by_coverage_weight`/`_names`
+  are held names with a price but no factor loading (the T3→T4 population change).
 - `disagreements`: the largest per-name gaps between Marginal Total VaR 99 (model) and Marginal
   Price VaR 99 (price), with a `likely_driver` label — "coverage (...)" is an exact population
   fact; "specific_risk_dropped" and "exposure_drift_or_distribution" are a MAGNITUDE HEURISTIC on
@@ -5213,7 +5318,8 @@ Hard rules:
 
 class VarBridgeBody(BaseModel):
     date: str | None = None
-    book: str = "Soros"
+    manager: str | None = None
+    book: str | None = None
     set: str = "HistFull"
     alpha: float = 0.01
     notes: str | None = None
@@ -5224,9 +5330,10 @@ async def var_bridge_analysis(body: VarBridgeBody):
     """Streamed 'Model vs Price' read of the deterministic bridge (/var_bridge) — same plain
     Messages-API, no-tools pattern as /whatchanged/analysis. The model gets the bridge and
     nothing else."""
+    manager = _coalesce_manager(body.manager, body.book)
     _rate_limit()
     client = _anthropic()          # 502 before the work if there's no key
-    bridge = await run_in_threadpool(_var_bridge_result, body.date, body.book, body.set, body.alpha)
+    bridge = await run_in_threadpool(_var_bridge_result, body.date, manager, body.set, body.alpha)
     payload = json.dumps({**bridge, "desk_notes": body.notes or ""}, default=str)
 
     def gen():
@@ -5253,7 +5360,7 @@ async def var_bridge_analysis(body: VarBridgeBody):
 # the loop is bounded (ASK_MAX_ROUNDS) and each result is trimmed (ASK_MAX_RECORDS) to cap tokens.
 
 ASK_MAX_ROUNDS = 8          # tool round-trips before we stop and let the model answer with what it has
-ASK_MAX_RECORDS = 250       # rows handed back per query_cube call (book is ~105 names; this is slack)
+ASK_MAX_RECORDS = 250       # rows handed back per query_cube call (the portfolio is ~105 names; this is slack)
 
 QUERY_CUBE_TOOL = {
     "name": "query_cube",
@@ -5313,24 +5420,26 @@ def _run_query_cube(args: dict) -> dict:
 
 ASK_SYSTEM = CHRIS_VOICE + """
 You are answering a desk question about a Barra-style equity factor-risk
-model. The book is the Soros Fund Management 13F holdings, run as a long-only weight overlay; monthly
-calendar, 2016 → the latest build.
+model. The portfolio is the Soros Fund Management 13F holdings, run as a long-only weight
+overlay; monthly calendar, 2016 → the latest build.
 
 You have ONE tool, `query_cube`, which pulls slices of the live cube (the allowed dimensions and
 measures are listed in its description). You have nothing else — no filesystem, no web, no other tool,
 and no figures beyond what query_cube returns. To answer, pull the slices you need, then write the read.
 
 How to use the cube:
-- Numbers are fractions of book value. 0.035 means 3.5%. VaR/ES/vol are losses, reported positive.
+- Numbers are fractions of portfolio value. 0.035 means 3.5%. VaR/ES/vol are losses, reported
+  positive.
 - Net exposure: aggregated factor loading (weight x loading); additive, no ScenarioSet needed. Market
-  carries a loading of 1.0 per name, so a fully invested book has ~unit Market exposure.
+  carries a loading of 1.0 per name, so a fully invested portfolio has ~unit Market exposure.
 - Scenario VaR 95/97.5/99 and ES 97.5/99 are losses at that confidence / tail means. Total VaR 99 /
   Total ES 97.5 fold in the diagonal SPECIFIC (idiosyncratic) block. Marginal/% measures are a member's
-  additive share of the book number (they sum to the total); Incremental VaR is diversification-aware
-  and does NOT sum. Risk HHI is the Herfindahl of per-name Total-VaR shares; 1/HHI ~ effective bets.
+  additive share of the portfolio number (they sum to the total); Incremental VaR is
+  diversification-aware and does NOT sum. Risk HHI is the Herfindahl of per-name Total-VaR shares;
+  1/HHI ~ effective bets.
 - Factor contribution / Specific PnL / Realized PnL (if listed): REALIZED monthly PnL attribution,
   additive (Realized = factor + specific). Forward-month convention: the value at Date d0 is the PnL
-  over the month AFTER d0. No ScenarioSet needed; read Specific PnL in by-name or book views.
+  over the month AFTER d0. No ScenarioSet needed; read Specific PnL in by-name or portfolio views.
 - Price VaR/ES (if listed): the MODEL-FREE twin of Scenario VaR/ES — historical sim on raw daily
   stock returns, no factor model. Needs a PriceSet context (its own hierarchy: HistFull or Evt:*
   only, no Hypo:*). Not a pivot measure but relevant if asked "does the model agree with the raw
@@ -5344,10 +5453,11 @@ How to use the cube:
 - PnL at day (if listed) is the per-day scenario P&L path: rows Day + DayDate, filter DaySet (not
   ScenarioSet) to ONE set; add Sector on rows for the day x sector breakout. Read the path, the
   worst days, and the sector split on a bad day — the sum across days is not a risk number.
-- KEY CAVEAT: every name shares the uniform Market loading of 1.0, so in any set with real market moves
-  (HistFull, Evt:*) Market dominates book risk (~95%) and HHI is low. The Hypo:* shocks zero Market and
-  bump only style factors, so risk collapses onto the few names with those tilts and HHI jumps. A Hypo:*
-  set reading far more concentrated than HistFull is that mechanism, not a data problem.
+- KEY CAVEAT: every name shares the uniform Market loading of 1.0, so in any set with real market
+  moves (HistFull, Evt:*) Market dominates portfolio risk (~95%) and HHI is low. The Hypo:* shocks
+  zero Market and bump only style factors, so risk collapses onto the few names with those tilts
+  and HHI jumps. A Hypo:* set reading far more concentrated than HistFull is that mechanism, not a
+  data problem.
 
 Hard rules:
 - Reason ONLY from numbers query_cube returned. Cite the figures you used. Never invent a position,
