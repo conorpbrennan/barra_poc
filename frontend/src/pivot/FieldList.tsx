@@ -124,7 +124,7 @@ export function FieldList({
 
       <div style={{ maxHeight: "12rem", overflowY: "auto" }}>
         <div className="muted small" style={{ marginBottom: "0.2rem" }}>Dimensions</div>
-        {dims.dimensions.map((d) => {
+        {[...dims.dimensions].sort((a, b) => a.localeCompare(b)).map((d) => {
           // reflect the CURRENT view: R/C/F light up for the axis this dim sits on; clicking toggles.
           const inRows = cfg.rows.includes(d);
           const inCols = cfg.cols.includes(d);
@@ -155,7 +155,7 @@ export function FieldList({
 
       <div className="muted small" style={{ margin: "0.5rem 0 0.2rem" }}>Measures</div>
       <div style={{ maxHeight: "12rem", overflowY: "auto" }}>
-        {dims.measures.map((m) => {
+        {[...dims.measures].sort((a, b) => a.localeCompare(b)).map((m) => {
           const inVals = cfg.measures.includes(m);   // selected measures are highlighted; +/− toggles
           return (
             <div key={m} className={`fieldrow${inVals ? " active" : ""}`}>
