@@ -1,7 +1,8 @@
-// Integration check for the guarded single-book lenses (multi-manager Phase 4): when /drift
-// returns the book_mismatch status (risk_api.py's _book_guard — the requested book isn't the one
-// the drift artifact covers), the Drift lens must render the quiet informational note, not an
-// empty chart/table or a crash trying to read .series/.summary off a shape that doesn't have them.
+// Integration check for the guarded single-manager lenses (multi-manager Phase 4): when /drift
+// returns the manager_mismatch status (risk_api.py's _manager_guard — the requested manager isn't
+// the one the drift artifact covers), the Drift lens must render the quiet informational note,
+// not an empty chart/table or a crash trying to read .series/.summary off a shape that doesn't
+// have them.
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -13,15 +14,15 @@ import { AppProvider } from "../context/AppContext";
 const META = {
   dates: ["2026-06-30"], scenario_sets: ["HistFull"], factors: [], ts_measures: [], by_levels: [],
   managers: [
-    { book: "Soros", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
-    { book: "TigerGlobal", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
+    { manager: "Soros", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
+    { manager: "TigerGlobal", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
   ],
 };
 const MISMATCH = {
-  status: "book_mismatch", kind: "drift", requested_book: "TigerGlobal", artifact_book: "Soros",
+  status: "manager_mismatch", kind: "drift", requested_manager: "TigerGlobal", artifact_manager: "Soros",
   basis: "inferred from the live positions frame (exactly one Book present)",
-  reason: "the drift artifact was computed for the 'Soros' book, not 'TigerGlobal' — serving it "
-    + "under another book's label would be silently wrong data, not just stale data",
+  reason: "the drift artifact was computed for the 'Soros' manager, not 'TigerGlobal' — serving it "
+    + "under another manager's label would be silently wrong data, not just stale data",
 };
 
 function mockFetch() {
@@ -41,7 +42,7 @@ function renderDrift() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryRouter initialEntries={["/drift?book=TigerGlobal"]}>
+      <MemoryRouter initialEntries={["/drift?manager=TigerGlobal"]}>
         <AppProvider>
           <Drift />
         </AppProvider>
@@ -50,7 +51,7 @@ function renderDrift() {
   );
 }
 
-describe("Drift lens — book_mismatch", () => {
+describe("Drift lens — manager_mismatch", () => {
   it("renders the informational notice instead of an empty chart or a crash", async () => {
     renderDrift();
     await waitFor(() => expect(screen.getByText(/not available for/)).toBeInTheDocument());

@@ -28,7 +28,7 @@ export interface PivotConfig {
   heat: boolean;
   asPct: boolean;
   prec: number;
-  units: "weight" | "dollar";   // <- view `units`: dollar = weight-unit measures × Book MV (re-query)
+  units: "weight" | "dollar";   // <- view `units`: dollar = weight-unit measures × Manager MV (re-query)
   sort: SortItem[];        // <- view `sort`, Streamlit colIds (see sortKeyFor / sortIdFor)
   // hypothetical (transient cube branch/scenario per query; NOT persisted in saved views):
   whatif: { position: string; ticker: string; weight: number }[];

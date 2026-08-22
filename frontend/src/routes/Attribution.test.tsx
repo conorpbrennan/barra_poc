@@ -1,7 +1,7 @@
 // Smoke tests for the PnL-attribution chart components (Step 15): the sign-aware stacked hero
 // and the §4 reconcile band chart. Pure-render — no API. The drawer tests further down (2026-08-22)
 // DO hit the network path (mocked fetch) — they exercise the /pnl_attribution/drill endpoint the
-// reconcile drawers now call instead of the book-independent /pivot cube trio.
+// reconcile drawers now call instead of the manager-independent /pivot cube trio.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,9 +16,9 @@ const SERIES = [
 ];
 
 const LK: PnlLinkageResult = {
-  T: "2024-09-30", to: "2024-12-30", horizon_months: 3, n_days: 63, book: "Soros",
+  T: "2024-09-30", to: "2024-12-30", horizon_months: 3, n_days: 63, manager: "Soros",
   stress: { vol_mult: 1.25, rho_blend: 0.75 },
-  book_total: { name: "Book total", kind: "book", exposure: null, risk_share: 1,
+  manager_total: { name: "Manager total", kind: "manager", exposure: null, risk_share: 1,
     realized: -0.02, sd_base: 0.1, sd_stressed: 0.17, z: -0.2, verdict: "within" },
   rows: [
     { name: "Market", kind: "factor", exposure: 1.0, risk_share: 0.8,
@@ -77,13 +77,13 @@ describe("irSignificance", () => {
 });
 
 describe("BandChart", () => {
-  it("draws two bands + a dot per row (plus book total), z labels, verdict colours", () => {
+  it("draws two bands + a dot per row (plus manager total), z labels, verdict colours", () => {
     const { container, getByText } = render(<BandChart lk={LK} />);
-    // 4 data rows (3 + book) x 2 band rects, + 2 legend swatches
+    // 4 data rows (3 + manager) x 2 band rects, + 2 legend swatches
     expect(container.querySelectorAll("rect").length).toBe(10);
     const dots = [...container.querySelectorAll("circle")];
     expect(dots.length).toBe(4 + 4);                    // 4 row dots + 4 legend dots (incl. hollow)
-    getByText("Momentum"); getByText("Book total");
+    getByText("Momentum"); getByText("Manager total");
     getByText("+6.7σ");                                 // the breach, clamped into the axis
     // verdict colours: investigate red, stress amber
     const fills = dots.map((d) => d.getAttribute("fill"));
@@ -116,14 +116,14 @@ describe("BandChart", () => {
 });
 
 describe("BandChart drill dots", () => {
-  it("factor dots fire onDot; the book row does not get a click target", () => {
+  it("factor dots fire onDot; the manager row does not get a click target", () => {
     const hits: string[] = [];
     const { container } = render(<BandChart lk={LK} onDot={(n) => hits.push(n)} />);
     const dot = container.querySelector('g[data-dot="Market"]')!;
     expect(dot).toBeTruthy();
     fireEvent.click(dot);
     expect(hits).toEqual(["Market"]);
-    expect(container.querySelector('g[data-dot="Book total"]')).toBeNull();
+    expect(container.querySelector('g[data-dot="Manager total"]')).toBeNull();
     expect(container.querySelector('g[data-dot="Specific"]')).toBeNull();
   });
 
@@ -158,10 +158,10 @@ describe("DrillBars", () => {
 });
 
 // ---- reconcile drawers (2026-08-22): now served by /pnl_attribution/drill, computed live
-// per-book from the frames, NOT the book-independent /pivot cube trio (see Attribution.tsx's
-// header note). These mock fetch directly (no MSW in this repo — same pattern as
-// Pivot.test.tsx/Pivot.rejection.test.tsx). ----
-describe("PositionDrawer / FactorDrawer (live per-book drill)", () => {
+// per-manager from the frames, NOT the manager-independent /pivot cube trio (see
+// Attribution.tsx's header note). These mock fetch directly (no MSW in this repo — same pattern
+// as Pivot.test.tsx/Pivot.rejection.test.tsx). ----
+describe("PositionDrawer / FactorDrawer (live per-manager drill)", () => {
   const POSITION = {
     name: "AAPL", position: "AAPL_FIGI", weight: 0.05, weight_window_avg: 0.05,
     realized: 0.03, factor_pnl: 0.02, specific_pnl: 0.01, sd_base: 0.01, z: 3.0,
@@ -199,7 +199,7 @@ describe("PositionDrawer / FactorDrawer (live per-book drill)", () => {
 
   it("PositionDrawer renders per-factor bars + specific from the drill endpoint, thin-loading-set warning, and hides the Pivot link when /dims prunes the trio", async () => {
     stubDrillFetch({
-      book: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
+      manager: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
       bars: [{ factor: "Market", contribution: 0.018, loading_at_T: 1.0 },
              { factor: "Value", contribution: 0.002, loading_at_T: null }],
       specific_pnl: 0.01, realized: 0.03, n_factors_at_T: 1,
@@ -213,9 +213,9 @@ describe("PositionDrawer / FactorDrawer (live per-book drill)", () => {
     expect(queryByText("open in Pivot →")).toBeNull();
   });
 
-  it("PositionDrawer shows the Pivot deep link when /dims still offers the trio (single-book)", async () => {
+  it("PositionDrawer shows the Pivot deep link when /dims still offers the trio (single-manager)", async () => {
     stubDrillFetch({
-      book: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
+      manager: "Soros", T: LK_POS.T, to: LK_POS.to, position: "AAPL_FIGI", ticker: "aapl",
       bars: [{ factor: "Market", contribution: 0.03, loading_at_T: 1.0 }],
       specific_pnl: 0.0, realized: 0.03, n_factors_at_T: 1,
     });
@@ -227,7 +227,7 @@ describe("PositionDrawer / FactorDrawer (live per-book drill)", () => {
 
   it("FactorDrawer renders per-issuer bars from the drill endpoint (who carried it)", async () => {
     stubDrillFetch({
-      book: "Soros", T: LK.T, to: LK.to, factor: "Market",
+      manager: "Soros", T: LK.T, to: LK.to, factor: "Market",
       bars: [{ issuer: "Apple", contribution: 0.03 }, { issuer: "Microsoft", contribution: 0.02 }],
       total: 0.05,
     });

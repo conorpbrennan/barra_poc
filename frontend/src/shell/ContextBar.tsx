@@ -1,4 +1,4 @@
-// The global context bar (docs/vite-ui-plan.md §9): book / as-of date / scenario-set shared by
+// The global context bar (docs/vite-ui-plan.md §9): manager / as-of date / scenario-set shared by
 // every lens, plus the docs (📖) menu. Few: shared context once, not repeated per-panel chrome.
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
@@ -11,22 +11,23 @@ const DOC_LINKS = [
   { label: "Model & data reference", href: "/flexagg++/app/static/barra_model_reference.html" },
 ];
 
-// One manager's label: entity_name (+ firm_type) when known, else the bare book code — every
+// One manager's label: entity_name (+ firm_type) when known, else the bare manager code — every
 // field degrades silently when null (today's data has no entity attributes at all).
 function managerLabel(m: Manager): string {
-  if (!m.entity_name) return m.book;
+  if (!m.entity_name) return m.manager;
   return m.firm_type ? `${m.entity_name} · ${m.firm_type}` : m.entity_name;
 }
 
-// The book control (multi-manager Phase 4). Tufte/Few: a control that cannot change anything is
-// chartjunk — with a single book (today's data) this renders as plain text, not a one-option
-// dropdown. Only once a second manager actually exists does it become an interactive selector.
-function BookField({ book, managers, setBook }: {
-  book: string; managers: Manager[]; setBook: (b: string) => void;
+// The manager control (multi-manager Phase 4). Tufte/Few: a control that cannot change anything
+// is chartjunk — with a single manager (today's data) this renders as plain text, not a
+// one-option dropdown. Only once a second manager actually exists does it become an interactive
+// selector.
+function ManagerField({ manager, managers, setManager }: {
+  manager: string; managers: Manager[]; setManager: (m: string) => void;
 }) {
   if (managers.length <= 1) {
     const m = managers[0];
-    const label = m && m.book === book ? managerLabel(m) : book;
+    const label = m && m.manager === manager ? managerLabel(m) : manager;
     return (
       <Field label="Manager">
         <span className="num">{label}</span>
@@ -35,9 +36,9 @@ function BookField({ book, managers, setBook }: {
   }
   return (
     <Field label="Manager">
-      <select value={book} onChange={(e) => setBook(e.target.value)}>
+      <select value={manager} onChange={(e) => setManager(e.target.value)}>
         {managers.map((m) => (
-          <option key={m.book} value={m.book}>{managerLabel(m)}</option>
+          <option key={m.manager} value={m.manager}>{managerLabel(m)}</option>
         ))}
       </select>
     </Field>
@@ -45,16 +46,16 @@ function BookField({ book, managers, setBook }: {
 }
 
 export function ContextBar() {
-  const { book, date, scenario, dates, scenarioSets, managers, setBook, setDate, setScenario } = useApp();
+  const { manager, date, scenario, dates, scenarioSets, managers, setManager, setDate, setScenario } = useApp();
   const [docsOpen, setDocsOpen] = useState(false);
 
   return (
     <div className="contextbar">
-      {/* Not "<Book> factor risk": the book is named by BookField immediately to the right, so
-          baking it into the title duplicated it, and hardcoding "Soros" went outright wrong once
-          the multi-manager build put 11 books behind the selector. */}
+      {/* Not "<Manager> factor risk": the manager is named by ManagerField immediately to the
+          right, so baking it into the title duplicated it, and hardcoding "Soros" went outright
+          wrong once the multi-manager build put 124 managers behind the selector. */}
       <span className="title">Factor risk</span>
-      <BookField book={book} managers={managers} setBook={setBook} />
+      <ManagerField manager={manager} managers={managers} setManager={setManager} />
       <Field label="As-of">
         <select value={date} onChange={(e) => setDate(e.target.value)} className="num">
           {dates.map((d) => (

@@ -1,5 +1,5 @@
-// Model vs Price lens (docs/price-var-plan.md). The MODEL prices the book on a linear factor
-// block + a Gaussian diagonal specific block (Total VaR 99); PRICE prices the SAME book on raw
+// Model vs Price lens (docs/price-var-plan.md). The MODEL prices the portfolio on a linear
+// factor block + a Gaussian diagonal specific block (Total VaR 99); PRICE prices the SAME portfolio on raw
 // historical stock returns — no model at all (Price VaR 99). /var_bridge explains the gap in
 // four ordered, additive terms. Tufte/Few: grey + one accent, direct labels, no legend.
 import { useApp } from "../context/AppContext";
@@ -115,14 +115,14 @@ function DisagreementScatter({ rows }: { rows: VarBridgeDisagreement[] }) {
 }
 
 export function ModelVsPrice() {
-  const { date, book, scenario } = useApp();
-  const q = useVarBridge(date, book, scenario);
+  const { date, manager, scenario } = useApp();
+  const q = useVarBridge(date, manager, scenario);
 
   return (
     <main className="lens">
       <h1>Model vs Price</h1>
       <p className="sub">
-        {book} · as-of {date} · set {scenario} — the model&rsquo;s factor + Gaussian-specific
+        {manager} · as-of {date} · set {scenario} — the model&rsquo;s factor + Gaussian-specific
         VaR against a historical simulation on raw stock returns, no model at all
       </p>
 
@@ -171,7 +171,7 @@ export function ModelVsPrice() {
 
               <h2>Coverage</h2>
               <p className="small">
-                {pct(b.coverage.at_tail, 1)} of book weight was actually priced on the book&rsquo;s own
+                {pct(b.coverage.at_tail, 1)} of portfolio weight was actually priced on the portfolio&rsquo;s own
                 Price-VaR tail day.{" "}
                 {b.coverage.never_priced_weight > 0 &&
                   `${pct(b.coverage.never_priced_weight, 1)} of weight has NO price history at all `
@@ -226,7 +226,7 @@ export function ModelVsPrice() {
                   A large <strong>specific distribution</strong> term is the missing-factor signal:
                   realized residual correlation the Gaussian diagonal block cannot represent (see
                   Attribution &rarr; PnL for the residual diagnostics). A large{" "}
-                  <strong>exposure drift</strong> term means the book&rsquo;s loadings moved a lot over
+                  <strong>exposure drift</strong> term means the portfolio&rsquo;s loadings moved a lot over
                   the window — check Drift for rotation (deliberate) vs re-pricing (unintentional).
                   A large <strong>coverage</strong> term is a model blind spot, not a risk number to act
                   on directly. The per-name driver label is a heuristic on magnitude, not an exact
@@ -238,8 +238,8 @@ export function ModelVsPrice() {
               <div style={{ maxWidth: "46rem" }}>
                 <h2>Risk-manager read</h2>
                 <StreamPanel path="/var_bridge/analysis"
-                  body={{ date, book, set: scenario }}
-                  cacheKey={`var_bridge:${date}:${book}:${scenario}`}
+                  body={{ date, manager, set: scenario }}
+                  cacheKey={`var_bridge:${date}:${manager}:${scenario}`}
                   label="Generate Model-vs-Price read" />
               </div>
             </>

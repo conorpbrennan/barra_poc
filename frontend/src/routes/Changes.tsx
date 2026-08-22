@@ -1,5 +1,5 @@
 // Changes lens (render_whatchanged): the deterministic QoQ diff (entered/exited/resized, factor
-// drift attribution, book risk delta) + an on-demand streamed "what changed" read (§7).
+// drift attribution, portfolio risk delta) + an on-demand streamed "what changed" read (§7).
 import { useApp } from "../context/AppContext";
 import { useWhatChanged } from "../api/hooks";
 import { QueryState } from "../components/ui";
@@ -7,8 +7,8 @@ import { StreamPanel } from "../components/StreamPanel";
 import { pct, signedPct, signedNum, num } from "../lib/format";
 
 export function Changes() {
-  const { date, book } = useApp();
-  const q = useWhatChanged(date, undefined, book);
+  const { date, manager } = useApp();
+  const q = useWhatChanged(date, undefined, manager);
 
   return (
     <main className="lens">
@@ -16,7 +16,7 @@ export function Changes() {
       <QueryState q={q}>
         {(d) => (
           <>
-            <p className="sub">{book} · {d.from} → {d.to} · {d.positions.n_before}→{d.positions.n_after} names</p>
+            <p className="sub">{manager} · {d.from} → {d.to} · {d.positions.n_before}→{d.positions.n_after} names</p>
 
             <div className="hgroup">
               <div>
@@ -64,7 +64,7 @@ export function Changes() {
               </tbody>
             </table>
 
-            <h2>Book risk delta</h2>
+            <h2>Portfolio risk delta</h2>
             <table className="tufte" style={{ maxWidth: "40rem" }}>
               <thead><tr><th className="label">Measure</th><th>Before</th><th>After</th><th>Δ</th></tr></thead>
               <tbody>
@@ -80,8 +80,8 @@ export function Changes() {
             </table>
 
             <h2>Risk-manager read</h2>
-            <StreamPanel path="/whatchanged/analysis" cacheKey={`wc:${book}:${d.from}:${d.to}`}
-              body={{ date, book }} label="What changed — commentary" />
+            <StreamPanel path="/whatchanged/analysis" cacheKey={`wc:${manager}:${d.from}:${d.to}`}
+              body={{ date, manager }} label="What changed — commentary" />
           </>
         )}
       </QueryState>

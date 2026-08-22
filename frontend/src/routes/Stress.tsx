@@ -1,4 +1,4 @@
-// Stress lens (render_stress): custom one-day shock (per-factor sigma → book P&L + contribution
+// Stress lens (render_stress): custom one-day shock (per-factor sigma → portfolio P&L + contribution
 // breakdown, POST /stress) and reverse stress (GET /reverse_stress — the single-factor move that
 // breaches a target loss, ranked by vulnerability). Presets fill the sigma inputs: the cube's
 // own Hypo:* definitions (served by /meta, one source), the primer's ch-09 worked example, and
@@ -13,11 +13,11 @@ import { pct, num, signedPct } from "../lib/format";
 import type { StressResult } from "../api/types";
 
 export function Stress() {
-  const { date, book } = useApp();
+  const { date, manager } = useApp();
   const { data: meta } = useMeta();
   const factors = (meta?.factors ?? []).filter((f) => f !== "Market");
   // presets: the cube's Hypo sets (verified to match /stress to float precision) + ch 09's example
-  const rvq = useReverseStress(undefined, date, book);
+  const rvq = useReverseStress(undefined, date, manager);
   const presets: { label: string; shocks: Record<string, number>; note?: string }[] = [
     ...Object.entries(meta?.hypo_shocks ?? {}).map(([set, sh]) => ({
       label: set.replace("Hypo:", ""), shocks: sh,
@@ -48,7 +48,7 @@ export function Stress() {
     setBusy(true); setErr(null);
     try {
       setResult(await apiSend<StressResult>("POST", "/stress",
-        { shocks: active, date, book, conditional,
+        { shocks: active, date, manager, conditional,
           ...(corrStress ? { vol_mult: volMult, rho: rhoBlend } : {}) }));
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
@@ -56,7 +56,7 @@ export function Stress() {
   return (
     <main className="lens">
       <h1>Stress test</h1>
-      <p className="sub">Hypothetical one-day shocks · {book} · as-of {date}</p>
+      <p className="sub">Hypothetical one-day shocks · {manager} · as-of {date}</p>
 
       <HowToRead>
         A shock is a per-factor move in σ units (that factor&rsquo;s own daily vol from the
@@ -65,15 +65,15 @@ export function Stress() {
         held still; it matches the cube&rsquo;s Hypo:* sets to float precision. The
         {" "}<em>conditional</em> loss (keep it on — ch&nbsp;09: stress tests must use correlated
         shocks) propagates the shock through the factor covariance,
-        {" "}<code>E[f|shock] = F·F_SS⁻¹·s</code>, so co-moving factors move too — on this book it
+        {" "}<code>E[f|shock] = F·F_SS⁻¹·s</code>, so co-moving factors move too — on this portfolio it
         is usually several times the naive number. Reverse stress inverts the question: the
         single-factor σ-move that produces a target loss, smallest move = most vulnerable.
         Caveats: linear (no convexity), one-day horizon, vols and correlations from the full
         history (a hot-regime factor reads too calm — check the vol ratio in the Model lens),
         and no shock touches specific risk. The <em>stressed vols &amp; correlations</em> option
-        adds a third read: book vol under F′ (vols ×m, correlations blended toward 1) — the same
-        stress as the reconcile chart&rsquo;s stressed band; the base→stressed gap is the
-        diversification the book is leaning on.
+        adds a third read: portfolio vol under F′ (vols ×m, correlations blended toward 1) — the
+        same stress as the reconcile chart&rsquo;s stressed band; the base→stressed gap is the
+        diversification the portfolio is leaning on.
       </HowToRead>
 
       <h2>Custom shock (σ per factor)</h2>
@@ -155,9 +155,9 @@ export function Stress() {
           </table>
           {result.correlation_stress && (
             <div style={{ margin: "0.8rem 0" }}>
-              <h2>Correlation stress — the book under shocked vols &amp; correlations</h2>
+              <h2>Correlation stress — the portfolio under shocked vols &amp; correlations</h2>
               <p className="small" style={{ margin: 0 }}>
-                Book daily vol {pct(result.correlation_stress.base_vol_1d, 2)} →{" "}
+                Portfolio daily vol {pct(result.correlation_stress.base_vol_1d, 2)} →{" "}
                 <strong>{pct(result.correlation_stress.stressed_vol_1d, 2)}</strong>{" "}
                 (vols ×{result.correlation_stress.vol_mult}, correlations blended{" "}
                 {result.correlation_stress.rho_blend} toward 1) · normal-approx VaR99{" "}
@@ -165,8 +165,8 @@ export function Stress() {
                 {pct(result.correlation_stress.stressed_var99_normal, 2)}
               </p>
               <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
-                Correlations only enter the aggregate: the book widens even where no single
-                factor does — that gap is the diversification the book is leaning on. Same
+                Correlations only enter the aggregate: the portfolio widens even where no single
+                factor does — that gap is the diversification the portfolio is leaning on. Same
                 stress as the reconcile chart&rsquo;s stressed band.
               </p>
             </div>
@@ -200,14 +200,14 @@ export function Stress() {
         </div>
       )}
 
-      <Reverse date={date} book={book} />
+      <Reverse date={date} manager={manager} />
     </main>
   );
 }
 
-function Reverse({ date, book }: { date: string; book: string }) {
+function Reverse({ date, manager }: { date: string; manager: string }) {
   const [loss, setLoss] = useState<number | undefined>(undefined);
-  const q = useReverseStress(loss, date, book);
+  const q = useReverseStress(loss, date, manager);
   return (
     <>
       <h2>Reverse stress — most vulnerable factor</h2>

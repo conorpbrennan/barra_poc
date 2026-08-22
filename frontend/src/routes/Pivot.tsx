@@ -17,13 +17,13 @@ import type { ViewState } from "../api/types";
 
 // ---- Hypothetical bar: price THIS pivot under what-if trades and/or factor shocks. Each query
 // runs on a transient cube branch/scenario (stateless server-side); the amber strip makes it
-// impossible to mistake a hypothetical grid for the held book. Not persisted in saved views. ----
-function HypoBar({ cfg, date, book, apply }: {
-  cfg: PivotConfig; date: string; book: string;
+// impossible to mistake a hypothetical grid for the held portfolio. Not persisted in saved views. ----
+function HypoBar({ cfg, date, manager, apply }: {
+  cfg: PivotConfig; date: string; manager: string;
   apply: (next: PivotConfig) => void;
 }) {
   const { data: meta } = useMeta();
-  const boot = useWhatif(date, book, []);          // holdings + universe for the trade picker
+  const boot = useWhatif(date, manager, []);          // holdings + universe for the trade picker
   const [pos, setPos] = useState("");
   const [wgt, setWgt] = useState("");
   const [fac, setFac] = useState("");
@@ -94,7 +94,7 @@ function HypoBar({ cfg, date, book, apply }: {
           ))}
           <span className="muted">
             — every number in this grid is branch-priced under the hypothetical
-            {cfg.whatif.length ? "" : ""}. Attribution measures stay the held book.
+            {cfg.whatif.length ? "" : ""}. Attribution measures stay the held portfolio.
           </span>
         </div>
       )}
@@ -103,7 +103,7 @@ function HypoBar({ cfg, date, book, apply }: {
 }
 
 export function Pivot() {
-  const { date, scenario, book } = useApp();
+  const { date, scenario, manager } = useApp();
   const dimsQ = useDims();
   const [mode, setMode] = useState<"grid" | "chart">("grid");
   const [showRepo, setShowRepo] = useState(false);
@@ -226,7 +226,7 @@ export function Pivot() {
   const display = (
     <div className="small" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.25rem 0.6rem" }}>
       <label className="row"><input type="checkbox" checked={cfg.heat} onChange={(e) => setCfg((c) => ({ ...c, heat: e.target.checked }))} /> heat</label>
-      <label className="row" title="% and fraction are formats of the same weight-unit numbers; $ re-queries the cube's Units context (measure × Book MV)">
+      <label className="row" title="% and fraction are formats of the same weight-unit numbers; $ re-queries the cube's Units context (measure × Manager MV)">
         units <select value={cfg.units === "dollar" ? "$" : cfg.asPct ? "%" : "fraction"} style={{ width: "5.2rem" }}
           onChange={(e) => {
             const v = e.target.value;
@@ -267,7 +267,7 @@ export function Pivot() {
       </div>
 
       {(showHypo || hypoActive) && (
-        <HypoBar cfg={cfg} date={date} book={book}
+        <HypoBar cfg={cfg} date={date} manager={manager}
           apply={(next) => { setCfg(next); reload(next); }} />
       )}
       {warning && <div className="rag-amber small" style={{ margin: "0.3rem 0" }}>⚠ {warning}</div>}

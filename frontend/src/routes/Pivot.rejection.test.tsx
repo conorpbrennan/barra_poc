@@ -1,6 +1,7 @@
-// Multi-manager Phase 3/4: with >1 book loaded, /pivot rejects the three book-independent
-// attribution measures (Factor contribution / Specific PnL / Realized PnL — baked columns with
-// no Book key, risk_api.py's _validate_pivot) with HTTP 400 and a specific explanatory message.
+// Multi-manager Phase 3/4: with >1 manager loaded, /pivot rejects the three
+// manager-independent attribution measures (Factor contribution / Specific PnL / Realized PnL —
+// baked columns with no Book key, risk_api.py's _validate_pivot) with HTTP 400 and a specific
+// explanatory message.
 // This proves the Vite Pivot lens surfaces that EXACT backend message (not a generic "request
 // failed") — usePivot's reload() already threads ApiError.message straight into the `error` state
 // Pivot.tsx renders, so this is a regression guard on that existing wiring, driven end-to-end
@@ -32,8 +33,8 @@ const DIMS = {
 const META = {
   dates: ["2024-12-31"], scenario_sets: ["HistFull"], factors: ["Market"], ts_measures: [], by_levels: [],
   managers: [
-    { book: "Soros", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
-    { book: "TigerGlobal", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
+    { manager: "Soros", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
+    { manager: "TigerGlobal", entity_name: null, firm_type: null, cik: null, n_positions_distinct: null },
   ],
 };
 
@@ -43,7 +44,7 @@ const REJECTION_MSG =
   + "loaded: they would silently read one arbitrary book's numbers under every book's label. Use "
   + "barra_pnl_attribution.py's book= precompute for correct per-book attribution instead.";
 
-// the saved view a user picks that happens to select a book-independent measure
+// the saved view a user picks that happens to select a manager-independent measure
 const REJECTED_VIEW = {
   schema_version: 1, name: "Factor contribution by name", path: "Public", created: "", updated: "",
   state: { rows: ["Factor"], cols: [], measures: ["Factor contribution"],
@@ -87,7 +88,7 @@ function renderPivot() {
   );
 }
 
-describe("Pivot — book-independent measure rejection", () => {
+describe("Pivot — manager-independent measure rejection", () => {
   it("surfaces the backend's exact rejection message, not a generic failure", async () => {
     renderPivot();
     await waitFor(() => expect(screen.getByText("Financials")).toBeInTheDocument());

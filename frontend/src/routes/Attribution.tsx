@@ -4,12 +4,12 @@
 //     factor + specific (Carino-linked), the residual diagnostics with RAG verdicts, and the §4
 //     risk↔PnL reconcile band chart (base + stressed band per factor, dot = realized, z = surprise).
 // The reconcile drawers' bar decomposition is served by /pnl_attribution/drill (2026-08-22) —
-// computed live from the frames for the requested book, NOT the /pivot cube measures: Factor
-// contribution / Specific PnL / Realized PnL are baked columns carrying ONE arbitrary book's
-// weight per name once >1 book is loaded (CLAUDE.md "book-independent attribution limitation"),
-// so _validate_pivot rejects them outright on the multi-book build. The "open in Pivot →" deep
-// links still target that cube trio (for the single-book case where it's correct and drillable
-// further), so they're hidden whenever /dims doesn't offer the trio (pruned on multi-book).
+// computed live from the frames for the requested manager, NOT the /pivot cube measures: Factor
+// contribution / Specific PnL / Realized PnL are baked columns carrying ONE arbitrary manager's
+// weight per name once >1 manager is loaded (CLAUDE.md "book-independent attribution limitation"),
+// so _validate_pivot rejects them outright on the multi-manager build. The "open in Pivot →" deep
+// links still target that cube trio (for the single-manager case where it's correct and drillable
+// further), so they're hidden whenever /dims doesn't offer the trio (pruned on multi-manager).
 // Tufte/Few: grey + one accent, direct labels, colour only where it means something.
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -24,11 +24,11 @@ import type {
 } from "../api/types";
 import { TipBox, svgPoint } from "../components/svg";
 import { StreamPanel } from "../components/StreamPanel";
-import { HowToRead, QueryState, GuardedQueryState, RagDot, isBookMismatch } from "../components/ui";
+import { HowToRead, QueryState, GuardedQueryState, RagDot, isManagerMismatch } from "../components/ui";
 import { pct, signedPct, num, signedNum } from "../lib/format";
 
-// the book-independent trio /pivot rejects on a multi-book cube (see the header note) — the
-// deep links below only make sense while /dims still offers them (single-book data)
+// the manager-independent trio /pivot rejects on a multi-manager cube (see the header note) —
+// the deep links below only make sense while /dims still offers them (single-manager data)
 const ATTRIBUTION_TRIO = ["Factor contribution", "Specific PnL", "Realized PnL"];
 const hasTrio = (dims?: Dims) => !!dims && ATTRIBUTION_TRIO.every((m) => dims.measures.includes(m));
 
@@ -140,7 +140,7 @@ export function BandChart({ lk, width = 700, onDot }: {
   lk: PnlLinkageResult; width?: number;
   onDot?: (name: string) => void;      // linked selection: a factor dot opens its drill drawer
 }) {
-  const rows = [...lk.rows, null, lk.book_total];   // null = separator
+  const rows = [...lk.rows, null, lk.manager_total];   // null = separator
   const px = 52, cx = 350, labelX = 118, zX = width - 66;
   const rh = 30, y0 = 26;
   let y = y0;
@@ -166,7 +166,7 @@ export function BandChart({ lk, width = 700, onDot }: {
         <rect x={cx - halfS} y={y} width={2 * halfS} height={14} fill="#ece9e0" />
         <rect x={cx - 2 * px} y={y} width={4 * px} height={14} fill="#d9d5ca" />
         <text x={labelX} y={y + 11} textAnchor="end" fontSize={12.5}
-          fontWeight={r.kind === "book" ? 600 : 400} fill="#2a2a26">{r.name}</text>
+          fontWeight={r.kind === "manager" ? 600 : 400} fill="#2a2a26">{r.name}</text>
         <g data-dot={drillable ? r.name : undefined}
           onClick={drillable ? () => onDot(r.name) : undefined}
           style={drillable ? { cursor: "pointer" } : undefined}>
@@ -270,11 +270,11 @@ const winDates = (dates: string[], T: string, to: string) =>
   dates.filter((d) => d >= T && d < to);   // fwd-month convention: value at d covers d → d+1m
 
 // one name's breach explained: per-factor contribution over the window + the T loadings, served
-// live per-book by /pnl_attribution/drill (not the /pivot cube trio — see the header note)
+// live per-manager by /pnl_attribution/drill (not the /pivot cube trio — see the header note)
 export function PositionDrawer({ p, lk, dates, dims }: {
   p: PnlLinkagePosition; lk: PnlLinkageResult; dates: string[]; dims?: Dims;
 }) {
-  const d = usePnlDrillPosition(lk.T, lk.to, lk.book, p.position);
+  const d = usePnlDrillPosition(lk.T, lk.to, lk.manager, p.position);
   const nFactors = lk.rows.filter((r) => r.kind === "factor").length;
   return (
     <div style={{ padding: "0.4rem 0 0.55rem 1.35rem" }}>
@@ -308,7 +308,7 @@ export function PositionDrawer({ p, lk, dates, dims }: {
                 <p className="small" style={{ margin: "0.3rem 0 0" }}>
                   <Link className="muted" to={pivotDrill({ rows: ["Factor"],
                     measures: ATTRIBUTION_TRIO,
-                    filters: { Book: [lk.book], Position: [p.position], Date: winDates(dates, lk.T, lk.to) },
+                    filters: { Book: [lk.manager], Position: [p.position], Date: winDates(dates, lk.T, lk.to) },
                     description: `${p.name.toUpperCase()} breach drill, ${lk.T} → ${lk.to}: `
                       + "per-factor contribution (fwd-month) + specific. Specific PnL repeats "
                       + "across factor rows (it has no factor dimension)"
@@ -360,11 +360,11 @@ function FragRow({ row: p, open, onToggle, lk, dates, dims }: {
 }
 
 // the inverse read for a factor row: which names carried this factor's move, likewise served
-// live per-book by /pnl_attribution/drill
+// live per-manager by /pnl_attribution/drill
 export function FactorDrawer({ row, lk, dates, dims, onClose }: {
   row: PnlLinkageRow; lk: PnlLinkageResult; dates: string[]; dims?: Dims; onClose: () => void;
 }) {
-  const d = usePnlDrillFactor(lk.T, lk.to, lk.book, row.name);
+  const d = usePnlDrillFactor(lk.T, lk.to, lk.manager, row.name);
   return (
     <div style={{ borderTop: "1px solid #d8d5cd", borderBottom: "1px solid #d8d5cd",
       padding: "0.45rem 0 0.55rem", margin: "0.3rem 0 0.5rem" }}>
@@ -395,7 +395,7 @@ export function FactorDrawer({ row, lk, dates, dims, onClose }: {
                 <p className="small" style={{ margin: "0.3rem 0 0" }}>
                   <Link className="muted" to={pivotDrill({ rows: ["Issuer"],
                     measures: ["Factor contribution"],
-                    filters: { Book: [lk.book], Factor: [row.name], Date: winDates(dates, lk.T, lk.to) },
+                    filters: { Book: [lk.manager], Factor: [row.name], Date: winDates(dates, lk.T, lk.to) },
                     description: `${row.name} drill, ${lk.T} → ${lk.to}: which names carried `
                       + "the factor's move (per-issuer contribution, fwd-month convention)." })}>
                     open in Pivot →</Link>
@@ -419,8 +419,8 @@ export function irSignificance(ir: number | null | undefined, nMonths: number) {
 }
 
 // ---- residual explorer: the specific PnL name by name (winners / losers + persistence) ----
-function ResidualExplorer({ from, to, book }: { from?: string; to?: string; book: string }) {
-  const q = usePnlNames(from, to, book);
+function ResidualExplorer({ from, to, manager }: { from?: string; to?: string; manager: string }) {
+  const q = usePnlNames(from, to, manager);
   const cols = (
     <thead><tr><th className="label">Name</th><th>Specific</th><th>Factor</th>
       <th>Persistence</th><th>Months +</th></tr></thead>
@@ -465,9 +465,9 @@ function ResidualExplorer({ from, to, book }: { from?: string; to?: string; book
 type Preset = "t12m" | "ytd" | "inception" | "custom";
 
 function PnlTab() {
-  const { book } = useApp();
-  const base = usePnlAttribution(undefined, undefined, book);   // default window; also supplies the calendar bounds
-  const cal = base.data && !isBookMismatch(base.data) ? base.data.calendar : undefined;
+  const { manager } = useApp();
+  const base = usePnlAttribution(undefined, undefined, manager);   // default window; also supplies the calendar bounds
+  const cal = base.data && !isManagerMismatch(base.data) ? base.data.calendar : undefined;
   const [preset, setPreset] = useState<Preset>("t12m");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -477,9 +477,9 @@ function PnlTab() {
     preset === "inception" && cal ? cal.min :
     preset === "custom" && customFrom ? customFrom : undefined;
   const to = preset === "custom" && customTo ? customTo : undefined;
-  const q = usePnlAttribution(from, to, book);
-  const rq = usePnlResidual(from, to, book);
-  const lq = usePnlLinkage(horizon, undefined, book);
+  const q = usePnlAttribution(from, to, manager);
+  const rq = usePnlResidual(from, to, manager);
+  const lq = usePnlLinkage(horizon, undefined, manager);
   const meta = useMeta();
   const dims = useDims();
   // one drill open at a time (accordion) — a chart dot opens a factor drawer, a table row a
@@ -525,7 +525,7 @@ function PnlTab() {
               Three return conventions meet here, one per axis. <em>Across sources</em> (factors +
               specific) the split is <em>arithmetic</em>: each period, realized = Σ factor
               contributions + specific — an exact identity (the model&rsquo;s own reconstruction
-              R = L·f + ε, tied at machine precision). <em>Across time</em> the book compounds
+              R = L·f + ε, tied at machine precision). <em>Across time</em> the portfolio compounds
               {" "}<em>geometrically</em>: R_G = Π(1+r_t) − 1, and plain time-sums of the
               arithmetic contributions miss the compounding cross-terms (two +10% days sum to
               +20% but compound to +21% — the extra 1% belongs to no single source).
@@ -549,7 +549,7 @@ function PnlTab() {
                   ? top.avg_exposure * top.cum_factor_return : null;
                 return (
                   <>
-                    {" "}The factor table, column by column: <em>avg exposure</em> is the book&rsquo;s
+                    {" "}The factor table, column by column: <em>avg exposure</em> is the portfolio&rsquo;s
                     mean net loading x̄_k over the window on the drifting buy-and-hold weight path
                     (not the frozen x(T) the reconcile bands use; Market reads{" "}
                     {num(a.factors.find((r) => r.factor === "Market")?.avg_exposure ?? 1, 2)}, below
@@ -559,7 +559,7 @@ function PnlTab() {
                     note it is NOT avg&nbsp;exposure × cum&nbsp;return
                     ({top.factor}: {est !== null ? signedPct(est, 1) : "—"} naive vs{" "}
                     {signedPct(top.contribution, 1)} actual): the gap is timing covariance, whether
-                    the book carried more exposure on the factor&rsquo;s good days.
+                    the portfolio carried more exposure on the factor&rsquo;s good days.
                     {" "}<em>% of total</em> is contribution ÷ the geometric headline — happily
                     beyond 100% when another source gave money back. <em>t-stat</em> is the mean
                     daily contribution over its standard error — t = IR·√T humility per factor: a
@@ -569,7 +569,7 @@ function PnlTab() {
                         clear{sig.length === 1 ? "s" : ""} |t| &gt; 2 this window)</>
                       : <> (no factor clears |t| &gt; 2 this window)</>}. Two reads no single
                     column gives: exposure without return (a tilt that paid nothing) and return
-                    without exposure (a factor that ran while the book stood flat — missed, or
+                    without exposure (a factor that ran while the portfolio stood flat — missed, or
                     hedged by design).
                   </>
                 );
@@ -603,13 +603,13 @@ function PnlTab() {
               </tbody>
             </table>
             <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
-              Each factor line is x·f — the return on the pure-factor portfolio the book
+              Each factor line is x·f — the return on the pure-factor portfolio the manager
               implicitly held. Contributions are Cariño-linked so they sum exactly to the
               geometric period return; the chart above is the unlinked arithmetic path.
             </p>
             <p className="muted small">
               Coverage: {a.coverage.mean_priced_share === null ? "—"
-                : pct(a.coverage.mean_priced_share, 0)} of book weight priced on average
+                : pct(a.coverage.mean_priced_share, 0)} of portfolio weight priced on average
               {a.coverage.unpriced.length
                 ? ` · unpriced (${a.coverage.unpriced.length}): ${a.coverage.unpriced.slice(0, 8)
                     .map((u) => `${u.name.toUpperCase()} (${pct(u.weight, 1)})`).join(", ")}`
@@ -661,11 +661,11 @@ function PnlTab() {
                     ({vr !== null ? num(vr, 2) : "—"}, {cs("Specific vol")}) is a risk-model check —
                     far above 1 means the specific block in every VaR is too small, regardless of
                     whether the picks paid. The bias stats read calibration as std of realized z
-                    (1 = calibrated, band ±√(2/W)): book {bb !== null ? num(bb, 2) : "—"} vs
+                    (1 = calibrated, band ±√(2/W)): manager {bb !== null ? num(bb, 2) : "—"} vs
                     specific {bs !== null ? num(bs, 2) : "—"}
                     {bb !== null && bs !== null && bb < 1 && bs > 1 &&
                       <> — opposite directions: the factor block over-states while specific
-                        under-states, offsetting at book level, both wrong</>}.
+                        under-states, offsetting at manager level, both wrong</>}.
                     {" "}<em>Structure:</em> autocorrelation
                     (lag-1 {l1 !== null ? signedNum(l1, 2) : "—"},
                     lag-2 {l2 !== null ? signedNum(l2, 2) : "—"}) should be ≈0 — a memoryless
@@ -674,7 +674,7 @@ function PnlTab() {
                     ({r2 !== null ? pct(r2, 0) : "—"}, {cs("Residual-vs-factor")}) is the loudest
                     check: ε should be orthogonal to the factors by construction, so any material
                     R² is P&L labelled &ldquo;specific&rdquo; that actually co-moves with factors —
-                    hidden beta at book level
+                    hidden beta at manager level
                     {topL && <>; the loadings line names the suspect
                       ({topL.factor} β {signedNum(topL.beta, 2)}, t {signedNum(topL.t_stat, 1)})
                     </>}. Diffuse concentration + a low hit rate reads as a broad systematic bleed
@@ -735,7 +735,7 @@ function PnlTab() {
         )}
       </GuardedQueryState>
 
-      <ResidualExplorer from={from} to={to} book={book} />
+      <ResidualExplorer from={from} to={to} manager={manager} />
 
       <h2>Risk ↔ PnL reconcile</h2>
       <div className="row" style={{ marginBottom: "0.5rem" }}>
@@ -763,7 +763,7 @@ function PnlTab() {
                 dims={dims.data} onClose={() => setDrill(null)} /> : null;
             })()}
             {(() => {
-              const flagged = [...lk.rows, lk.book_total].filter((r) => r.driver);
+              const flagged = [...lk.rows, lk.manager_total].filter((r) => r.driver);
               if (!flagged.length) return null;
               return (
                 <div style={{ marginTop: "0.4rem" }}>
@@ -802,7 +802,7 @@ function PnlTab() {
                   <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
                     {lk.dust_excluded!.n} name{lk.dust_excluded!.n > 1 ? "s" : ""} under the{" "}
                     {pct(lk.min_weight ?? 0.001, 2)} materiality floor also breached (dust —
-                    can&rsquo;t move the book, excluded):{" "}
+                    can&rsquo;t move the portfolio, excluded):{" "}
                     {lk.dust_excluded!.names.map((d) =>
                       `${d.name.toUpperCase()} ${pct(d.weight, 2)} ${signedNum(d.z, 1)}σ`)
                       .join(", ")}
@@ -859,8 +859,8 @@ function PnlTab() {
 
 // ---- Euler contributions tab: CTR (positions, vol units) + CTV (factors, variance units) ----
 function EulerTab() {
-  const { date, book } = useApp();
-  const q = useContributions(date, book);
+  const { date, manager } = useApp();
+  const q = useContributions(date, manager);
   return (
     <QueryState q={q}>
       {(c: ContributionsResult) => (
@@ -868,7 +868,7 @@ function EulerTab() {
           <p style={{ margin: "0 0 0.6rem" }}>
             <strong style={{ fontSize: "1.25rem" }} className="num">{pct(c.vol_1d, 2)}</strong>{" "}
             <span className="muted small">
-              book daily vol (model, σ² = x&prime;Fx + w&prime;Δw) ·
+              manager daily vol (model, σ² = x&prime;Fx + w&prime;Δw) ·
               factor {c.factor_share === null ? "—" : pct(c.factor_share, 0)} of variance,
               specific {c.factor_share === null ? "—" : pct(1 - c.factor_share, 0)} ·
               normal-approx VaR99 {pct(c.var99_normal, 2)}
@@ -876,7 +876,7 @@ function EulerTab() {
           </p>
 
           <HowToRead>
-            Both tables recover the same {pct(c.vol_1d, 2)} book vol, but in different units —
+            Both tables recover the same {pct(c.vol_1d, 2)} manager vol, but in different units —
             that is the one trap here. The <em>position</em> table is the direct read: CTR = w·MCR
             is an exact Euler split of σ, so the CTR column simply sums to
             {" "}{pct(c.vol_1d, 2)}. The <em>factor</em> table works in variance: CTV_k = x_k·(Fx)_k
@@ -922,9 +922,9 @@ function EulerTab() {
             </tbody>
           </table>
           <p className="muted small">
-            CTV_k = x_k·(Fx)_k — cross-terms split 50/50; a negative line hedges the book.
+            CTV_k = x_k·(Fx)_k — cross-terms split 50/50; a negative line hedges the portfolio.
             Sums to factor variance; plus specific = total variance; √ recovers the
-            {" "}{pct(c.vol_1d, 2)} book vol.
+            {" "}{pct(c.vol_1d, 2)} manager vol.
           </p>
 
           <h2>Positions — contribution to risk (CTR)</h2>
@@ -957,7 +957,7 @@ function EulerTab() {
           </table>
           <p className="muted small">
             MCR is a rate (risk per unit weight — nothing to sum); CTR = w·MCR sums exactly to
-            book vol (Euler). CTR is in vol units, CTV in variance units — never compare the two
+            manager vol (Euler). CTR is in vol units, CTV in variance units — never compare the two
             directly. Model vol on the full factor-return history, distinct from the
             scenario-VaR views.
           </p>

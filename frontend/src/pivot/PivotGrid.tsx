@@ -36,7 +36,7 @@ export function fmt(v: unknown, cfg: PivotConfig, dollar = false): string {
 
 // Measures that ARE dollars regardless of the Units toggle (not converted by units=dollar, so
 // never in `dollar_measures`): always money-formatted.
-const ALWAYS_DOLLAR = new Set(["Market value", "Book MV"]);
+const ALWAYS_DOLLAR = new Set(["Market value", "Manager MV"]);
 
 // faint accent heatmap, scaled within a column's |range|
 function heatStyle(v: number, min: number, max: number) {
@@ -134,7 +134,7 @@ export function PivotGrid({
   const pinnedBottomRowData = useMemo(() => {
     if (!cfg.totals || !Object.keys(grand).length) return [];
     const cols = colMembers.length ? colMembers : [""];
-    const tr: GridRow = { __label: "Total (book)", __total: true, __ord: -1 };
+    const tr: GridRow = { __label: "Total (manager)", __total: true, __ord: -1 };
     for (const cm of cols) for (const m of measures) {
       const key = `${cm}${COL_SEP}${m}`;
       tr[key] = grand[key] ?? (cm === TOTAL_COL ? grand[`${COL_SEP}${m}`] : null) ?? null;

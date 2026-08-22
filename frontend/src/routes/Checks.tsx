@@ -7,10 +7,10 @@ import { QueryState, RagDot } from "../components/ui";
 import { pct, num, ragLabel } from "../lib/format";
 
 export function Checks() {
-  const { date, scenario, book } = useApp();
-  const limits = useLimits(date, scenario, book);
+  const { date, scenario, manager } = useApp();
+  const limits = useLimits(date, scenario, manager);
   const dq = useDq();
-  const bt = useBacktest("HistFull", date, book);
+  const bt = useBacktest("HistFull", date, manager);
 
   return (
     <main className="lens">
@@ -45,7 +45,7 @@ export function Checks() {
           ) : <div className="muted small">no limits configured</div>
         }
       </QueryState>
-      {limits.data?.cross_book_thresholds && limits.data.calibration_note && (
+      {limits.data?.cross_manager_thresholds && limits.data.calibration_note && (
         <p className="muted small" style={{ maxWidth: "46rem", margin: "0.3rem 0 0" }}>
           {limits.data.calibration_note}
         </p>

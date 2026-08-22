@@ -1,5 +1,5 @@
 // Model lens — the fit-for-purpose family (It's Just Beta ch 06 + 08):
-//   * Calibration: rolling bias statistic b vs the 1 ± √(2/W) acceptance band (book + specific),
+//   * Calibration: rolling bias statistic b vs the 1 ± √(2/W) acceptance band (manager + specific),
 //     plus 2σ exceedance counts — where in the calendar the risk forecast drifted.
 //   * Regression health: monthly weighted cross-sectional R² trend and the per-factor |t|>2
 //     admission table from the builder's regression_stats artifact.
@@ -121,7 +121,7 @@ function corrBg(v: number): string {
   return `rgba(107,107,99,${a.toFixed(3)})`;
 }
 
-// ---- exposure profile: one factor's cross-section, the book overlaid ----
+// ---- exposure profile: one factor's cross-section, the held portfolio overlaid ----
 function ExposureProfile() {
   const { date } = useApp();
   const { data: meta } = useMeta();
@@ -179,7 +179,7 @@ function ExposureProfile() {
                 <text x={pad.l} y={H - 3} fontSize={10} fill={FAINT}>{num(x0, 0)}</text>
                 <text x={pad.l + iw} y={H - 3} textAnchor="end" fontSize={10} fill={FAINT}>{num(x1, 0)}</text>
                 <text x={pad.l + iw} y={pad.t + 10} textAnchor="end" fontSize={10.5} fill={FAINT}>
-                  cross-section · dots = held book (size = weight)</text>
+                  cross-section · dots = held portfolio (size = weight)</text>
               </svg>
               <p className="muted small">{p.note}</p>
             </div>
@@ -263,14 +263,14 @@ export function Model() {
         {(v) => (
           <div style={{ maxWidth: "52rem" }}>
             <div className="row" style={{ gap: "1.5rem", flexWrap: "wrap" }}>
-              <BiasChart s={v.series.book} label="book" />
+              <BiasChart s={v.series.manager} label="manager" />
               <BiasChart s={v.series.specific} label="specific" />
             </div>
             <p className="muted small" style={{ marginTop: "0.3rem" }}>
               b = std(realized / predicted vol) over a trailing {v.window}m window; the shaded
               band is the 95% acceptance range 1 ± √(2/{v.window}). Above the band = risk
               under-forecast. 2σ exceedances:{" "}
-              book {v.series.book.exceedance_2s === null ? "—" : pct(v.series.book.exceedance_2s, 1)},
+              manager {v.series.manager.exceedance_2s === null ? "—" : pct(v.series.manager.exceedance_2s, 1)},
               specific {v.series.specific.exceedance_2s === null ? "—" : pct(v.series.specific.exceedance_2s, 1)}{" "}
               of months vs ≈{pct(v.expected_exceedance_2s, 1)} expected.
             </p>

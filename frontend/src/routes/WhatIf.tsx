@@ -1,5 +1,5 @@
-// What-if lens (render_whatif): resize/drop held names or add a universe name, then recompute book
-// risk before→after. /whatif with empty trades bootstraps the editor (holdings + universe + before
+// What-if lens (render_whatif): resize/drop held names or add a universe name, then recompute
+// portfolio risk before→after. /whatif with empty trades bootstraps the editor (holdings + universe + before
 // figures); a run posts the modified weights and returns before/after/delta. "Before" matches the
 // cube's reported figures exactly — only the delta is new information.
 import { useMemo, useState } from "react";
@@ -11,8 +11,8 @@ import { pct, num, signedPct, signedNum } from "../lib/format";
 import type { WhatIfResult } from "../api/types";
 
 // ---- hedge panel: vol before/after neutralizing each factor, + the min-variance market h* ----
-function HedgePanel({ date, book }: { date: string; book: string }) {
-  const q = useHedge(date, book);
+function HedgePanel({ date, manager }: { date: string; manager: string }) {
+  const q = useHedge(date, manager);
   return (
     <>
       <h2>Hedge — remove the risk you don&rsquo;t want</h2>
@@ -20,7 +20,7 @@ function HedgePanel({ date, book }: { date: string; book: string }) {
         {(h) => (
           <div style={{ maxWidth: "44rem" }}>
             <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
-              Book daily vol {pct(h.vol_base, 2)} (specific floor {pct(h.specific_vol, 2)} — no
+              Portfolio daily vol {pct(h.vol_base, 2)} (specific floor {pct(h.specific_vol, 2)} — no
               factor hedge touches it).
               {h.market_hedge && (
                 <> Min-variance market hedge h* = {num(h.market_hedge.h_star, 2)} →
@@ -68,9 +68,9 @@ const RISK_ROWS: { key: keyof WhatIfResult["before"]; label: string; fmt: (v: nu
 ];
 
 export function WhatIf() {
-  const { date, book } = useApp();
-  const boot = useWhatif(date, book, []);
-  const contrib = useContributions(date, book);   // CTR ranking feeds the presets
+  const { date, manager } = useApp();
+  const boot = useWhatif(date, manager, []);
+  const contrib = useContributions(date, manager);   // CTR ranking feeds the presets
 
   // edited weights keyed by position; undefined = unchanged
   const [edits, setEdits] = useState<Record<string, number>>({});
@@ -100,11 +100,11 @@ export function WhatIf() {
     const top5 = ps.slice(0, 5);
     return [
       { label: `Drop ${top.ticker.toUpperCase()} (top risk name)`,
-        note: `CTR ${(top.ctr * 100).toFixed(2)}% — the largest single contribution to book vol`,
+        note: `CTR ${(top.ctr * 100).toFixed(2)}% — the largest single contribution to portfolio vol`,
         edits: { [top.position]: 0 } },
       { label: "Halve the top-5 risk names",
         note: `halves ${top5.map((p) => p.ticker.toUpperCase()).join(", ")} — `
-          + `${((contrib.data?.sum_ctr ? top5.reduce((s, p) => s + p.ctr, 0) / contrib.data.sum_ctr : 0) * 100).toFixed(0)}% of book vol`,
+          + `${((contrib.data?.sum_ctr ? top5.reduce((s, p) => s + p.ctr, 0) / contrib.data.sum_ctr : 0) * 100).toFixed(0)}% of portfolio vol`,
         edits: Object.fromEntries(top5.map((p) => [p.position, r5(p.weight / 2)])) },
     ];
   }, [contrib.data]);
@@ -113,17 +113,17 @@ export function WhatIf() {
     if (!trades.length) { setErr("edit at least one weight"); return; }
     setBusy(true); setErr(null);
     try {
-      setResult(await apiSend<WhatIfResult>("POST", "/whatif", { date, book, trades }));
+      setResult(await apiSend<WhatIfResult>("POST", "/whatif", { date, manager, trades }));
     } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
   }
 
   return (
     <main className="lens">
       <h1>Pre-trade what-if</h1>
-      <p className="sub">Resize / drop / add names; recompute book risk before → after · as-of {date}</p>
+      <p className="sub">Resize / drop / add names; recompute portfolio risk before → after · as-of {date}</p>
 
       <HowToRead>
-        Edits are <em>absolute target weights</em> (0.05 = 5% of book; 0 drops the name; names
+        Edits are <em>absolute target weights</em> (0.05 = 5% of the portfolio; 0 drops the name; names
         from the coverage universe can be added). The other weights are <em>not</em>
         renormalized — resizing one name changes gross and net, which is the point: you are
         trading, not rebasing. &ldquo;Before&rdquo; reproduces the cube&rsquo;s reported figures
@@ -145,7 +145,7 @@ export function WhatIf() {
                 <p className="muted small" style={{ maxWidth: "26rem" }}>
                   Not priced by the model this date (no loadings — outside free-data coverage):{" "}
                   {boot.data!.unpriced!.map((u) => `${u.ticker} ${pct(u.weight)}`).join(", ")}.
-                  Book risk reads on the remaining {pct(boot.data?.priced_weight ?? 1)} of weight.
+                  Portfolio risk reads on the remaining {pct(boot.data?.priced_weight ?? 1)} of weight.
                 </p>
               )}
               {presets.length > 0 && (
@@ -223,7 +223,7 @@ export function WhatIf() {
           </div>
         )}
       </QueryState>
-      <HedgePanel date={date} book={book} />
+      <HedgePanel date={date} manager={manager} />
     </main>
   );
 }

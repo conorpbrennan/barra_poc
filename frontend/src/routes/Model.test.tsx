@@ -14,21 +14,21 @@ function series(bs: number[]): ValidationSeries {
 
 describe("BiasChart", () => {
   it("draws the acceptance band and an ink line when calibrated", () => {
-    const { container, getByText } = render(<BiasChart s={series([0.9, 1.0, 1.1, 0.95])} label="book" />);
+    const { container, getByText } = render(<BiasChart s={series([0.9, 1.0, 1.1, 0.95])} label="manager" />);
     expect(container.querySelector("rect")).toBeTruthy();          // the shaded band
     const line = container.querySelector("path");
     expect(line?.getAttribute("stroke")).toBe("#111");
-    getByText("book");
+    getByText("manager");
     getByText(/b 0\.95/);
   });
 
   it("turns the line red when the latest b breaches the band", () => {
-    const { container } = render(<BiasChart s={series([1.0, 1.1, 1.3, 1.5])} label="book" />);
+    const { container } = render(<BiasChart s={series([1.0, 1.1, 1.3, 1.5])} label="manager" />);
     expect(container.querySelector("path")?.getAttribute("stroke")).toBe("#a8322a");
   });
 
   it("renders a placeholder for <2 points", () => {
-    const { getByText } = render(<BiasChart s={series([1.0])} label="book" />);
+    const { getByText } = render(<BiasChart s={series([1.0])} label="manager" />);
     getByText("insufficient history");
   });
 });

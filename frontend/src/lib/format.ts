@@ -1,4 +1,4 @@
-// Number formatting. Risk numbers are fractions of book value (0.035 = 3.5%); VaR/ES/vol are
+// Number formatting. Risk numbers are fractions of portfolio value (0.035 = 3.5%); VaR/ES/vol are
 // losses reported positive. Keep tabular alignment and don't over-state precision.
 
 export function pct(v: number | null | undefined, dp = 2): string {

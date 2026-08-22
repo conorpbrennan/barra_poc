@@ -1,4 +1,4 @@
-// Drift lens (render_drift): the book's net factor exposure over time, the pre/post-split drift
+// Drift lens (render_drift): the portfolio's net factor exposure over time, the pre/post-split drift
 // ranked, and each factor's drift decomposed into entered/exited/reweighted/loading_drift with a
 // per-factor "lean" (rotation → benchmark vs re-pricing → hedge).
 import { useState } from "react";
@@ -12,9 +12,9 @@ import type { Rec } from "../api/types";
 const STYLE = ["Size", "Value", "Momentum", "ResidVol", "Beta", "NonLinSize", "RateBeta", "NdxBeta", "Leverage"];
 
 export function Drift() {
-  const { book } = useApp();
+  const { manager } = useApp();
   const [split, setSplit] = useState("2021-01-01");
-  const q = useDrift(split, book);
+  const q = useDrift(split, manager);
 
   return (
     <main className="lens">

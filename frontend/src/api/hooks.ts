@@ -1,6 +1,6 @@
 // TanStack Query hooks over risk_api.py. The 5-min staleTime mirrors the Streamlit
 // @st.cache_data(ttl=300): GETs cache, dedupe, and refetch on context change. Query keys carry
-// every parameter so a context-bar change (book/date/scenario) refetches the right slice.
+// every parameter so a context-bar change (manager/date/scenario) refetches the right slice.
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import { apiGet, apiSend } from "./client";
 import type {
@@ -10,7 +10,7 @@ import type {
   PnlAttributionResult, PnlResidualResult, PnlLinkageResult, ContributionsResult,
   ValidationResult, RegressionResult, FactorCovResult,
   HedgeResult, ExposureProfileResult, FactorPortfolioResult, PnlNamesResult,
-  BookMismatch, VarBridgeResult, PnlDrillPositionResult, PnlDrillFactorResult,
+  ManagerMismatch, VarBridgeResult, PnlDrillPositionResult, PnlDrillFactorResult,
 } from "./types";
 
 export interface Trade { position: string; weight: number }
@@ -37,18 +37,18 @@ export function usePivot(
   });
 }
 
-export function useTrends(set: string, measures: string, by?: string, book = "Soros") {
+export function useTrends(set: string, measures: string, by?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["trends", set, measures, by ?? "", book],
-    queryFn: () => apiGet<TrendsResult>("/trends", { set, measures, by, book }),
+    queryKey: ["trends", set, measures, by ?? "", manager],
+    queryFn: () => apiGet<TrendsResult>("/trends", { set, measures, by, manager }),
     ...common,
   });
 }
 
-export function useLimits(date: string, set: string, book: string) {
+export function useLimits(date: string, set: string, manager: string) {
   return useQuery({
-    queryKey: ["limits", date, set, book],
-    queryFn: () => apiGet<LimitsResult>("/limits", { date, set, book }),
+    queryKey: ["limits", date, set, manager],
+    queryFn: () => apiGet<LimitsResult>("/limits", { date, set, manager }),
     enabled: !!date,
     ...common,
   });
@@ -58,80 +58,80 @@ export function useDq() {
   return useQuery({ queryKey: ["dq"], queryFn: () => apiGet<DqResult>("/dq"), ...common });
 }
 
-export function useBacktest(set: string, date: string, book: string) {
+export function useBacktest(set: string, date: string, manager: string) {
   return useQuery({
-    queryKey: ["backtest", set, date, book],
-    queryFn: () => apiGet<BacktestResult>("/backtest", { set, date, book }),
+    queryKey: ["backtest", set, date, manager],
+    queryFn: () => apiGet<BacktestResult>("/backtest", { set, date, manager }),
     enabled: !!date,
     ...common,
   });
 }
 
-export function useDrawdown(set: string, date: string, book: string) {
+export function useDrawdown(set: string, date: string, manager: string) {
   return useQuery({
-    queryKey: ["drawdown", set, date, book],
-    queryFn: () => apiGet<DrawdownResult>("/drawdown", { set, date, book }),
+    queryKey: ["drawdown", set, date, manager],
+    queryFn: () => apiGet<DrawdownResult>("/drawdown", { set, date, manager }),
     enabled: !!date,
     ...common,
   });
 }
 
-export function useLiquidity(date: string, book: string, participation: number, horizon: number) {
+export function useLiquidity(date: string, manager: string, participation: number, horizon: number) {
   return useQuery({
-    queryKey: ["liquidity", date, book, participation, horizon],
-    queryFn: () => apiGet<LiquidityResult>("/liquidity", { date, book, participation, horizon }),
+    queryKey: ["liquidity", date, manager, participation, horizon],
+    queryFn: () => apiGet<LiquidityResult>("/liquidity", { date, manager, participation, horizon }),
     enabled: !!date,
     ...common,
   });
 }
 
-export function useReverseStress(loss: number | undefined, date: string, book: string) {
+export function useReverseStress(loss: number | undefined, date: string, manager: string) {
   return useQuery({
-    queryKey: ["reverse_stress", loss ?? null, date, book],
-    queryFn: () => apiGet<ReverseStressResult>("/reverse_stress", { loss, date, book }),
+    queryKey: ["reverse_stress", loss ?? null, date, manager],
+    queryFn: () => apiGet<ReverseStressResult>("/reverse_stress", { loss, date, manager }),
     enabled: !!date,
     ...common,
   });
 }
 
-// These four read a SINGLE-BOOK precomputed artifact (barra_universe_membership/funnel/span/
-// drift.py) — risk_api.py's `_book_guard` (multi-manager Phase 3) returns a `BookMismatch`
-// payload, HTTP 200, instead of the normal shape when `book` isn't verifiably the one the
-// artifact covers. `book` defaults to "Soros" to match the endpoints' own default exactly, so an
-// omitted book is byte-identical to pre-Phase-4 behaviour.
-export function useUniverse(date?: string, book = "Soros") {
+// These four read a SINGLE-MANAGER precomputed artifact (barra_universe_membership/funnel/span/
+// drift.py) — risk_api.py's `_manager_guard` (multi-manager Phase 3) returns a `ManagerMismatch`
+// payload, HTTP 200, instead of the normal shape when `manager` isn't verifiably the one the
+// artifact covers. `manager` defaults to "Soros" to match the endpoints' own default exactly, so
+// an omitted manager is byte-identical to pre-Phase-4 behaviour.
+export function useUniverse(date?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["universe", date ?? "", book],
-    queryFn: () => apiGet<UniverseResult | BookMismatch>("/universe", { date, book }),
+    queryKey: ["universe", date ?? "", manager],
+    queryFn: () => apiGet<UniverseResult | ManagerMismatch>("/universe", { date, manager }),
     ...common,
   });
 }
-export function useFunnel(date?: string, book = "Soros") {
+export function useFunnel(date?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["funnel", date ?? "", book],
-    queryFn: () => apiGet<FunnelResult | BookMismatch>("/funnel", { date, book }),
+    queryKey: ["funnel", date ?? "", manager],
+    queryFn: () => apiGet<FunnelResult | ManagerMismatch>("/funnel", { date, manager }),
     ...common,
   });
 }
-export function useSpan(date?: string, fx = "Size", fy = "ResidVol", book = "Soros") {
+export function useSpan(date?: string, fx = "Size", fy = "ResidVol", manager = "Soros") {
   return useQuery({
-    queryKey: ["span", date ?? "", fx, fy, book],
-    queryFn: () => apiGet<SpanResult | BookMismatch>("/span", { date, fx, fy, book }),
+    queryKey: ["span", date ?? "", fx, fy, manager],
+    queryFn: () => apiGet<SpanResult | ManagerMismatch>("/span", { date, fx, fy, manager }),
     ...common,
   });
 }
-export function useDrift(split = "2021-01-01", book = "Soros") {
+export function useDrift(split = "2021-01-01", manager = "Soros") {
   return useQuery({
-    queryKey: ["drift", split, book],
-    queryFn: () => apiGet<DriftResult | BookMismatch>("/drift", { split, book }),
+    queryKey: ["drift", split, manager],
+    queryFn: () => apiGet<DriftResult | ManagerMismatch>("/drift", { split, manager }),
     ...common,
   });
 }
 
-export function useWhatChanged(date?: string, prev?: string, book = "Soros") {
+export function useWhatChanged(date?: string, prev?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["whatchanged", date ?? "", prev ?? "", book],
-    queryFn: () => apiGet<WhatChangedResult>("/whatchanged", { date, prev, book }),
+    queryKey: ["whatchanged", date ?? "", prev ?? "", manager],
+    queryFn: () => apiGet<WhatChangedResult>("/whatchanged", { date, prev, manager }),
     ...common,
   });
 }
@@ -147,52 +147,52 @@ export function useAttribution(date: string, set: string, by: string) {
 
 // /whatif is POST: empty trades bootstraps the editor (holdings + universe + before figures);
 // non-empty returns before/after/delta. Used by the Overview (gross/net/HHI) and the What-if lens.
-export function useWhatif(date: string, book: string, trades: Trade[]) {
+export function useWhatif(date: string, manager: string, trades: Trade[]) {
   return useQuery({
-    queryKey: ["whatif", date, book, JSON.stringify(trades)],
-    queryFn: () => apiSend<WhatIfResult>("POST", "/whatif", { date, book, trades }),
+    queryKey: ["whatif", date, manager, JSON.stringify(trades)],
+    queryFn: () => apiSend<WhatIfResult>("POST", "/whatif", { date, manager, trades }),
     enabled: !!date,
     ...common,
   });
 }
 
 // PnL attribution (Step 15). `from`/`to` empty strings mean the API default (trailing 12m).
-// All four /pnl_attribution* routes carry the same single-book artifact guard as
+// All four /pnl_attribution* routes carry the same single-manager artifact guard as
 // useUniverse/useFunnel/useSpan/useDrift above (barra_pnl_attribution.py's precompute).
-export function usePnlAttribution(from?: string, to?: string, book = "Soros") {
+export function usePnlAttribution(from?: string, to?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["pnl_attribution", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlAttributionResult | BookMismatch>("/pnl_attribution", { from, to, book }),
+    queryKey: ["pnl_attribution", from ?? "", to ?? "", manager],
+    queryFn: () => apiGet<PnlAttributionResult | ManagerMismatch>("/pnl_attribution", { from, to, manager }),
     ...common,
   });
 }
-export function usePnlResidual(from?: string, to?: string, book = "Soros") {
+export function usePnlResidual(from?: string, to?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["pnl_residual", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlResidualResult | BookMismatch>("/pnl_attribution/residual", { from, to, book }),
+    queryKey: ["pnl_residual", from ?? "", to ?? "", manager],
+    queryFn: () => apiGet<PnlResidualResult | ManagerMismatch>("/pnl_attribution/residual", { from, to, manager }),
     ...common,
   });
 }
-export function usePnlLinkage(horizon = 3, T?: string, book = "Soros") {
+export function usePnlLinkage(horizon = 3, T?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["pnl_linkage", horizon, T ?? "", book],
-    queryFn: () => apiGet<PnlLinkageResult | BookMismatch>("/pnl_attribution/linkage", { horizon, T, book }),
-    ...common,
-  });
-}
-
-export function useContributions(date: string, book = "Soros") {
-  return useQuery({
-    queryKey: ["contributions", date, book],
-    queryFn: () => apiGet<ContributionsResult>("/contributions", { date, book }),
+    queryKey: ["pnl_linkage", horizon, T ?? "", manager],
+    queryFn: () => apiGet<PnlLinkageResult | ManagerMismatch>("/pnl_attribution/linkage", { horizon, T, manager }),
     ...common,
   });
 }
 
-export function useCalibration(window = 24, book = "Soros") {
+export function useContributions(date: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["calibration", window, book],
-    queryFn: () => apiGet<ValidationResult>("/calibration", { window, book }),
+    queryKey: ["contributions", date, manager],
+    queryFn: () => apiGet<ContributionsResult>("/contributions", { date, manager }),
+    ...common,
+  });
+}
+
+export function useCalibration(window = 24, manager = "Soros") {
+  return useQuery({
+    queryKey: ["calibration", window, manager],
+    queryFn: () => apiGet<ValidationResult>("/calibration", { window, manager }),
     ...common,
   });
 }
@@ -213,27 +213,27 @@ export function useFactorCov(date?: string) {
   });
 }
 
-export function useVarBridge(date: string, book = "Soros", set = "HistFull") {
+export function useVarBridge(date: string, manager = "Soros", set = "HistFull") {
   return useQuery({
-    queryKey: ["var_bridge", date, book, set],
-    queryFn: () => apiGet<VarBridgeResult>("/var_bridge", { date, book, set }),
+    queryKey: ["var_bridge", date, manager, set],
+    queryFn: () => apiGet<VarBridgeResult>("/var_bridge", { date, manager, set }),
     enabled: !!date,
     ...common,
   });
 }
 
-export function useHedge(date: string, book = "Soros") {
+export function useHedge(date: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["hedge", date, book],
-    queryFn: () => apiGet<HedgeResult>("/hedge", { date, book }),
+    queryKey: ["hedge", date, manager],
+    queryFn: () => apiGet<HedgeResult>("/hedge", { date, manager }),
     ...common,
   });
 }
 
-export function useExposureProfile(factor: string, date: string, book = "Soros") {
+export function useExposureProfile(factor: string, date: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["exposure_profile", factor, date, book],
-    queryFn: () => apiGet<ExposureProfileResult>("/exposure_profile", { factor, date, book }),
+    queryKey: ["exposure_profile", factor, date, manager],
+    queryFn: () => apiGet<ExposureProfileResult>("/exposure_profile", { factor, date, manager }),
     ...common,
   });
 }
@@ -246,38 +246,38 @@ export function useFactorPortfolio(factor: string, date: string) {
   });
 }
 
-export function usePnlNames(from?: string, to?: string, book = "Soros") {
+export function usePnlNames(from?: string, to?: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["pnl_names", from ?? "", to ?? "", book],
-    queryFn: () => apiGet<PnlNamesResult | BookMismatch>("/pnl_attribution/names", { from, to, book }),
+    queryKey: ["pnl_names", from ?? "", to ?? "", manager],
+    queryFn: () => apiGet<PnlNamesResult | ManagerMismatch>("/pnl_attribution/names", { from, to, manager }),
     ...common,
   });
 }
 
-// Live per-book reconcile drill (2026-08-22) — the Attribution reconcile drawers' replacement
-// for the /pivot query on the book-independent Factor contribution measure; computed from the
-// frames for the requested book directly, so it works on any loaded book (no artifact guard).
-export function usePnlDrillPosition(T: string, to: string, book: string, position: string, enabled = true) {
+// Live per-manager reconcile drill (2026-08-22) — the Attribution reconcile drawers' replacement
+// for the /pivot query on the manager-independent Factor contribution measure; computed from the
+// frames for the requested manager directly, so it works on any loaded manager (no artifact guard).
+export function usePnlDrillPosition(T: string, to: string, manager: string, position: string, enabled = true) {
   return useQuery({
-    queryKey: ["pnl_drill_position", T, to, book, position],
-    queryFn: () => apiGet<PnlDrillPositionResult>("/pnl_attribution/drill", { T, to, book, position }),
+    queryKey: ["pnl_drill_position", T, to, manager, position],
+    queryFn: () => apiGet<PnlDrillPositionResult>("/pnl_attribution/drill", { T, to, manager, position }),
     enabled: enabled && !!T && !!to && !!position,
     ...common,
   });
 }
-export function usePnlDrillFactor(T: string, to: string, book: string, factor: string, enabled = true) {
+export function usePnlDrillFactor(T: string, to: string, manager: string, factor: string, enabled = true) {
   return useQuery({
-    queryKey: ["pnl_drill_factor", T, to, book, factor],
-    queryFn: () => apiGet<PnlDrillFactorResult>("/pnl_attribution/drill", { T, to, book, factor }),
+    queryKey: ["pnl_drill_factor", T, to, manager, factor],
+    queryFn: () => apiGet<PnlDrillFactorResult>("/pnl_attribution/drill", { T, to, manager, factor }),
     enabled: enabled && !!T && !!to && !!factor,
     ...common,
   });
 }
 
-export function useExposures(date: string, book = "Soros") {
+export function useExposures(date: string, manager = "Soros") {
   return useQuery({
-    queryKey: ["exposures", date, book],
-    queryFn: () => apiGet<Rec[]>("/exposures", { date, book }),
+    queryKey: ["exposures", date, manager],
+    queryFn: () => apiGet<Rec[]>("/exposures", { date, manager }),
     enabled: !!date,
     ...common,
   });

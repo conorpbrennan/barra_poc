@@ -8,15 +8,15 @@ import { QueryState } from "../components/ui";
 import { pct, days, compact } from "../lib/format";
 
 export function Liquidity() {
-  const { date, book } = useApp();
+  const { date, manager } = useApp();
   const [participation, setParticipation] = useState(0.2);
   const [horizon, setHorizon] = useState(5);
-  const q = useLiquidity(date, book, participation, horizon);
+  const q = useLiquidity(date, manager, participation, horizon);
 
   return (
     <main className="lens">
       <h1>Liquidity</h1>
-      <p className="sub">Days-to-liquidate the held book · as-of {date}</p>
+      <p className="sub">Days-to-liquidate the held portfolio · as-of {date}</p>
 
       <div className="wrap" style={{ marginBottom: "1rem" }}>
         <label className="row">

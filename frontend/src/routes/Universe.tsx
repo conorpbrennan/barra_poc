@@ -1,6 +1,6 @@
 // Estimation-universe lens (render_universe): index membership (Phase 1), filtration funnel
 // (Phase 2), and span / high-confidence (Phase 3) — including the live fx×fy scatter of the
-// estimation cloud vs the held book (Chris's VALUE/SIZE picture).
+// estimation cloud vs the held portfolio (Chris's VALUE/SIZE picture).
 import { useState } from "react";
 import { useApp } from "../context/AppContext";
 import { useUniverse, useFunnel, useSpan } from "../api/hooks";
@@ -10,7 +10,7 @@ import { pct, num } from "../lib/format";
 import type { Rec, SpanResult } from "../api/types";
 
 export function Universe() {
-  const { date, book } = useApp();
+  const { date, manager } = useApp();
   const [tab, setTab] = useState<"membership" | "funnel" | "span">("membership");
 
   return (
@@ -24,15 +24,15 @@ export function Universe() {
           </button>
         ))}
       </div>
-      {tab === "membership" && <Membership date={date} book={book} />}
-      {tab === "funnel" && <Funnel date={date} book={book} />}
-      {tab === "span" && <Span date={date} book={book} />}
+      {tab === "membership" && <Membership date={date} manager={manager} />}
+      {tab === "funnel" && <Funnel date={date} manager={manager} />}
+      {tab === "span" && <Span date={date} manager={manager} />}
     </main>
   );
 }
 
-function Membership({ date, book }: { date: string; book: string }) {
-  const q = useUniverse(date, book);
+function Membership({ date, manager }: { date: string; manager: string }) {
+  const q = useUniverse(date, manager);
   return (
     <GuardedQueryState q={q}>
       {(d) => (
@@ -78,8 +78,8 @@ function Membership({ date, book }: { date: string; book: string }) {
   );
 }
 
-function Funnel({ date, book }: { date: string; book: string }) {
-  const q = useFunnel(date, book);
+function Funnel({ date, manager }: { date: string; manager: string }) {
+  const q = useFunnel(date, manager);
   return (
     <GuardedQueryState q={q}>
       {(d) => (
@@ -124,10 +124,10 @@ function Funnel({ date, book }: { date: string; book: string }) {
   );
 }
 
-function Span({ date, book }: { date: string; book: string }) {
+function Span({ date, manager }: { date: string; manager: string }) {
   const [fx, setFx] = useState("Size");
   const [fy, setFy] = useState("ResidVol");
-  const q = useSpan(date, fx, fy, book);
+  const q = useSpan(date, fx, fy, manager);
   return (
     <GuardedQueryState q={q}>
       {(d) => (
@@ -135,7 +135,7 @@ function Span({ date, book }: { date: string; book: string }) {
           <div className="hgroup" style={{ marginBottom: "1rem" }}>
             <div className="hero">
               <div className="v">{pct(Number(d.latest.inside_wt ?? 0))}</div>
-              <div className="k">of book weight inside the estimation cloud</div>
+              <div className="k">of portfolio weight inside the estimation cloud</div>
             </div>
           </div>
           <h2>Inside-share over time</h2>
@@ -143,7 +143,7 @@ function Span({ date, book }: { date: string; book: string }) {
             labels={d.series.map((r) => r.month)} fmt={(v) => pct(v)}
             width={520} height={100} />
 
-          <h2>Factor space — estimation cloud vs book</h2>
+          <h2>Factor space — estimation cloud vs portfolio</h2>
           <div className="row" style={{ marginBottom: "0.6rem" }}>
             <span className="muted small">x</span>
             <select value={fx} onChange={(e) => setFx(e.target.value)}>

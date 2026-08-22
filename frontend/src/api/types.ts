@@ -4,11 +4,11 @@
 
 export type Rec = Record<string, string | number | null>;
 
-// One book/manager, as served by /meta's `managers` array (multi-manager Phase 3/4). On today's
-// single-book data this is exactly one entry with every entity field null — the UI must degrade
+// One manager, as served by /meta's `managers` array (multi-manager Phase 3/4). On today's
+// single-manager data this is exactly one entry with every entity field null — the UI must degrade
 // silently on null, never assume the attributes are populated.
 export interface Manager {
-  book: string;
+  manager: string;
   entity_name: string | null;
   firm_type: string | null;
   cik: string | number | null;
@@ -25,16 +25,16 @@ export interface Meta {
   managers?: Manager[];
 }
 
-// The shape a single-book-artifact endpoint (/universe, /funnel, /span, /drift,
-// /pnl_attribution*) returns INSTEAD of its normal payload when the requested book isn't
-// verifiably the one the precomputed artifact covers (risk_api.py's `_book_guard`, mirroring the
+// The shape a single-manager-artifact endpoint (/universe, /funnel, /span, /drift,
+// /pnl_attribution*) returns INSTEAD of its normal payload when the requested manager isn't
+// verifiably the one the precomputed artifact covers (risk_api.py's `_manager_guard`, mirroring the
 // pre-existing /drawdown `status: "insufficient"` idiom — HTTP 200, never a crash or empty chart).
-// Field names are pinned exactly to `_book_guard`'s return dict.
-export interface BookMismatch {
-  status: "book_mismatch";
+// Field names are pinned exactly to `_manager_guard`'s return dict.
+export interface ManagerMismatch {
+  status: "manager_mismatch";
   kind: string;
-  requested_book: string;
-  artifact_book: string | null;
+  requested_manager: string;
+  artifact_manager: string | null;
   basis: string;
   reason: string;
 }
@@ -83,17 +83,17 @@ export interface LimitCheck {
 export interface LimitsResult {
   date: string;
   set: string;
-  book: string;
+  manager: string;
   status: "green" | "amber" | "breach" | "none";
   configured: boolean;
   checks: LimitCheck[];
   breaches: LimitCheck[];
   // multi-manager Phase 3 disclosure — additive, always present. limits.json is ONE flat
-  // threshold set tuned for `calibrated_for`; when the requested `book` differs,
-  // `cross_book_thresholds` is true and `calibration_note` explains the RAG verdict above is
-  // being read against another book's thresholds. `calibration_note` is null otherwise.
+  // threshold set tuned for `calibrated_for`; when the requested `manager` differs,
+  // `cross_manager_thresholds` is true and `calibration_note` explains the RAG verdict above is
+  // being read against another manager's thresholds. `calibration_note` is null otherwise.
   calibrated_for: string;
-  cross_book_thresholds: boolean;
+  cross_manager_thresholds: boolean;
   calibration_note: string | null;
 }
 
@@ -107,7 +107,7 @@ export interface DqResult {
 }
 
 export interface BacktestResult {
-  set: string; book: string; date: string; alpha: number; window: number;
+  set: string; manager: string; date: string; alpha: number; window: number;
   method: string; lam: number | null;
   status: "ok" | "insufficient";
   tested?: number; exceptions?: number; expected?: number; rate?: number | null;
@@ -118,7 +118,7 @@ export interface BacktestResult {
 }
 
 export interface DrawdownResult {
-  set: string; book: string; date: string;
+  set: string; manager: string; date: string;
   status: "ok" | "insufficient";
   n?: number; max_drawdown?: number;
   peak_date?: string; trough_date?: string; drawdown_obs?: number;
@@ -133,7 +133,7 @@ export interface WhatIfRisk {
   total_var_99: number; top5_ctr_share: number | null; gross: number; net: number;
 }
 export interface WhatIfResult {
-  date: string; book: string;
+  date: string; manager: string;
   trades: { position: string; ticker: string; old: number; new: number }[];
   before: WhatIfRisk; after: WhatIfRisk; delta: Partial<WhatIfRisk>;
   holdings: { position: string; ticker: string; weight: number }[];
@@ -145,7 +145,7 @@ export interface WhatIfResult {
 }
 
 export interface LiquidityResult {
-  date: string; book: string; participation: number; horizon_days: number;
+  date: string; manager: string; participation: number; horizon_days: number;
   n_names: number; pct_mv_within_horizon: number | null; pct_weight_within_horizon: number;
   weighted_avg_days: number | null; max_days: number | null;
   n_no_adv: number; weight_no_adv: number;
@@ -161,7 +161,7 @@ export interface ConditionalComponent {
   implied_sigma: number | null; pnl: number; shocked: boolean;
 }
 export interface StressResult {
-  date: string; book: string; shocks: Record<string, number>;
+  date: string; manager: string; shocks: Record<string, number>;
   total_pnl: number; loss: number; components: StressComponent[];
   source?: string;                    // "cube" (StressShock simulation) | "numpy_fallback"
   verification?: { total_abs_diff: number; max_component_abs_diff: number } | { error: string };
@@ -177,7 +177,7 @@ export interface ReverseStressFactor {
   sigma_to_breach: number | null; abs_sigma: number | null;
 }
 export interface ReverseStressResult {
-  date: string; book: string; loss: number;
+  date: string; manager: string; loss: number;
   factors: ReverseStressFactor[]; weakest: ReverseStressFactor | null;
 }
 
@@ -226,7 +226,7 @@ export interface DriftResult {
 }
 
 export interface WhatChangedResult {
-  book: string; from: string; to: string;
+  manager: string; from: string; to: string;
   positions: {
     entered: { issuer: string; ticker: string; weight: number }[];
     exited: { issuer: string; ticker: string; weight: number }[];
@@ -249,7 +249,7 @@ export interface PnlFactorRow {
   contribution: number; pct_of_total: number | null; t_stat: number | null;
 }
 export interface PnlAttributionResult {
-  from: string; to: string; book: string; n_days: number;
+  from: string; to: string; manager: string; n_days: number;
   calendar: { min: string; max: string };
   headline: { realized_geometric: number; factor: number; specific: number; specific_share: number | null };
   linked: Record<string, number>;
@@ -262,7 +262,7 @@ export interface PnlAttributionResult {
 }
 export interface PnlCheck { name: string; value: number; status: string; verdict: string; fmt: string }
 export interface PnlResidualResult {
-  from: string; to: string; book: string; n_months: number; status: string;
+  from: string; to: string; manager: string; n_months: number; status: string;
   checks: PnlCheck[];
   specific_share: number | null; explained_share: number | null;
   factor_regression: { r2: number | null; loadings: { factor: string; beta: number; t_stat: number }[] };
@@ -301,9 +301,9 @@ export interface PnlLinkagePosition {
   driver?: PnlPositionDriver;         // present only on rows outside the ±2σ base band
 }
 export interface PnlLinkageResult {
-  T: string; to: string; horizon_months: number; n_days: number; book: string;
+  T: string; to: string; horizon_months: number; n_days: number; manager: string;
   stress: { vol_mult: number; rho_blend: number };
-  book_total: PnlLinkageRow; rows: PnlLinkageRow[];
+  manager_total: PnlLinkageRow; rows: PnlLinkageRow[];
   positions: PnlLinkagePosition[];
   min_weight?: number;                // materiality floor on w(T) for the surprises table
   dust_excluded?: { n: number;
@@ -322,7 +322,7 @@ export interface ContributionPositionRow {
   pct_of_vol: number | null;
 }
 export interface ContributionsResult {
-  date: string; book: string;
+  date: string; manager: string;
   source?: string;                    // "cube" — served from the cube measures
   verification?: { vol_abs_diff: number; max_ctv_abs_diff: number; max_ctr_abs_diff: number };
   vol_1d: number; var99_normal: number;
@@ -338,8 +338,8 @@ export interface ValidationSeries {
   exceedance_2s: number | null; n_months: number;
 }
 export interface ValidationResult {
-  window: number; book: string; expected_exceedance_2s: number;
-  series: { book: ValidationSeries; specific: ValidationSeries };
+  window: number; manager: string; expected_exceedance_2s: number;
+  series: { manager: ValidationSeries; specific: ValidationSeries };
   note: string;
 }
 export interface RegressionFactorRow {
@@ -367,7 +367,7 @@ export interface HedgeRow {
   vol_after: number; vol_reduction: number;
 }
 export interface HedgeResult {
-  date: string; book: string; vol_base: number; specific_vol: number;
+  date: string; manager: string; vol_base: number; specific_vol: number;
   rows: HedgeRow[];
   market_hedge: { h_star: number; vol_after: number; vol_reduction: number } | null;
   note: string;
@@ -395,7 +395,7 @@ export interface VarBridgeDisagreement {
   gap: number; weight: number; likely_driver: string;
 }
 export interface VarBridgeResult {
-  date: string; book: string; set: string; alpha: number;
+  date: string; manager: string; set: string; alpha: number;
   steps: VarBridgeStep[]; terms: VarBridgeTerms; coverage: VarBridgeCoverage;
   disagreements: VarBridgeDisagreement[];
   verification: { price_var_99_numpy: number; diff: number;
@@ -403,7 +403,7 @@ export interface VarBridgeResult {
   note: string;
 }
 export interface ExposureProfileResult {
-  factor: string; date: string; book: string; recipe: string; n_names: number;
+  factor: string; date: string; manager: string; recipe: string; n_names: number;
   quantiles: Record<string, number>;
   hist: { x0: number; x1: number; n: number }[];
   beyond3: { n: number; share: number; names: { ticker: string; loading: number }[] };
@@ -422,22 +422,22 @@ export interface PnlNameRow {
   months: number; sign_persistence: number | null; hit_rate: number | null;
 }
 export interface PnlNamesResult {
-  from: string; to: string; book: string;
+  from: string; to: string; manager: string;
   winners: PnlNameRow[]; losers: PnlNameRow[]; note: string;
 }
 
-// ---- live per-book reconcile drill (/pnl_attribution/drill, 2026-08-22) ----
-// The Vite reconcile drawers' replacement for the baked (book-independent) Factor contribution
-// cube measure — computed live from the frames for the REQUESTED book, so it works on any
-// loaded book (see CLAUDE.md "book-independent attribution limitation").
+// ---- live per-manager reconcile drill (/pnl_attribution/drill, 2026-08-22) ----
+// The Vite reconcile drawers' replacement for the baked (manager-independent) Factor contribution
+// cube measure — computed live from the frames for the REQUESTED manager, so it works on any
+// loaded manager (see CLAUDE.md "book-independent attribution limitation").
 export interface PnlDrillFactorBar { factor: string; contribution: number; loading_at_T: number | null }
 export interface PnlDrillPositionResult {
-  book: string; T: string; to: string; position: string; ticker: string;
+  manager: string; T: string; to: string; position: string; ticker: string;
   bars: PnlDrillFactorBar[]; specific_pnl: number; realized: number; n_factors_at_T: number;
 }
 export interface PnlDrillIssuerBar { issuer: string; contribution: number }
 export interface PnlDrillFactorResult {
-  book: string; T: string; to: string; factor: string;
+  manager: string; T: string; to: string; factor: string;
   bars: PnlDrillIssuerBar[]; total: number;
 }
 
@@ -463,7 +463,7 @@ export interface ViewState {
   slice_dims?: string[]; filters?: Record<string, string[]>;
   row_tot?: boolean; col_tot?: boolean; as_pct?: boolean; hide_empty?: boolean;
   heat?: boolean; prec?: number; sort?: SortItem[];
-  units?: "weight" | "dollar";   // dollar = every weight-unit measure × Book MV (2026-08-22)
+  units?: "weight" | "dollar";   // dollar = every weight-unit measure × Manager MV (2026-08-22)
   date_fmt?: string; render?: "grid" | "chart";
   // `chart` is a COMPLETE Vega-Lite spec, or a LIST of them (one per graph); each carries a `source`
   // naming the query in `queries` whose records feed it. Rendered verbatim (charts are not rebuilt).

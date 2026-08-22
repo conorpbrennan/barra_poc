@@ -1,4 +1,4 @@
-// Trends lens (render_trends). Small multiples (shared time axis) of the book scenario measures
+// Trends lens (render_trends). Small multiples (shared time axis) of the portfolio scenario measures
 // over the calendar and the top style-factor exposures over time. The Drawdown panel and the
 // Risk-HHI chart were removed 2026-07-02 (itsjustbeta scope audit — neither is a primer report;
 // concentration now reads as Top-5 risk share on the Overview / What-if).
@@ -20,16 +20,16 @@ function col(recs: Rec[], xKey: string, yKey: string) {
 }
 
 export function Trends() {
-  const { scenario, book } = useApp();
-  const bookTrends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol", undefined, book);
-  const byFactor = useTrends(scenario, "Net exposure", "Factor", book);
+  const { scenario, manager } = useApp();
+  const managerTrends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5,Total VaR 99,Specific vol", undefined, manager);
+  const byFactor = useTrends(scenario, "Net exposure", "Factor", manager);
 
   return (
     <main className="lens">
       <h1>Trends</h1>
-      <p className="sub">{book} · book risk over the full calendar · scenario {scenario}</p>
+      <p className="sub">{manager} · portfolio risk over the full calendar · scenario {scenario}</p>
 
-      <QueryState q={bookTrends}>
+      <QueryState q={managerTrends}>
         {(data) => {
           const r = data.records;
           const dates = r.map((rec) => String(rec.Date ?? "").slice(0, 10));
@@ -85,8 +85,8 @@ export function Trends() {
       <div style={{ maxWidth: "46rem" }}>
         <h2>Risk-manager read</h2>
         <StreamPanel path="/trends/analysis"
-          body={{ set: scenario, book }}
-          cacheKey={`trends:${scenario}:${book}`}
+          body={{ set: scenario, manager }}
+          cacheKey={`trends:${scenario}:${manager}`}
           label="Generate trends read" />
       </div>
     </main>

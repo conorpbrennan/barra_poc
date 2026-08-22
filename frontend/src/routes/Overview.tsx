@@ -10,7 +10,7 @@ import {
 } from "../api/hooks";
 import { Sparkline, BulletGraph, LabelBar } from "../components/svg";
 import { StreamPanel } from "../components/StreamPanel";
-import { RagDot, isBookMismatch } from "../components/ui";
+import { RagDot, isManagerMismatch } from "../components/ui";
 import { pct, signedPct, num, ragLabel } from "../lib/format";
 import type { Rec } from "../api/types";
 
@@ -24,17 +24,17 @@ function series(recs: Rec[] | undefined, key: string): (number | null)[] {
 }
 
 export function Overview() {
-  const { date, scenario, book, ready } = useApp();
+  const { date, scenario, manager, ready } = useApp();
 
-  const trends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5", undefined, book);
-  const wi = useWhatif(date, book, []);
-  const limits = useLimits(date, scenario, book);
+  const trends = useTrends(scenario, "Model vol,Scenario VaR 99,Scenario ES 97.5", undefined, manager);
+  const wi = useWhatif(date, manager, []);
+  const limits = useLimits(date, scenario, manager);
   const dq = useDq();
-  const bt = useBacktest("HistFull", date, book);
-  const exposures = useExposures(date, book);
-  const contrib = useContributions(date, book);
-  const lk = usePnlLinkage(3, undefined, book);
-  const changed = useWhatChanged(date, undefined, book);
+  const bt = useBacktest("HistFull", date, manager);
+  const exposures = useExposures(date, manager);
+  const contrib = useContributions(date, manager);
+  const lk = usePnlLinkage(3, undefined, manager);
+  const changed = useWhatChanged(date, undefined, manager);
 
   if (!ready) return <main className="lens"><div className="spin">loading…</div></main>;
 
@@ -51,17 +51,17 @@ export function Overview() {
 
   // risk↔PnL reconcile status (Chris's step 4): genuine breaches only — an
   // exposure_migration driver is a band artifact, not a risk the decomposition missed.
-  // /pnl_attribution/linkage is a single-book artifact (multi-manager Phase 3 guard) — a
-  // book_mismatch reads as "not available" here rather than crashing on the missing fields.
-  const lkOk = lk.data && !isBookMismatch(lk.data) ? lk.data : null;
-  const lkRows = lkOk ? [...lkOk.rows, lkOk.book_total] : [];
+  // /pnl_attribution/linkage is a single-manager artifact (multi-manager Phase 3 guard) — a
+  // manager_mismatch reads as "not available" here rather than crashing on the missing fields.
+  const lkOk = lk.data && !isManagerMismatch(lk.data) ? lk.data : null;
+  const lkRows = lkOk ? [...lkOk.rows, lkOk.manager_total] : [];
   const genuine = lkRows.filter(
     (r) => r.verdict === "investigate" && r.driver?.kind !== "exposure_migration");
   const stressed = lkRows.filter((r) => r.verdict === "stress");
-  const lkStatus = !lk.data || isBookMismatch(lk.data) ? undefined
+  const lkStatus = !lk.data || isManagerMismatch(lk.data) ? undefined
     : genuine.length ? "red" : (stressed.length ? "amber" : "green");
   const lkLabel = !lk.data ? "—"
-    : isBookMismatch(lk.data) ? "not available for this book"
+    : isManagerMismatch(lk.data) ? "not available for this manager"
     : genuine.length ? `${genuine.length} to investigate (${genuine.map((r) => r.name).join(", ")})`
     : stressed.length ? "stress regime" : "within band";
 
@@ -76,7 +76,7 @@ export function Overview() {
   return (
     <main className="lens">
       <h1>Overview</h1>
-      <p className="sub">{book} · as-of {date} · scenario {scenario}</p>
+      <p className="sub">{manager} · as-of {date} · scenario {scenario}</p>
 
       {/* ---- hero risk numbers, each with an inline sparkline ---- */}
       <div className="hgroup">
@@ -111,7 +111,7 @@ export function Overview() {
               </div>
             ))
           ) : null}
-          {limits.data?.cross_book_thresholds && limits.data.calibration_note && (
+          {limits.data?.cross_manager_thresholds && limits.data.calibration_note && (
             <p className="muted small" style={{ margin: "0.3rem 0 0" }}>
               {limits.data.calibration_note}
             </p>
@@ -154,7 +154,7 @@ export function Overview() {
               value={(r.pct_of_variance ?? 0) * 100} max={maxCtv} suffix="%" neg />
           )) : <div className="muted small">—</div>}
           <p className="muted small" style={{ margin: "0.2rem 0 0.6rem" }}>
-            share of total variance; negative = hedges the book
+            share of total variance; negative = hedges the portfolio
           </p>
           <div className="muted small" style={{ marginBottom: "0.2rem" }}>Net exposures</div>
           {exps.length ? exps.map((e) => (
@@ -194,8 +194,8 @@ export function Overview() {
       <div style={{ maxWidth: "46rem" }}>
         <h2>Risk-manager summary</h2>
         <StreamPanel path="/overview/analysis"
-          body={{ date, book, set: scenario }}
-          cacheKey={`overview:${date}:${book}:${scenario}`}
+          body={{ date, manager, set: scenario }}
+          cacheKey={`overview:${date}:${manager}:${scenario}`}
           label="Generate morning summary" />
       </div>
     </main>
