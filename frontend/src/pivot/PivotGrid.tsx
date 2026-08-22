@@ -34,6 +34,10 @@ export function fmt(v: unknown, cfg: PivotConfig, dollar = false): string {
   return cfg.asPct ? pct(v, cfg.prec) : num(v, cfg.prec);
 }
 
+// Measures that ARE dollars regardless of the Units toggle (not converted by units=dollar, so
+// never in `dollar_measures`): always money-formatted.
+const ALWAYS_DOLLAR = new Set(["Market value", "Book MV"]);
+
 // faint accent heatmap, scaled within a column's |range|
 function heatStyle(v: number, min: number, max: number) {
   const lim = Math.max(Math.abs(min), Math.abs(max)) || 1;
@@ -114,7 +118,7 @@ export function PivotGrid({
           valueGetter: (p) => (p.data ? (p.data as GridRow)[key] as number | null : null),
           type: "rightAligned",
           width: 140,
-          valueFormatter: (p) => fmt(p.value, cfg, dollarMeasures.includes(m)),
+          valueFormatter: (p) => fmt(p.value, cfg, dollarMeasures.includes(m) || ALWAYS_DOLLAR.has(m)),
           cellStyle: (p) => {
             if (!cfg.heat || typeof p.value !== "number") return { fontVariantNumeric: "tabular-nums" };
             const rg = ranges.get(key)!;

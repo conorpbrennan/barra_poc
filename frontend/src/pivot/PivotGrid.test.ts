@@ -19,6 +19,11 @@ describe("PivotGrid fmt", () => {
     expect(fmt(151470121.4, { ...base, asPct: true, prec: 3 }, true)).toBe("$151,470,121");
     expect(fmt(-2500.6, { ...base, asPct: false, prec: 3 }, true)).toBe("-$2,501");
   });
+  it("Market value / Book MV are money in every units mode", () => {
+    // they are dollars by nature (never converted by units=dollar), so the money format must not
+    // depend on the dollar_measures list — 4298665482 renders $4,298,665,482, not 4298665482.000
+    expect(fmt(4298665482, { ...base, asPct: false, prec: 3 }, true)).toBe("$4,298,665,482");
+  });
   it("non-numbers render empty", () => {
     expect(fmt(null, { ...base, asPct: true, prec: 3 })).toBe("");
   });
