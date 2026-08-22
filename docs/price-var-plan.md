@@ -1,6 +1,33 @@
 # Price VaR — historical simulation on stock prices, and the bridge to the model
 
-Plan agreed 2026-08-22 (questions and answers in the session log). Not built yet.
+Plan agreed 2026-08-22 (questions and answers in the session log). **Built 2026-08-22** — steps
+1-5 of the Order of work below (step 6, the deck slide, is separate and not part of this build).
+See CLAUDE.md's "Price VaR — historical simulation on raw stock returns, and the Model-vs-Price
+bridge" section for the full writeup; the measured highlights:
+
+- Builder: `data/stock_returns.parquet` (9th, optional frame), 96.7% of 5,197 coverage names
+  priced, 10.77M sparse rows, 2016-01-04 → 2026-08-13. Two new DQ checks (coverage, return
+  sanity — flags 6,799/10.77M rows with |r| > 50%, disclosed, not chased).
+- Cube: `build_cube` 19.66s → 27.41s (+7.75s) in-process on the 124-book frames; JVM RSS ~7.2G
+  post-build. Soros/HistFull/2026-06-30: `Price VaR 99` 2.99% vs `Total VaR 99` 3.58%.
+- `/var_bridge` (Soros/2026-06-30/HistFull): T0 3.524% → T1 3.576% (+0.053%) → T2 3.486%
+  (−0.090%) → T3 2.986% (−0.500%) → T4 2.986% (+0.000%) — **exposure drift is the largest term**
+  on this book/date; coverage is ~0 (every held name priced and covered). Numpy verification
+  diff ~7e-18.
+- Scoped down, disclosed: no cube-native `PriceDays` day-fact table (would cost ~15M rows keyed
+  by ~5,200 positions instead of 23 factors) — `Price PnL at day` was not built; the day-by-day
+  coverage series needed by `/var_bridge` and the UI sparkline is served by reading the array
+  measures directly in the API (the `/backtest`/`/drawdown` vector-unpack idiom), not the
+  generic `/pivot` Day/DaySet machinery. The per-name `disagreements` table's `likely_driver`
+  is a magnitude HEURISTIC (coverage is exact; specific-risk-dropped vs
+  exposure-drift-or-distribution is not a true per-name T2/T3 split) — disclosed in the payload.
+- Tests: `test_price_var.py`, 11/11 passing against the live backend (incl. a live LLM call,
+  `RUN_LLM=1`), plus no regressions in `test_risk_measures.py`/`test_whatif.py`/`test_stress.py`/
+  `test_model_vol.py`/`test_analysis.py`/`test_dq.py`/`test_build_frames.py`/
+  `test_contributions.py`/`test_limits.py`/`test_backtest.py`/`test_pivot_app.py`/`test_ask.py`.
+  Frontend: `npx tsc --noEmit`, `npx vitest run` (59 passed), `npm run build` all clean; the
+  Model vs Price lens verified end-to-end with a headless Playwright check against the served
+  SPA.
 
 ## The idea
 

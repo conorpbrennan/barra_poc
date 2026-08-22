@@ -168,6 +168,113 @@ whole dollars with separators (`money()`), ignoring `prec`. Notebooks: query the
 demo notebooks carry an "L1 in dollars" cell. Tests: `test_risk_measures.py` (pure `_undollar`,
 Book MV == parquet MV, twin == measure × Book MV, `/pivot?units` round trip); `PivotGrid.test.ts`.
 
+## Price VaR — historical simulation on raw stock returns, and the Model-vs-Price bridge (`/var_bridge`) — 2026-08-22
+
+Full design: `docs/price-var-plan.md` (status: **Built 2026-08-22**). Every VaR in the cube so far
+comes from the factor model. The **Price family** is a second, independent historical-sim engine
+on raw daily **stock** returns — no model at all — and `/var_bridge` explains the gap between the
+two term by term. The bridge works because `r_i = L_i·f + u_i` exactly on a regression date (u is
+the model's own residual), so the two differ only through choices the model makes, each a
+computable term.
+
+**Builder (step 1).** `barra_build_stock_returns.py` is a standalone precompute (needs only
+`data/securities.parquet`; run after `barra_build_frames.py`, no 60-min rebuild required) that
+reuses the builder's cached price loaders (`stooq_daily`/`_yahoo_daily`/`_get`, disk-cached under
+`tmp/`) to derive daily SIMPLE returns for every coverage name, written **sparse** (one row per
+(Date, Position) with a real return, trimmed to the model window `>= START`) to the ninth optional
+frame `data/stock_returns.parquet`. `barra_build_frames.py` also emits it inline for future
+rebuilds (`stock_returns_from_prices`, reusing the SAME in-memory `prices` dict the descriptor
+pipeline already pulled — no extra network I/O) as the builder's 9th return value. Measured on this
+repo's warm cache: 96.7% of the 5,197 coverage names priced, 10.77M rows, 2016-01-04 → 2026-08-13.
+`barra_dq_checks.py` gained two checks (guarded on the frame's presence): coverage share, and
+`|daily return| <= 50%` sanity — this build flags 6,799/10.77M rows (max |r| ≈ 1.34e4, a handful of
+data glitches, e.g. a ticker-reuse or bad print), disclosed via WARN, not silently dropped or
+clipped; negligible share, no action taken.
+
+**Cube (step 2).** Second copy of the Scenario vector engine, PER POSITION instead of per Factor
+(Price PnL has no factor structure at all): `build_price_returns`/`build_price_axis` mirror
+`build_scenarios`/`build_scenario_axis` exactly (same date axis per set — HistFull + every
+`EVENT_WINDOWS` window; **no Hypo:\* mirror**, those are factor sigma-shocks). A `StockReturns`
+table (PriceSet, Position) → `ReturnVec`, `PricedVec` joins onto `Exposures` via **Position only**
+(the same partial-join trick that makes `ScenarioSet` a hierarchy, mapping Position instead of
+Factor) — `PriceSet` becomes its own switch hierarchy; `PriceAxis` is its date dual, mirroring
+`ScenarioAxis`. `Price PnL vector = Σ w_i·ReturnVec_i` (`OriginScope({Date, Position})`, the
+Specific-variance idiom, avoiding the ~23-factor-row fan-out); `Price coverage vector` is the
+identical sum with `PricedVec` (1/0 real-vs-zero-filled) in place of `ReturnVec`. From these: the
+VaR/ES ladder (`Price VaR 95/97.5/99`, `Price ES 97.5/99`, `Price worst loss`, `Price mean PnL`,
+`Price PnL vol`), `Marginal Price VaR 99` / `% of Price VaR 99` / `Marginal Price ES 97.5`
+(tail-day Euler, additive, EXACT mirror of the Marginal Scenario measures — meaningful in by-NAME
+views; by Factor it repeats, same fan-out caveat `Specific PnL` carries), `Incremental Price VaR 99`
+(book minus book-without-member, not additive), and `Price coverage at tail` (the book's priced
+weight share on its own Price-VaR tail day). `$` twins via the existing `DOLLAR_MEASURES`
+mechanism — the twin loop now skips any entry not actually defined, so it degrades cleanly when
+`stock_returns` is absent (v1 data / a pre-Price-VaR build). **Day path scoped down, disclosed**:
+no cube-native `PriceDays` fact table (~15M more rows, keyed by ~5,200 positions instead of 23
+factors) — the day-by-day coverage series `/var_bridge` and the UI sparkline need is served by
+reading the array measures directly in the API (the `/backtest`/`/drawdown` vector-unpack idiom),
+not the generic `/pivot` Day/DaySet machinery; `Price PnL at day` itself was not built. Measured
+in-process (`BARRA_CUBE_TIMINGS=1`, 124-book frames, quiet box): `build_cube` 19.66s → 27.41s
+(+7.75s: 4.73s Python-side vector construction, 1.49s JVM ingest of the ~20k-row/~230MB-of-doubles
+`StockReturns` table, ~0.8s more measure-DAG distilling); JVM RSS ~7.2G post-build (within the
+documented 6–8G range). Soros/HistFull/2026-06-30: `Price VaR 99` 2.99% vs `Scenario VaR 99` 3.52%
+/ `Total VaR 99` 3.58%; Σ `Marginal Price VaR 99` ties `Price VaR 99` to ~2e-5 (the same
+additive-vs-interpolated-quantile gap the Scenario family already carries).
+
+**API (step 3).** `PriceSet` joins `DIM_NAMES` (pruned at startup, like the PnL-attribution trio,
+when the cube lacks it); the Price ladder + Marginal/Incremental/coverage measures + `$` twins join
+`MEASURE_NAMES`; `PRICE_DEP` mirrors `SCEN_DEP`'s "needs a single-set context" warning with its own
+message and its own PriceSet check in `_pivot_query`; `/dims` publishes `price_dependent`.
+`GET /var_bridge?date=&book=&set=&alpha=` computes the five-step bridge in a fixed order — T0
+`Scenario VaR 99` and T1 `Total VaR 99` straight from the cube; **T2** (today's loadings + REALIZED
+daily residuals from `specific_returns`, replacing the Gaussian specific block) and **T3** (Price
+VaR restricted to covered names — each day's OWN loadings, via the identity
+`r_t = L_i(t)·f_t + u_i,t`) are numpy on the frames, over the SAME population/calendar
+`_book_inputs` already uses for T0/T1; T4 `Price VaR 99` (all priced names) and the book's own
+`Price coverage at tail` come from the cube. The four sequential differences (**terms**:
+`specific_risk_dropped` = T1−T0, `specific_distribution` = T2−T1, `exposure_drift` = T3−T2,
+`coverage` = T4−T3) sum to T4−T0 exactly by construction. Ships a numpy `verification` twin of T4
+(the `/contributions` pattern; diff ~7e-18 on Soros), a `coverage` block (`at_tail`,
+`never_priced_weight`/`_names`, `added_by_coverage_weight`/`_names` — held names with no price
+history at all vs priced-but-uncovered-by-the-model, never silently absorbed, the `/whatif` idiom;
+plus a `series` — the day-by-day coverage path for the UI sparkline), and a per-name
+`disagreements` table (`Marginal Total VaR 99` vs `Marginal Price VaR 99`, `weight`, and a
+`likely_driver` — **coverage is an exact population fact; `specific_risk_dropped` vs
+`exposure_drift_or_distribution` is a magnitude heuristic on that one name, not a true per-name
+T2/T3 split**, disclosed as such in the payload and the UI). Rejects `Hypo:*` sets with a 400
+before doing any work (sigma-shocks, not a historical window). Soros/2026-06-30/HistFull measured:
+T0 3.5236% → T1 3.5761% (+0.0526%) → T2 3.4860% (−0.0901%) → T3 2.9858% (−0.5003%) → T4 2.9858%
+(+0.0000%) — **exposure drift is the largest term**: the book's realized loadings over the window
+moved more than today's snapshot implies (see `/drift` for rotation vs re-pricing). Coverage is
+~0 for Soros (every held name is both priced and covered); `Price coverage at tail` reads 80.8%.
+
+`POST /var_bridge/analysis` streams a CHRIS_VOICE read (`BRIDGE_SYSTEM = CHRIS_VOICE + """..."""`,
+same plain Messages-API/no-tools pattern as `/whatchanged/analysis`): leads with the largest term,
+reads a large `specific_distribution` as the missing-factor signal (correlated realized residuals
+a single Gaussian block can't represent — cf. `/pnl_attribution/linkage`'s `breach_comovement`),
+`exposure_drift` as rotation-vs-re-pricing (points at `/drift`), `coverage` as a model blind spot.
+`ANALYST_SYSTEM` and `ASK_SYSTEM` each gained a Price-family grounding paragraph (measure meanings,
+the PriceSet-context rule, the four bridge terms named). `test_analysis.py::
+t_all_llm_prompts_carry_chris_voice` auto-discovers `BRIDGE_SYSTEM` by its `*_SYSTEM` suffix.
+Tests: `test_price_var.py` (11, all against the live backend — PriceSet/`price_dependent` on
+`/dims`; the PriceSet-context warning; Price VaR order-of-magnitude vs Total VaR; Euler sum and
+%-sum-to-1; the `$`-twin identity; an Evt:\* window reading a real, different number from
+HistFull; the bridge terms summing to T4−T0 at <1e-9 with verification diff <1e-6; a `Hypo:*`
+set 400ing; the live `/var_bridge/analysis` streaming markdown, `RUN_LLM=1` opt-in).
+
+**UI + notebooks (step 4).** Vite lens **Model vs Price** (rail entry, route `/model-vs-price`):
+the headline hero pair (Total VaR 99 vs Price VaR 99, largest term, coverage at tail), a
+hand-rolled 9-slot waterfall SVG (5 level bars in ink/grey + 4 delta bars in the one accent
+colour, direct-labelled, no legend), the steps table, a coverage note + day-by-day sparkline, a
+per-name Marginal-Total-vs-Marginal-Price scatter (dot size = weight, colour = `likely_driver`)
+beside the top-12 disagreement table, the verification diffs, a `HowToRead` disclosure, and the
+CHRIS_VOICE `StreamPanel`. Saved views in `Public/Soros 13F filings`: `Model vs Price — book`
+(by Position) and `— by sector`, both slicing BOTH `ScenarioSet` and `PriceSet` to `HistFull` (the
+two families are independent switch hierarchies). Both demo notebooks gained 4 cells (headline +
+T0/T1/T4 from the cube, the full bridge table with T2/T3 computed inline in numpy from
+`load_frames()` — the one extension beyond pure direct-cube-access, commented as such — and the
+top-10 disagreement table); Soros re-executed clean (zero error outputs), Vanguard left
+unexecuted (large whole-market book, per the repo's existing convention for that notebook).
+
 ## Desk limits (`/limits`)
 
 **Reference-metric decision (2026-07-03): MODEL VOL is the reference; VaR/ES are the limits.**
