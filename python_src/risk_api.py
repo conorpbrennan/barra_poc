@@ -733,7 +733,10 @@ def _dims_response_fallback() -> dict:
     members = {d: _dim_members_via_count(cube, l, m, d) for d in DIM_NAMES if d not in DAY_DIMS}
     members.update(_day_members(S["session"]))
     members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-    return {"dimensions": DIM_NAMES, "measures": list(MEASURE_NAMES),
+    return {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES
+                         # the book-independent attribution trio is ALWAYS rejected by
+                         # _validate_pivot on a multi-book build — don't offer it in the picker
+                         if not (x in BOOK_INDEPENDENT_MEASURES and len(_book_names()) > 1)],
             "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
             "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
@@ -771,7 +774,10 @@ def _dims_response() -> dict:
             members["Manager"] = f_mgr.result()
             members.update(f_day.result())
         members["ScenarioSet"] = [x for x in members["ScenarioSet"] if not x.startswith("PIT:")]
-        resp = {"dimensions": DIM_NAMES, "measures": list(MEASURE_NAMES),
+        resp = {"dimensions": DIM_NAMES, "measures": [x for x in MEASURE_NAMES
+                         # the book-independent attribution trio is ALWAYS rejected by
+                         # _validate_pivot on a multi-book build — don't offer it in the picker
+                         if not (x in BOOK_INDEPENDENT_MEASURES and len(_book_names()) > 1)],
             "dollar_measures": [x for x in DOLLAR_MEASURES if x in MEASURE_NAMES],
                 "scenario_dependent": sorted(SCEN_DEP), "day_dependent": sorted(DAY_DEP),
             "price_dependent": sorted(PRICE_DEP),
