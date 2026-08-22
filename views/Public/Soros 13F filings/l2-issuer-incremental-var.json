@@ -3,7 +3,7 @@
   "name": "L2 \u2014 Issuer incremental VaR",
   "path": "Public/Soros 13F filings",
   "created": "2026-06-14T01:50:44Z",
-  "updated": "2026-08-22T12:11:09Z",
+  "updated": "2026-08-22T13:36:24Z",
   "state": {
     "cols": [],
     "slice_dims": [
@@ -33,7 +33,8 @@
     ],
     "measures": [
       "Marginal Total VaR 99",
-      "Incremental Total VaR 99"
+      "Incremental Total VaR 99",
+      "Market value"
     ],
     "sort": [
       {
@@ -43,6 +44,7 @@
       }
     ],
     "description": "Per issuer: marginal Total VaR (additive share) vs incremental Total VaR (the risk released by exiting the name). The pre-trade 'what would trimming this name save' lens \u2014 diversification-aware, so it does not sum to the book total.",
-    "units": "dollar"
+    "units": "dollar",
+    "render": "grid"
   }
 }
