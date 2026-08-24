@@ -1,6 +1,6 @@
 // The one IA change (docs/vite-ui-plan.md §9): manager / as-of date / scenario-set hoisted into a
 // single global context every lens inherits, instead of per-panel selectors. Defaults: latest
-// date, HistFull, Soros. Persisted to the URL query so a view is shareable/bookmarkable.
+// date, HistFull, Millennium. Persisted to the URL query so a view is shareable/bookmarkable.
 import { createContext, useContext, useMemo, useState, useEffect, ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMeta } from "../api/hooks";
@@ -27,7 +27,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [params, setParams] = useSearchParams();
 
   // ?book= is still read for backward compatibility with old links; ?manager= takes priority.
-  const [manager, setManager] = useState(params.get("manager") || params.get("book") || "Soros");
+  const [manager, setManager] = useState(params.get("manager") || params.get("book") || "Millennium");
   const [date, setDate] = useState(params.get("date") || "");
   const [scenario, setScenario] = useState(params.get("set") || "HistFull");
 
@@ -51,7 +51,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [dates, date]);
 
   // once managers land, if the current manager isn't one of them (a stale/invalid ?manager= URL
-  // param, or the pre-Phase-4 "Soros" default on data where that manager doesn't actually exist),
+  // param, or the default above on data where that manager doesn't actually exist),
   // default to the first known manager — mirrors the date-defaulting effect above.
   useEffect(() => {
     if (managers.length && !managers.some((m) => m.manager === manager)) setManager(managers[0].manager);

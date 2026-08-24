@@ -488,6 +488,28 @@ function PnlTab() {
 
   return (
     <>
+      {/* Plain-English orientation. The tab's other explainers are precise but assume you already
+          know what attribution is for; this one says what the page does and where to look. */}
+      <div style={{ maxWidth: "46rem", marginBottom: "1.1rem" }}>
+        <p style={{ margin: "0 0 0.5rem", fontSize: 14, lineHeight: 1.6 }}>
+          <strong>What this page does.</strong> It takes what the portfolio actually made over a
+          period and splits it in two: the part the factor model explains, and the part it does
+          not. The explained part is exposure &mdash; being long the market, tilted to small caps,
+          tilted to tech. Anyone can buy that cheaply. The rest is stock-specific: what is left
+          once the market and the style bets are taken out. That is the part worth paying a manager
+          for.
+        </p>
+        <p className="muted" style={{ margin: 0, fontSize: 13, lineHeight: 1.6 }}>
+          Four sections below, in order. <strong>The chart and table</strong> show the split and
+          which factors drove it. <strong>Residual diagnostics</strong> ask whether the leftover
+          part behaves as a well-specified model says it should &mdash; if it does not, the model
+          is missing something. <strong>The residual explorer</strong> names the stocks that
+          leftover came from. <strong>Risk &harr; PnL reconcile</strong> asks the hard question:
+          at the start of the period, did the risk model&rsquo;s forecast contain what actually
+          happened?
+        </p>
+      </div>
+
       <div className="row" style={{ marginBottom: "0.8rem", flexWrap: "wrap" }}>
         {([["t12m", "Trailing 12m"], ["ytd", "YTD"], ["inception", "Since inception"],
            ["custom", "Custom"]] as [Preset, string][]).map(([k, lab]) => (
@@ -849,8 +871,8 @@ function PnlTab() {
       <div style={{ maxWidth: "46rem" }}>
         <h2>Risk-manager read</h2>
         <StreamPanel path="/pnl_attribution/analysis"
-          body={{ frm: from ?? null, to: to ?? null, horizon }}
-          cacheKey={`pnlattr:${from ?? ""}:${to ?? ""}:${horizon}`}
+          body={{ frm: from ?? null, to: to ?? null, horizon, manager }}
+          cacheKey={`pnlattr:${manager}:${from ?? ""}:${to ?? ""}:${horizon}`}
           label="Generate attribution read" />
       </div>
     </>

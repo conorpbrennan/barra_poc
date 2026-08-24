@@ -39,6 +39,35 @@ Both builders write the frames (seven, plus the optional eighth `managers`) to `
 repo root (created on demand) and the cube reads from there (`OUT` / `out` constants, resolved
 relative to the script file).
 
+## Writing — plain English, Conor's voice (mandatory)
+
+Everything written for a human reader is in plain English and in Conor's voice: the deck, the
+docs, the guides, the in-UI text, commit messages, and anything explaining the model to someone
+who did not build it. Short sentences. Say the thing, cite the number, stop. No throat-clearing,
+no flourish, no "it is worth noting", no three clauses where one will do. This is not a style
+preference — dense writing gets skipped, and a point that is skipped was not made.
+
+**Simplify the concept, not just the words.** A reader who follows a simple explanation is worth
+more than one who is impressed by a precise one. Simplifying gives the idea a far better chance of
+landing. If a sentence needs jargon, explain it in the same breath or find a way to say it without.
+
+The test: could someone meeting this cold follow it? If not it is too complex, however accurate.
+
+Worked example — the NonLinSize entry on the deck's construction-audit slide, wrong twice:
+
+- **"Was a U, not an S."** True, and meaningless cold. Neither shape was ever defined, and the
+  reader has no idea the sentence is describing a graph.
+- **The first fix was worse**: six sentences, "the cube is genuinely odd", "amplifies any error by
+  3z²". Accurate, unreadable, and three times longer than the findings either side of it.
+- **What it should say**, and now does: Size is a straight line — big companies at one end, small
+  at the other. Mid caps do not sit neatly in between, and this is the factor meant to catch that.
+  It could not: small and mid caps both scored +6 to +7, so it could not tell them apart, which was
+  its whole job. We had cubed raw log market cap, and those values are all positive and bunched
+  near 24, so cubing them did nothing useful. Centre the values first, then cube.
+
+Same length as its neighbours, no undefined jargon, and the number is still there. Note what went:
+the S and the U. The shapes were how *we* found the bug; they are not how a reader understands it.
+
 ## LLM voice — CHRIS_VOICE (mandatory for every LLM feature)
 
 **Every LLM system prompt in `risk_api.py` starts from the shared `CHRIS_VOICE` persona block**

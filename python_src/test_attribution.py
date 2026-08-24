@@ -2,7 +2,8 @@
 test_attribution.py — checks for PnL attribution & factor-model validation (Step 15).
 
   * UNIT  — always run, no backend: the pure stats (_carino_link exactness, _info_ratio,
-            _autocorr, _bias_stat, _concentration_hhi, _hit_rate, _resid_factor_regression,
+            _autocorr, _autocorr_verdict, _bias_stat, _concentration_hhi, _hit_rate,
+            _resid_factor_regression,
             _stressed_cov) and the §1 three-way tie-out (realized = Σ factor contribution +
             specific, machine precision) on a tiny synthetic seven-frame set.
   * INTEG — need the live backend on :8010; SKIP if down. /pnl_attribution linked contributions
@@ -22,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 from barra_pnl_attribution import (
-    _carino_link, _info_ratio, _autocorr, _bias_stat, _concentration_hhi, _hit_rate,
+    _carino_link, _info_ratio, _autocorr, _autocorr_verdict, _bias_stat, _concentration_hhi, _hit_rate,
     _resid_factor_regression, _stressed_cov, _linkage_driver, _position_driver, _rolling_bias,
     _pairwise_mean_corr, compute_attribution,
 )
@@ -84,6 +85,33 @@ def t_info_ratio():
 
 
 @unit
+def t_autocorr_verdict_reads_the_sign():
+    """A negative autocorrelation is mean reversion, not a persistent bet.
+
+    The status keys on |ac| (both directions break memorylessness) but the verdict must read the
+    sign. It did not until 2026-08-24: both printed "residual trends — a persistent unhedged bet",
+    so Millennium's lag-1 of -0.36 was reported as a standing bet when it is the opposite.
+    """
+    # status is symmetric in the sign
+    for ac in (0.5, -0.5):
+        assert _autocorr_verdict(ac)[0] == "red", ac
+    for ac in (0.25, -0.25):
+        assert _autocorr_verdict(ac)[0] == "amber", ac
+    for ac in (0.1, -0.1, 0.0):
+        assert _autocorr_verdict(ac)[0] == "green", ac
+
+    # ... the verdict is not
+    assert "trends" in _autocorr_verdict(0.5)[1]
+    assert "reverses" in _autocorr_verdict(-0.5)[1]
+    assert "trends" not in _autocorr_verdict(-0.5)[1], "a negative autocorrelation is not trending"
+    assert "reverses" not in _autocorr_verdict(0.5)[1]
+    # the real reading that exposed it
+    assert _autocorr_verdict(-0.3554)[1].startswith("residual reverses")
+    # green says nothing about direction either way
+    for w in ("trends", "reverses"):
+        assert w not in _autocorr_verdict(0.05)[1]
+
+
 def t_autocorr():
     alt = pd.Series([1.0, -1.0] * 10)                   # perfectly alternating
     assert _autocorr(alt, 1) is not None and _autocorr(alt, 1) < -0.9

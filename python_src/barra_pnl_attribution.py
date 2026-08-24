@@ -86,6 +86,23 @@ def _autocorr(u: pd.Series, lag: int) -> float | None:
         return None
     return float(np.corrcoef(a, b)[0, 1])
 
+def _autocorr_verdict(ac: float) -> tuple[str, str]:
+    """(status, verdict) for a residual autocorrelation. Pure — unit-tested without a cube.
+
+    The STATUS keys on |ac|: trending and reversal are both departures from memorylessness, and
+    that half was always right. The VERDICT has to read the SIGN, and did not until 2026-08-24 —
+    both directions printed "residual trends — a persistent unhedged bet", which described
+    Millennium's lag-1 of -0.36 as a persistent bet when it is the exact opposite. A positive
+    autocorrelation is one bet repeating month after month; a negative one is a residual that
+    alternates, so gains are handed back rather than compounding.
+    """
+    status = "green" if abs(ac) < 0.2 else ("red" if abs(ac) > 0.35 else "amber")
+    if status == "green":
+        return status, "memoryless — independent bets"
+    if ac > 0:
+        return status, "residual trends — the same bet, month after month"
+    return status, "residual reverses — gains give back, not a standing bet"
+
 
 def _bias_stat(realized: pd.Series, predicted_vol: pd.Series) -> tuple[float | None, float | None]:
     """Barra bias statistic B = std(realized/predicted_vol) and its significance half-width

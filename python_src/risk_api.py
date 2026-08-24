@@ -3342,6 +3342,7 @@ def _pred_manager_vols(months: list, manager: str) -> tuple[dict, dict, dict]:
     return mgr_v, spec_v, fac_v
 
 
+
 @app.get("/pnl_attribution/residual")
 async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
                                    to: str | None = None,
@@ -3427,10 +3428,8 @@ async def pnl_attribution_residual(frm: str | None = Query(None, alias="from"),
         for nm, ac in (("Lag-1 autocorrelation", ac1), ("Lag-2 autocorrelation", ac2)):
             if ac is None:
                 continue
-            st_ = "green" if abs(ac) < 0.2 else ("red" if abs(ac) > 0.35 else "amber")
-            checks.append(_chk(nm, ac, st_,
-                               "memoryless — independent bets" if st_ == "green" else
-                               "residual trends — a persistent unhedged bet"))
+            st_, vd_ = _pnl._autocorr_verdict(ac)
+            checks.append(_chk(nm, ac, st_, vd_))
         if reg["r2"] is not None:
             st_ = "green" if reg["r2"] < 0.10 else ("red" if reg["r2"] > 0.25 else "amber")
             top = reg["loadings"][0] if reg["loadings"] else None
@@ -5031,6 +5030,7 @@ class PnlAttrAnalysisBody(BaseModel):
     frm: str | None = None
     to: str | None = None
     horizon: int = 3
+    manager: str = "Soros"      # matches the other endpoints' own default; the UI always sends it
     notes: str | None = None
 
 
@@ -5042,14 +5042,17 @@ async def pnl_attribution_analysis(body: PnlAttrAnalysisBody):
     client = _anthropic()          # 502 before the work if there's no key
     # NB internal calls must pass EVERY Query-defaulted param explicitly — a bare call would
     # receive the FastAPI Query objects, not their values (the /overview min_weight lesson)
-    attr = await pnl_attribution(body.frm, body.to, manager="Soros", by=None)
-    resid = await pnl_attribution_residual(body.frm, body.to, manager="Soros")
-    link = await pnl_attribution_linkage(None, body.horizon, manager="Soros",
+    # The manager comes from the request: this route hardcoded "Soros" through 2026-08-24, so the
+    # commentary described Soros's book no matter which manager the lens was showing.
+    attr = await pnl_attribution(body.frm, body.to, manager=body.manager, by=None)
+    resid = await pnl_attribution_residual(body.frm, body.to, manager=body.manager)
+    link = await pnl_attribution_linkage(None, body.horizon, manager=body.manager,
                                          vol_mult=1.25, rho=0.75, min_weight=0.001)
 
     def rnd(v):
         return round(v, 5) if isinstance(v, (int, float)) else v
     payload = json.dumps({
+        "manager": body.manager,
         "window": {"from": attr["from"], "to": attr["to"], "n_days": attr["n_days"]},
         "headline": {k: rnd(v) for k, v in attr["headline"].items()},
         "factors": [{k: rnd(v) for k, v in r.items()} for r in attr["factors"]],
