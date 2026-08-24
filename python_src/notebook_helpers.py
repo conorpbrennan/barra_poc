@@ -1,6 +1,6 @@
 """
 notebook_helpers.py — tiny shared utilities for the direct-Atoti demo notebook
-(`notebooks/soros_13f_risk.ipynb`).
+(`notebooks/13f_risk.ipynb`, one notebook for every manager — see `manager_picker`).
 
 This is deliberately NOT a view interpreter. The notebook's whole point is to show the Atoti
 Python API directly: every view is reconstructed as explicit, literal `cube.query(...)` calls in
@@ -213,3 +213,142 @@ def style_grid(df: pd.DataFrame, *, pct: bool = True, prec: int = 3, money=None)
     return (df.style
               .apply(_blues_css, subset=num, axis=0)   # per-column heatmap, like the app
               .format(formats, na_rep="—"))
+
+
+# ---------------------------------------------------------------------------
+# Manager selection
+# ---------------------------------------------------------------------------
+# The demo notebooks were one-per-manager, identical apart from the manager token — so a new
+# manager meant copying 43 cells and hand-editing 30 of them, and one mistyped name silently
+# produced empty views (`l["Manager"] == "Sorros"` does not raise; it matches nothing). One
+# notebook + a dropdown replaces both problems: the name can only ever be one the data has.
+
+_MANAGER_NAMES: list[str] | None = None
+
+
+def manager_names(folder=None) -> list[str]:
+    """Every manager the cube can actually price, sorted. Memoized per kernel.
+
+    Read from the `positions` frame's Manager column — the same source `/meta.managers` uses, and
+    deliberately NOT a cube query, for two measured reasons (123-manager build, this box):
+
+      * it is right. The cube's Manager LEVEL has 124 members, not 123: the optional `managers`
+        frame partial-joins onto Positions, so a manager with metadata but no position facts is a
+        level member. MetLife is exactly that (its 13F is 6 equity CUSIPs ever, an empty equity
+        portfolio). Offering it in a picker would hand back empty views for every cell — the
+        silent-empty failure the picker exists to prevent.
+      * it is ~35x faster. Enumerating the level costs 17.0s via `contributors.COUNT`, 20.9s via
+        `Manager n positions`, 45.8s via `Manager MV`; a single-column parquet read is 0.49s.
+    """
+    global _MANAGER_NAMES
+    if _MANAGER_NAMES is None:
+        from barra_factor_risk_cube import OUT
+        col = pd.read_parquet((folder or OUT) / "positions.parquet", columns=["Manager"])
+        _MANAGER_NAMES = sorted(col["Manager"].astype(str).unique())
+    return list(_MANAGER_NAMES)
+
+
+class ManagerSelection:
+    """The notebook's current manager, as a live cube filter.
+
+    Read `.filter` (or just `&` it, which is the same thing) at cell-run time rather than binding
+    a condition once, so the dropdown never has to reach back into the notebook's globals: the
+    selection is held here, and every cell below picks it up on its next run.
+
+        MGR = N.manager_picker(cube, "Citadel")
+        cube.query(m["Total VaR 99"], filter=MGR & (l["Date"] == D))
+        ... f"VaR trend - {MGR.name}"
+    """
+
+    def __init__(self, cube, name: str, names: list[str]):
+        self._levels = cube.levels
+        self._names = names
+        self.name = name
+        self.widget = None          # the Dropdown, when one was rendered (None headless)
+
+    @property
+    def filter(self):
+        """`l["Manager"] == <current selection>`, rebuilt on every read."""
+        return self._levels["Manager"] == self.name
+
+    def __and__(self, other):       # so `MGR & (l["Date"] == D)` reads like the condition it is
+        return self.filter & other
+
+    def __str__(self) -> str:
+        return self.name
+
+    def __repr__(self) -> str:
+        return f'Manager == "{self.name}"  ({len(self._names)} loaded)'
+
+
+_SELECTION: "ManagerSelection | None" = None
+
+
+def manager_picker(cube, default: str, *, managers: list[str] | None = None,
+                   quiet: bool = False, reset: bool = False) -> ManagerSelection:
+    """Show a manager dropdown and return the live `ManagerSelection` the cells below read.
+
+    Changing the dropdown updates the selection immediately, but **cells that already ran keep
+    the output they produced** — re-run them (Run ▸ Run All Below) to re-point them. The
+    selection survives a re-run of this cell too, so a plain `Run All` no longer resets it;
+    pass `reset=True` to force back to `default`.
+
+    `default` is required rather than defaulted here on purpose: the notebook is the one place
+    the starting manager is written, so there is no second value to drift from it.
+    `managers` restricts the options to a curated subset; the default is every manager in the
+    frames. Selecting a name updates the selection in place — the cells below then need a re-run
+    (Run > Run All Below), which is the one thing a widget cannot do for you.
+
+    Degrades to a plain validated selection when ipywidgets is missing, so the same notebook still
+    executes headlessly (the render script, `test_notebook.py`) and in the container until its
+    image carries ipywidgets. Either way an unknown `default` raises here rather than silently
+    matching nothing downstream.
+    """
+    global _SELECTION
+    names = list(managers) if managers else manager_names()
+
+    # Re-running the setup cell must NOT silently throw away the manager you picked. `Run All`
+    # (as opposed to `Run All Below`) re-executes this cell, and the first version of this
+    # function rebuilt the selection at `default` every time — so the cells below went back to
+    # Citadel while the dropdown appeared to say otherwise. Same reasoning as `build()` holding
+    # its session in a module global: the cell is re-runnable, so what it owns has to survive it.
+    start = default
+    if _SELECTION is not None and not reset and _SELECTION.name in names:
+        start = _SELECTION.name
+
+    if default not in names:
+        near = [n for n in names if n.lower().startswith(default[:3].lower())]
+        raise ValueError(f"unknown manager {default!r}; {len(names)} loaded"
+                         + (f" — did you mean {near}?" if near else f" (e.g. {names[:5]})"))
+    sel = ManagerSelection(cube, start, names)
+    _SELECTION = sel
+    if start != default and not quiet:
+        print(f"kept your previous selection: {start} (pass reset=True to go back to {default})")
+
+    try:
+        import ipywidgets as widgets
+        from IPython.display import display
+    except ImportError:            # headless execution, or an image without the widget stack
+        if not quiet:
+            print(f"manager: {start}  (ipywidgets absent — no picker; {len(names)} available)")
+        return sel
+
+    dropdown = widgets.Dropdown(options=names, value=start, description="Manager:",
+                                layout=widgets.Layout(width="22rem"))
+    note = widgets.HTML(_picker_note(start, changed=False))
+
+    def _on_change(change):
+        sel.name = change["new"]
+        note.value = _picker_note(change["new"], changed=True)
+
+    dropdown.observe(_on_change, names="value")
+    sel.widget = dropdown
+    display(widgets.VBox([dropdown, note]))
+    return sel
+
+
+def _picker_note(name: str, *, changed: bool) -> str:
+    """The one line under the dropdown. Grey, no box — it is a status, not a control."""
+    msg = (f"now <b>{name}</b> — re-run the cells below (Run &gt; Run All Below)"
+           if changed else f"every cell below reads <b>{name}</b>")
+    return f'<div style="color:#6b6b63;font-size:0.85em;padding-left:0.4rem">{msg}</div>'

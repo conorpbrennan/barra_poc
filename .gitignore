@@ -32,3 +32,7 @@ screenshots/
 
 # ActiveViam demo deck
 docs/demo.html
+
+# editor swap files (a .env.swp would carry .env secrets past the .env rule)
+*.swp
+*.swo

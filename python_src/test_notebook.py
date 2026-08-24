@@ -2,9 +2,9 @@
 test_notebook.py — guard the direct-Atoti demo notebooks' query path.
 
 Builds the cube ONCE and re-runs the same explicit `cube.query(...)` calls each notebook uses,
-asserting each returns sensible data — so a notebook can't silently rot if a measure/level is
-renamed in the cube. Every check runs against BOTH demo notebooks (Soros and Vanguard); each
-carries its own as-of `D`, read out of its own source. No Jupyter, no HTTP, no pytest (matches
+asserting each returns sensible data — so the notebook can't silently rot if a measure/level is
+renamed in the cube. Every check runs for each manager in `MANAGERS`, against the single
+notebook's as-of `D`, read out of its source. No Jupyter, no HTTP, no pytest (matches
 the repo's script-style tests):
 
     cd python_src && PYTHONPATH=python_src ../barra/bin/python test_notebook.py
@@ -18,10 +18,14 @@ import pandas as pd
 import notebook_helpers as N
 
 _NB_DIR = pathlib.Path(__file__).resolve().parent.parent / "notebooks"
-NOTEBOOKS = {                        # Manager in the cube -> the notebook that reads that manager
-    "Soros":    _NB_DIR / "soros_13f_risk.ipynb",
-    "Vanguard": _NB_DIR / "vanguard_13f_risk.ipynb",
-}
+NOTEBOOK = _NB_DIR / "13f_risk.ipynb"
+# There used to be one notebook per manager, identical apart from the manager token. There is now
+# ONE notebook with a manager dropdown, so this is no longer "manager -> its own notebook" but
+# "the managers that one notebook is checked against" — the queries below are the notebook's, run
+# for each. Keep the biggest (Vanguard, whole-market) in the list: it is what catches the shapes
+# that only break at scale.
+MANAGERS = ["Citadel", "Soros", "Vanguard"]
+NOTEBOOKS = {mgr: NOTEBOOK for mgr in MANAGERS}
 
 
 def _notebook_D(NOTEBOOK: pathlib.Path) -> dt.date:
@@ -151,7 +155,77 @@ def t_build_is_idempotent(cube, manager, D, NOTEBOOK):
     `N.build()` now returns this kernel's existing session instead."""
     again_session, again_cube = N.build()
     assert again_cube is cube, "build() returned a different cube — the session cache is not held"
-    assert again_session.port, "reused session reports no port"
+    # `Session.port` is deprecated in atoti 0.9.15 (it warned on every run of this test);
+    # `N._session_port` is the parse-the-url replacement `build()` itself already uses.
+    assert N._session_port(again_session), "reused session reports no port"
+
+
+@_test
+def t_manager_picker_offers_only_priceable_managers(cube, manager, D, NOTEBOOK):
+    """The dropdown's whole purpose is that a manager name can't be wrong. Two ways it could be:
+
+    (1) it offers a manager with no positions — the cube's Manager LEVEL has one (metadata from
+        the optional `managers` frame partial-joins onto Positions), and picking it would return
+        empty views from every cell, which is the silent failure the picker replaced. So the
+        options come from the positions frame, and must be a strict subset of the level.
+    (2) the notebook's own default is not in the options — then the picker raises at cell 1,
+        which is loud, but it should never get that far.
+    """
+    l, m = cube.levels, cube.measures
+    offered = N.manager_names()
+    assert manager in offered, f"{manager} is checked here but not offered by the picker"
+
+    level_members = set(cube.query(m["contributors.COUNT"], levels=[l["Manager"]])
+                        .index.get_level_values(0))
+    assert set(offered) <= level_members, (
+        f"picker offers names the cube does not know: {sorted(set(offered) - level_members)}")
+    no_positions = level_members - set(offered)
+    assert no_positions, ("expected at least one level member with no positions (MetLife on this "
+                          "build) — if that is genuinely gone, this guard can be relaxed")
+
+    default = _notebook_default_manager(NOTEBOOK)
+    assert default in offered, (f"{NOTEBOOK.name} starts on {default!r}, which the picker does not "
+                                f"offer — every cell would query an empty portfolio")
+
+
+def _notebook_default_manager(NOTEBOOK: pathlib.Path) -> str:
+    """The manager the notebook starts on, parsed from its own `N.manager_picker(cube, "...")`
+    line — same single-source-of-truth reasoning as `_notebook_D`."""
+    nb = json.loads(NOTEBOOK.read_text())
+    for cell in nb.get("cells", []):
+        for line in cell.get("source", []):
+            m = re.search(r'manager_picker\(\s*cube\s*,\s*["\']([^"\']+)["\']', line)
+            if m:
+                return m.group(1)
+    raise AssertionError(f"no `N.manager_picker(cube, ...)` line found in {NOTEBOOK}")
+
+
+@_test
+def t_manager_picker_survives_setup_cell_rerun(cube, manager, D, NOTEBOOK):
+    """Picking a manager must survive a re-run of the setup cell.
+
+    The first version rebuilt the selection at `default` on every call, so `Run All` (which
+    re-executes cell 1) silently put every cell below back on the default while the dropdown
+    looked like it said otherwise — reported from the container on 2026-08-24. The selection is
+    now held in a module global, the same reasoning as `build()` holding its session.
+    """
+    default = _notebook_default_manager(NOTEBOOK)
+    other = next(n for n in N.manager_names() if n != default)
+    saved = N._SELECTION
+    try:
+        N._SELECTION = None                                  # a fresh kernel
+        sel = N.manager_picker(cube, default, quiet=True)
+        assert sel.name == default, sel.name
+
+        sel.name = other                                     # what the dropdown's observer does
+        again = N.manager_picker(cube, default, quiet=True)  # ... then Run All re-runs cell 1
+        assert again.name == other, (f"re-running the setup cell reset {other} -> {again.name}; "
+                                     f"the selection is not surviving a Run All")
+
+        forced = N.manager_picker(cube, default, quiet=True, reset=True)
+        assert forced.name == default, forced.name
+    finally:
+        N._SELECTION = saved
 
 
 def main():

@@ -311,8 +311,7 @@ CHRIS_VOICE `StreamPanel`. Saved views in `Public/Soros 13F filings`: `Model vs 
 two families are independent switch hierarchies). Both demo notebooks gained 4 cells (headline +
 T0/T1/T4 from the cube, the full bridge table with T2/T3 computed inline in numpy from
 `load_frames()` — the one extension beyond pure direct-cube-access, commented as such — and the
-top-10 disagreement table); Soros re-executed clean (zero error outputs), Vanguard left
-unexecuted (large whole-market portfolio, per the repo's existing convention for that notebook).
+top-10 disagreement table).
 
 ## Desk limits (`/limits`)
 
@@ -1145,9 +1144,90 @@ consequences: `docs/multi-manager-plan.md` §"Buyside-list expansion". Key opera
   loaded manager now HAS its own artifact for all five kinds, so in practice the guard only fires
   for an unbuilt manager — the `*_manager_guard` tests cover both branches (2026-08-21).
   `/limits` thresholds remain Soros-calibrated (disclosed via `calibrated_for`).
-- **The largest manager is Vanguard** ($6.4tn latest-filing MV); `notebooks/
-  vanguard_13f_risk.ipynb` is the executed largest-manager notebook run (24g notebook-cube
-  heap, Risk HHI cell scoped to HistFull, altair row cap disabled — all disclosed in-cell).
+- **The largest manager is Vanguard** ($6.4tn latest-filing MV) — the stress case for the demo
+  notebook (24g notebook-cube heap; the Risk HHI cell is scoped to HistFull and the altair row cap
+  is disabled for it, both now unconditional in the one notebook and disclosed in-cell).
+
+## The demo notebook — one file, manager picked at run time (2026-08-24)
+
+`notebooks/13f_risk.ipynb` replaced `soros_13f_risk.ipynb` + `vanguard_13f_risk.ipynb`, which were
+**identical apart from the manager token** — 43 cells each, 34 diff hunks, 30 of them just
+`SOROS`/`"Soros"` vs `MANAGER`/`"Vanguard"`. Only four hunks were real content, and all four are
+now unconditional in the one notebook (they are safe for every manager): the altair row cap
+disabled, the Risk HHI cell sliced to `HistFull`, the `Manager MV` scale note generalised, and a
+`# PORTFOLIO path` comment a hand-edit had mangled to `# MANAGER path`. Two chart titles became
+f-strings on the selection — one of which was carrying a hardcoded `@ 2024-12-31` that had been
+wrong since `D` moved to 2026-06-30.
+
+**`notebook_helpers.manager_picker(cube, default)`** renders an ipywidgets dropdown and returns a
+live `ManagerSelection`: `MGR & (...)` is the cube filter (rebuilt on every read, so the dropdown
+never writes back into notebook globals), `MGR.name` the string, `MGR.widget` the Dropdown.
+Changing the selection re-points every cell below on their next run — Run ▸ Run All Below, the one
+thing a widget cannot do for you. **The selection is held in a module global (`_SELECTION`) so it
+survives a re-run of the setup cell**: the first version rebuilt it at `default` on every call, so
+a plain `Run All` silently put every cell back on Citadel while the dropdown appeared to say
+Millennium (reported from the container, 2026-08-24; same reasoning as `build()` holding its
+session). `reset=True` forces back to `default`. Pinned by
+`t_manager_picker_survives_setup_cell_rerun`.
+
+**Re-executing the notebook headlessly leaves a dead widget output.** `nbclient` has no widget
+frontend, so `display(VBox(...))` records an `application/vnd.jupyter.widget-view+json` output with
+no saved widget state — which JupyterLab then renders as the raw `VBox(children=(Dropdown(...`
+repr the moment anyone OPENS the notebook, before running anything. Strip it after any headless
+re-execution (the three `print` lines in the cell are unaffected):
+
+```python
+import json, pathlib
+p = pathlib.Path("notebooks/13f_risk.ipynb"); nb = json.loads(p.read_text())
+for c in nb["cells"]:
+    c["outputs"] = [o for o in c.get("outputs", [])
+                    if "application/vnd.jupyter.widget-view+json" not in o.get("data", {})]
+nb["metadata"].pop("widgets", None)
+p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
+``` The picker **degrades to a plain validated selection when ipywidgets is absent**
+(headless `nbclient` renders, `test_notebook.py`, a container image without the widget stack), and
+an unknown `default` raises there rather than matching nothing downstream.
+
+**The options come from the positions frame, NOT a cube query** (`manager_names()`), for two
+measured reasons on the 123-manager build: the cube's Manager LEVEL has **124** members because
+the optional `managers` frame partial-joins onto Positions, so MetLife — metadata but an empty
+equity portfolio — is a level member, and offering it would hand back empty views from every cell
+(the silent failure the picker exists to prevent); and enumerating the level costs **17.0s**
+(`contributors.COUNT`) / 20.9s (`Manager n positions`) / 45.8s (`Manager MV`) against **0.49s** for
+a single-column parquet read. Same source `/meta.managers` already uses.
+
+`ipywidgets==8.1.9` is in `requirements.txt`. Its python half stages via `data/_pylibs` like
+altair/narwhals, but its **frontend is a JupyterLab labextension**, discovered from jupyter data
+dirs rather than `PYTHONPATH` — stage only the python half and the dropdown renders as a dead text
+repr. Resolved **without an image rebuild**: both halves are staged under `data/_pylibs` and the
+labextensions dir is declared as `c.LabApp.extra_labextensions_path` in the already-mounted
+`docker/jupyter_config/jupyter_server_config.py` (kept out of the image precisely so it can change
+without one). Verified by serving `/lab` with the venv's own copy of the extension removed —
+served from the staged path alone, absent without the config line. **Takes effect on a container
+restart**, not a rebuild. `comm`/`ipython`/`traitlets` already come with `ipykernel`. The
+container's licence is unaffected and was never in question: there is no `.env` inside, the licence
+file is bind-mounted at `/app/atoti.lic` with `Environment=ATOTI_LICENSE` set by the Quadlet unit.
+
+The same session fixed a build-time `FutureWarning` that was the first thing printed in the
+notebook's cube cell: `session.tables["Units"].append(("$", 1.0))` → `.load(pd.DataFrame(...,
+columns=list(_units)))` (atoti 0.9.15 deprecated `Table.append`). Pinned by the `$`-slice identity
+still holding exactly — Citadel `Total VaR 99` 3.466% × `Manager MV` $118,503,219,603 =
+$4,107,420,656, the value the notebook's dollar cell shows.
+
+`test_notebook.py`'s registry stopped being "manager -> its own notebook" and became "the managers
+that one notebook is checked against" (`MANAGERS = ["Citadel", "Soros", "Vanguard"]`, 27 checks).
+Its new `t_manager_picker_offers_only_priceable_managers` pins the invariant: the offered list is a
+strict subset of the cube's Manager level, at least one level member has no positions, and the
+notebook's own default (parsed from its `manager_picker` line, the `_notebook_D` idiom) is in the
+offered list. **The notebook defaults to Citadel and is committed with outputs CLEARED.**
+
+Committed outputs were wrong for this notebook, not merely large (8.63 MB -> 0.05 MB). Once the
+manager is chosen at run time, a saved output asserts two things that are not true when someone
+opens the file: that a cube was built (`cube load: 29.8s`, from whatever machine last executed it)
+and that the numbers below belong to the manager they are about to pick — they belong to whichever
+manager the last executor happened to choose. The notebook is a source that is run, not an
+artifact that is read. This also removes the dead-widget problem at its root: no saved output means
+no `widget-view` output to render as a `VBox(children=(Dropdown(...` repr on open.
 
 ## Multi-manager 13F integration (2026-07-30)
 

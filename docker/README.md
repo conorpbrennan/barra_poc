@@ -79,3 +79,40 @@ cp -r barra/lib/python3.12/site-packages/{altair,narwhals} data/_pylibs/
 ```
 
 Anything with compiled extensions needs adding to `requirements.txt` and an image rebuild instead.
+
+### ipywidgets (the notebook's manager dropdown) — a third category
+
+`ipywidgets` is pure python, so `import ipywidgets` works off `data/_pylibs` like altair/narwhals.
+Its **frontend does not**: ipywidgets ships `@jupyter-widgets/jupyterlab-manager` as a JupyterLab
+*labextension* (the `jupyterlab_widgets` package), and JupyterLab discovers labextensions from
+**jupyter data dirs**, not from `PYTHONPATH`. Stage only the python half and the dropdown renders
+as a dead text repr.
+
+**Done, and it needs no rebuild.** Both halves are staged, and the labextensions dir is declared in
+the already-mounted `jupyter_config/jupyter_server_config.py` (kept out of the image precisely so
+it can change without one):
+
+```bash
+cp -r barra/lib/python3.12/site-packages/{ipywidgets,jupyterlab_widgets,widgetsnbextension} data/_pylibs/
+mkdir -p data/_pylibs/share/jupyter
+cp -r barra/share/jupyter/labextensions data/_pylibs/share/jupyter/
+```
+```python
+c.LabApp.extra_labextensions_path = ["/app/data/_pylibs/share/jupyter/labextensions"]
+```
+
+`comm`, `ipython` and `traitlets` — ipywidgets' other runtime deps — already come with `ipykernel`,
+so nothing else needs staging. **Takes effect on a container restart**, not a rebuild:
+
+```bash
+sudo -u flexnb env XDG_RUNTIME_DIR=/run/user/$(id -u flexnb) systemctl --user restart flexagg-jupyter.service
+```
+
+Verified on the host by serving `/lab` with the venv's own copy of the extension removed: the page
+is served the extension from the staged path alone; without the config line it is absent.
+
+`ipywidgets==8.1.9` is also pinned in `requirements.txt`, so a future image rebuild picks it up in
+the image's own prefix and the staging becomes redundant (harmless — same version, and the
+extension is listed once). Either way the notebook still runs without any of it:
+`notebook_helpers.manager_picker` falls back to a plain validated selection (and still refuses an
+unknown manager name) when the import fails.

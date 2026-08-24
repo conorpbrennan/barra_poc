@@ -15,6 +15,20 @@ stays up no matter how long they read the output.
 """
 c = get_config()  # noqa: F821  (injected by traitlets)
 
+# ── ipywidgets frontend, without an image rebuild ───────────────────────────────────────────
+# The demo notebook's manager dropdown (notebook_helpers.manager_picker) needs ipywidgets. Its
+# PYTHON half rides the existing data/_pylibs staging on PYTHONPATH like altair/narwhals, but its
+# FRONTEND is a JupyterLab labextension, which is discovered from jupyter data dirs and so is
+# invisible to PYTHONPATH — stage only the python half and the dropdown renders as a dead text
+# repr. Declaring the staged labextensions dir here is enough, and keeps the change in this
+# already-mounted file rather than in the Quadlet unit or the image.
+#   Restage after a version bump:
+#     cp -r barra/lib/python3.12/site-packages/{ipywidgets,jupyterlab_widgets,widgetsnbextension} data/_pylibs/
+#     cp -r barra/share/jupyter/labextensions data/_pylibs/share/jupyter/
+# Verified on the host by serving /lab with the venv's own copy removed: the extension is served
+# from this path alone. Takes effect on a container restart (server-side discovery), not a rebuild.
+c.LabApp.extra_labextensions_path = ["/app/data/_pylibs/share/jupyter/labextensions"]
+
 c.MappingKernelManager.cull_idle_timeout = 1800   # 30 min idle -> stop the kernel (and its JVM)
 c.MappingKernelManager.cull_interval = 120        # check every 2 min
 c.MappingKernelManager.cull_connected = False     # never cull a kernel with a live browser

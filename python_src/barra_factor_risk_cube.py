@@ -851,7 +851,11 @@ def build_cube(frames: dict[str, pd.DataFrame], port: int = 9090):
     # hidden "<name> (wt)" measure and republishes `name` itself as a toggle on `Dollar on`, so
     # the EXISTING measure name reads weight units on Base and dollars on the "$" slice.
     cube.create_parameter_simulation("Units", measures={"Dollar on": 0.0})
-    session.tables["Units"].append(("$", 1.0))
+    # `.append(row)` is deprecated in atoti 0.9.15 (it warned on every build, and the warning was
+    # the first thing printed in the demo notebook's cube cell). `list(table)` is the table's own
+    # column order, so the frame can never disagree with it.
+    _units = session.tables["Units"]
+    _units.load(pd.DataFrame([("$", 1.0)], columns=list(_units)))
     _mark("param_sim.Units")
 
     # ---- dollars: the 13F market value joins the cube -------------------------------------
