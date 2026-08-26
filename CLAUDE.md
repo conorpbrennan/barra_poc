@@ -80,10 +80,10 @@ humility; artifacts before alarms). It deliberately never signs a name or claims
 identity. **Any new LLM endpoint must be written as `NEW_SYSTEM = CHRIS_VOICE + """..."""`** —
 `test_analysis.py::t_all_llm_prompts_carry_chris_voice` fails otherwise. Current prompts:
 `ANALYST_SYSTEM`, `OVERVIEW_SYSTEM`, `TRENDS_SYSTEM`, `WHATCHANGED_SYSTEM`, `ASK_SYSTEM`,
-`PNLATTR_SYSTEM` (`POST /pnl_attribution/analysis {frm?, to?, horizon?, notes?}` — the
+`PNLATTR_SYSTEM` (`POST /pnl_attribution/analysis {manager, frm?, to?, horizon?, notes?}` — the
 PnL-attribution lens narrated: linked window split, factor table with t-stat humility,
 residual RAG, linkage breach verdicts; StreamPanel at the bottom of the Attribution PnL tab,
-cached per window+horizon). NB internal calls to Query-defaulted routes must pass EVERY such
+cached per window+horizon+manager). **`manager` is REQUIRED, no default** — this route hardcoded `manager="Soros"` until 2026-08-24 and so narrated the wrong manager's book whenever the lens showed anyone else; a default would leave that failure reachable, so a missing manager is a 422 rather than confident, wrong commentary. NB internal calls to Query-defaulted routes must pass EVERY such
 param explicitly or they receive FastAPI Query objects (the /overview min_weight lesson).
 `POST /trends/analysis {set?, notes?}` is the Trends-lens read: the monthly portfolio-measure series
 + quarterly-sampled factor-exposure paths + the limits config, narrated as regimes / current

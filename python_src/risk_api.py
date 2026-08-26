@@ -5030,7 +5030,11 @@ class PnlAttrAnalysisBody(BaseModel):
     frm: str | None = None
     to: str | None = None
     horizon: int = 3
-    manager: str = "Soros"      # matches the other endpoints' own default; the UI always sends it
+    # REQUIRED, no default (2026-08-24). This route hardcoded "Soros" and so described the wrong
+    # manager's book whenever the lens showed anyone else. A default would keep that failure
+    # reachable: forget the field and you get confident, wrong commentary. With 123 managers and
+    # no special one, a missing manager should be a 422, not a plausible-looking answer.
+    manager: str
     notes: str | None = None
 
 
