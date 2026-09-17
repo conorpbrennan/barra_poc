@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "name": "L2 \u2014 Factor ES contributions",
-  "path": "Public/Soros 13F filings",
-  "created": "2026-06-20T19:30:00Z",
+  "name": "L2 \u2014 Factor contributions",
+  "path": "Public/13F filings",
+  "created": "2026-06-13T20:25:09Z",
   "updated": "2026-08-22T12:11:09Z",
   "state": {
     "rows": [
@@ -10,8 +10,8 @@
     ],
     "cols": [],
     "measures": [
-      "Marginal Scenario ES 97.5",
-      "% of Scenario ES 97.5"
+      "Marginal Scenario VaR 99",
+      "% of Scenario VaR 99"
     ],
     "slice_dims": [
       "Manager",
@@ -37,12 +37,12 @@
     "prec": 3,
     "sort": [
       {
-        "colId": "Marginal Scenario ES 97.5",
+        "colId": "Marginal Scenario VaR 99",
         "sort": "desc",
         "sortIndex": 0
       }
     ],
-    "description": "Each factor's additive contribution to portfolio's Expected Shortfall (ES 97.5) and its % share. Like the VaR contribution but on the coherent tail-mean (Basel FRTB's VaR replacement) \u2014 the deep-tail view.",
+    "description": "Each factor's ADDITIVE contribution to the portfolio's Scenario VaR 99 (marginal VaR, which sums to the portfolio total) and its % share. Where the systematic tail comes from \u2014 Market dominates under HistFull because every name carries a unit market loading.",
     "units": "dollar"
   }
 }

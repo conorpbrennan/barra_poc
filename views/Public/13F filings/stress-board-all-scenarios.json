@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "name": "VaR trend (HistFull)",
-  "path": "Public/Soros 13F filings",
+  "name": "Stress board \u2014 all scenarios",
+  "path": "Public/13F filings",
   "created": "2026-06-14T02:05:05Z",
   "updated": "2026-08-22T12:11:09Z",
   "state": {
@@ -13,42 +13,42 @@
     "heat": true,
     "prec": 3,
     "rows": [
-      "Date"
+      "ScenarioSet"
     ],
     "measures": [
       "Scenario VaR 99",
-      "Total VaR 99",
-      "Specific vol"
+      "Scenario worst loss",
+      "Total VaR 99"
     ],
     "slice_dims": [
       "Manager",
-      "ScenarioSet"
+      "Date"
     ],
     "filters": {
       "Manager": [
         "Soros"
       ],
-      "ScenarioSet": [
-        "HistFull"
+      "Date": [
+        "2026-06-30"
       ]
     },
     "sort": [
       {
-        "colId": "Date",
-        "sort": "asc",
+        "colId": "Scenario worst loss",
+        "sort": "desc",
         "sortIndex": 0
       }
     ],
     "render": "chart",
     "chart": {
-      "source": "VaR trend",
+      "source": "Stress board",
       "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
       "transform": [
         {
           "fold": [
             "Scenario VaR 99",
-            "Total VaR 99",
-            "Specific vol"
+            "Scenario worst loss",
+            "Total VaR 99"
           ],
           "as": [
             "Measure",
@@ -56,19 +56,15 @@
           ]
         }
       ],
-      "mark": {
-        "type": "line",
-        "point": {
-          "size": 22
-        }
-      },
+      "mark": "bar",
       "encoding": {
-        "x": {
-          "field": "Date",
-          "type": "temporal",
-          "title": null
-        },
         "y": {
+          "field": "ScenarioSet",
+          "type": "nominal",
+          "title": null,
+          "sort": "-x"
+        },
+        "x": {
           "field": "Value",
           "type": "quantitative",
           "axis": {
@@ -76,14 +72,18 @@
           },
           "title": "% of NAV"
         },
+        "yOffset": {
+          "field": "Measure",
+          "type": "nominal"
+        },
         "color": {
           "field": "Measure",
           "type": "nominal",
           "scale": {
             "domain": [
               "Scenario VaR 99",
-              "Total VaR 99",
-              "Specific vol"
+              "Scenario worst loss",
+              "Total VaR 99"
             ],
             "range": [
               "#2a4d69",
@@ -98,8 +98,8 @@
         },
         "tooltip": [
           {
-            "field": "Date",
-            "type": "temporal"
+            "field": "ScenarioSet",
+            "type": "nominal"
           },
           {
             "field": "Measure",
@@ -112,7 +112,7 @@
           }
         ]
       },
-      "height": 380,
+      "height": 420,
       "autosize": {
         "type": "fit",
         "contains": "padding"
@@ -153,27 +153,27 @@
     },
     "queries": [
       {
-        "name": "VaR trend",
+        "name": "Stress board",
         "rows": [
-          "Date"
+          "ScenarioSet"
         ],
         "cols": [],
         "measures": [
           "Scenario VaR 99",
-          "Total VaR 99",
-          "Specific vol"
+          "Scenario worst loss",
+          "Total VaR 99"
         ],
         "filters": {
           "Manager": [
             "Soros"
           ],
-          "ScenarioSet": [
-            "HistFull"
+          "Date": [
+            "2026-06-30"
           ]
         }
       }
     ],
-    "description": "Scenario VaR 99, Total VaR 99 and Specific vol over the whole 2016\u20132026 calendar under HistFull \u2014 how the portfolio's risk has evolved through time. Chart view.",
+    "description": "Scenario VaR 99, worst loss and Total VaR 99 side by side across every scenario set \u2014 historical simulation, the event replays, and the hypothetical style shocks \u2014 on the latest filing. The one-screen stress comparison. Chart view.",
     "units": "dollar"
   }
 }

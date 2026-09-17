@@ -40,7 +40,7 @@ export function Repository({
     }
     catch (e) { setErr((e as Error).message); }
   }
-  // every folder in the tree, depth-first ("Public", "Public/Soros 13F filings", …) — a view
+  // every folder in the tree, depth-first ("Public", "Public/13F filings", …) — a view
   // opened from a sub-folder must be able to save back into it
   const folderPaths = (tree: ViewTree, prefix: string): string[] =>
     [prefix, ...Object.entries(tree.folders).flatMap(([f, sub]) => folderPaths(sub, `${prefix}/${f}`))];

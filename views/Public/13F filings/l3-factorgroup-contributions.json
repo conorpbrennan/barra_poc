@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "name": "L3 \u2014 Sector contributions",
-  "path": "Public/Soros 13F filings",
+  "name": "L3 \u2014 FactorGroup contributions",
+  "path": "Public/13F filings",
   "created": "2026-06-14T02:05:05Z",
   "updated": "2026-08-22T12:11:09Z",
   "state": {
@@ -13,11 +13,11 @@
     "heat": true,
     "prec": 3,
     "rows": [
-      "Sector"
+      "FactorGroup"
     ],
     "measures": [
-      "Marginal Total VaR 99",
-      "% of Total VaR 99"
+      "Marginal Scenario VaR 99",
+      "% of Scenario VaR 99"
     ],
     "slice_dims": [
       "Manager",
@@ -37,12 +37,12 @@
     },
     "sort": [
       {
-        "colId": "Marginal Total VaR 99",
+        "colId": "Marginal Scenario VaR 99",
         "sort": "desc",
         "sortIndex": 0
       }
     ],
-    "description": "Each GICS sector's additive contribution to the portfolio's Total VaR 99 and % share \u2014 where the tail sits by sector. (Sector is a free SIC\u2192GICS proxy; a few names fall back to 'Unknown'.)",
+    "description": "Marginal Scenario VaR 99 and % share aggregated to factor GROUP (Market vs Style) \u2014 the top-level split of the systematic tail before drilling into individual factors.",
     "units": "dollar"
   }
 }

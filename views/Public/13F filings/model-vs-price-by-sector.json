@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "Model vs Price \u2014 by sector",
-  "path": "Public/Soros 13F filings",
+  "path": "Public/13F filings",
   "created": "2026-08-22T00:00:00Z",
   "updated": "2026-08-22T12:11:09Z",
   "state": {

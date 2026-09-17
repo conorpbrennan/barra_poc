@@ -14,7 +14,7 @@ saves them, so a view's graph can be regenerated/edited in one place.
 from __future__ import annotations
 import views_repo as R
 
-FOLDER = "Public/Soros 13F filings"
+FOLDER = "Public/13F filings"
 SERIF = "Georgia, 'Iowan Old Style', serif"
 PAL3 = ["#2a4d69", "#c46d4e", "#6b8f71"]
 ACCENT = "#c0392b"
